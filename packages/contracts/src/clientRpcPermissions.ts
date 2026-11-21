@@ -51,6 +51,16 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // A tracker credential and a project's binding are settings, saved under the same grant.
   [WS_METHODS.issueTrackersConnect]: AuthSettingsWriteScope,
   [WS_METHODS.issueTrackersBindProject]: AuthSettingsWriteScope,
+  [WS_METHODS.issueAutomationSaveConnector]: AuthSettingsWriteScope,
+  [WS_METHODS.issueAutomationDeleteConnector]: AuthSettingsWriteScope,
+  [WS_METHODS.issueAutomationRefreshScopes]: AuthSettingsWriteScope,
+  [WS_METHODS.issueAutomationSaveProfile]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationDeleteProfile]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationSetProfileEnabled]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationTriggerPoll]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationAnalyzeIssues]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationCancelTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationWriteBack]: AuthSourceControlWriteScope,
   // Writing a guide runs a model on this environment's providers, which reading one does not.
   [WS_METHODS.pullRequestsGenerateReviewGuide]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectsCreateFromThread]: AuthOrchestrationOperateScope,

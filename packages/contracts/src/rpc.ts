@@ -221,6 +221,29 @@ import {
   ThreadIssueKey,
 } from "./issue.ts";
 import {
+  IssueAutomationAnalyzeIssuesInput,
+  IssueAutomationAnalyzeIssuesResult,
+  IssueAutomationCancelTaskInput,
+  IssueAutomationConnector,
+  IssueAutomationDeleteConnectorInput,
+  IssueAutomationDeleteProfileInput,
+  IssueAutomationError,
+  IssueAutomationGetRemoteIssueDetailInput,
+  IssueAutomationListRemoteIssuesInput,
+  IssueAutomationListRemoteIssuesResult,
+  IssueAutomationProfile,
+  IssueAutomationRefreshScopesInput,
+  IssueAutomationRemoteIssueDetail,
+  IssueAutomationSaveConnectorInput,
+  IssueAutomationSaveProfileInput,
+  IssueAutomationSetProfileEnabledInput,
+  IssueAutomationStateSnapshot,
+  IssueAutomationTriggerPollInput,
+  IssueAutomationTriggerPollResult,
+  IssueAutomationWriteBackInput,
+  IssueAutomationWriteBackResult,
+} from "./issueAutomation.ts";
+import {
   GuestShareCreateError,
   GuestShareCreateInput,
   GuestShareCreateResult,
@@ -681,6 +704,22 @@ export const WS_METHODS = {
   issueTrackersList: "issueTrackers.list",
   issueTrackersConnect: "issueTrackers.connect",
   issueTrackersBindProject: "issueTrackers.bindProject",
+
+  // Pluggable issue automation methods
+  issueAutomationGetState: "issueAutomation.getState",
+  issueAutomationSubscribe: "issueAutomation.subscribe",
+  issueAutomationSaveConnector: "issueAutomation.saveConnector",
+  issueAutomationDeleteConnector: "issueAutomation.deleteConnector",
+  issueAutomationRefreshScopes: "issueAutomation.refreshScopes",
+  issueAutomationListRemoteIssues: "issueAutomation.listRemoteIssues",
+  issueAutomationGetRemoteIssueDetail: "issueAutomation.getRemoteIssueDetail",
+  issueAutomationSaveProfile: "issueAutomation.saveProfile",
+  issueAutomationDeleteProfile: "issueAutomation.deleteProfile",
+  issueAutomationSetProfileEnabled: "issueAutomation.setProfileEnabled",
+  issueAutomationTriggerPoll: "issueAutomation.triggerPoll",
+  issueAutomationAnalyzeIssues: "issueAutomation.analyzeIssues",
+  issueAutomationCancelTask: "issueAutomation.cancelTask",
+  issueAutomationWriteBack: "issueAutomation.writeBack",
 
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
@@ -1502,6 +1541,99 @@ const WsIssueTrackersBindProjectRpc = Rpc.make(WS_METHODS.issueTrackersBindProje
   payload: IssueTrackerBindProjectInput,
   success: Schema.Void,
   error: IssueTrackerRpcError,
+});
+
+const IssueAutomationRpcError = Schema.Union([IssueAutomationError, EnvironmentAuthorizationError]);
+
+const WsIssueAutomationGetStateRpc = Rpc.make(WS_METHODS.issueAutomationGetState, {
+  payload: Schema.Struct({}),
+  success: IssueAutomationStateSnapshot,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationSubscribeRpc = Rpc.make(WS_METHODS.issueAutomationSubscribe, {
+  payload: Schema.Struct({}),
+  success: IssueAutomationStateSnapshot,
+  error: IssueAutomationRpcError,
+  stream: true,
+});
+
+const WsIssueAutomationSaveConnectorRpc = Rpc.make(WS_METHODS.issueAutomationSaveConnector, {
+  payload: IssueAutomationSaveConnectorInput,
+  success: IssueAutomationConnector,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationDeleteConnectorRpc = Rpc.make(WS_METHODS.issueAutomationDeleteConnector, {
+  payload: IssueAutomationDeleteConnectorInput,
+  success: Schema.Void,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationRefreshScopesRpc = Rpc.make(WS_METHODS.issueAutomationRefreshScopes, {
+  payload: IssueAutomationRefreshScopesInput,
+  success: IssueAutomationConnector,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationListRemoteIssuesRpc = Rpc.make(WS_METHODS.issueAutomationListRemoteIssues, {
+  payload: IssueAutomationListRemoteIssuesInput,
+  success: IssueAutomationListRemoteIssuesResult,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationGetRemoteIssueDetailRpc = Rpc.make(
+  WS_METHODS.issueAutomationGetRemoteIssueDetail,
+  {
+    payload: IssueAutomationGetRemoteIssueDetailInput,
+    success: IssueAutomationRemoteIssueDetail,
+    error: IssueAutomationRpcError,
+  },
+);
+
+const WsIssueAutomationSaveProfileRpc = Rpc.make(WS_METHODS.issueAutomationSaveProfile, {
+  payload: IssueAutomationSaveProfileInput,
+  success: IssueAutomationProfile,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationDeleteProfileRpc = Rpc.make(WS_METHODS.issueAutomationDeleteProfile, {
+  payload: IssueAutomationDeleteProfileInput,
+  success: Schema.Void,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationSetProfileEnabledRpc = Rpc.make(
+  WS_METHODS.issueAutomationSetProfileEnabled,
+  {
+    payload: IssueAutomationSetProfileEnabledInput,
+    success: IssueAutomationProfile,
+    error: IssueAutomationRpcError,
+  },
+);
+
+const WsIssueAutomationTriggerPollRpc = Rpc.make(WS_METHODS.issueAutomationTriggerPoll, {
+  payload: IssueAutomationTriggerPollInput,
+  success: IssueAutomationTriggerPollResult,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationAnalyzeIssuesRpc = Rpc.make(WS_METHODS.issueAutomationAnalyzeIssues, {
+  payload: IssueAutomationAnalyzeIssuesInput,
+  success: IssueAutomationAnalyzeIssuesResult,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationCancelTaskRpc = Rpc.make(WS_METHODS.issueAutomationCancelTask, {
+  payload: IssueAutomationCancelTaskInput,
+  success: Schema.Void,
+  error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationWriteBackRpc = Rpc.make(WS_METHODS.issueAutomationWriteBack, {
+  payload: IssueAutomationWriteBackInput,
+  success: IssueAutomationWriteBackResult,
+  error: IssueAutomationRpcError,
 });
 
 const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLookupRepository, {
@@ -2618,4 +2750,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeThreadRpc,
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
+  WsIssueAutomationGetStateRpc,
+  WsIssueAutomationSubscribeRpc,
+  WsIssueAutomationSaveConnectorRpc,
+  WsIssueAutomationDeleteConnectorRpc,
+  WsIssueAutomationRefreshScopesRpc,
+  WsIssueAutomationListRemoteIssuesRpc,
+  WsIssueAutomationGetRemoteIssueDetailRpc,
+  WsIssueAutomationSaveProfileRpc,
+  WsIssueAutomationDeleteProfileRpc,
+  WsIssueAutomationSetProfileEnabledRpc,
+  WsIssueAutomationTriggerPollRpc,
+  WsIssueAutomationAnalyzeIssuesRpc,
+  WsIssueAutomationCancelTaskRpc,
+  WsIssueAutomationWriteBackRpc,
 ).middleware(RpcScopeAuthorization);

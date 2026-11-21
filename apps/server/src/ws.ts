@@ -259,6 +259,7 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
+import * as IssueAutomationService from "./issueAutomation/IssueAutomationService.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
@@ -1496,6 +1497,7 @@ export const layerWsRpc = (
       const issues = yield* IssueService.IssueService;
       const threadIssues = yield* ThreadIssueService.ThreadIssueService;
       const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
+      const issueAutomation = yield* IssueAutomationService.IssueAutomationService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2002,6 +2004,24 @@ export const layerWsRpc = (
         [WS_METHODS.issueTrackersList]: () => issueTrackers.list,
         [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),
         [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
+        [WS_METHODS.issueAutomationGetState]: () => issueAutomation.getState,
+        [WS_METHODS.issueAutomationSubscribe]: () => issueAutomation.subscribe,
+        [WS_METHODS.issueAutomationSaveConnector]: (input) => issueAutomation.saveConnector(input),
+        [WS_METHODS.issueAutomationDeleteConnector]: (input) =>
+          issueAutomation.deleteConnector(input),
+        [WS_METHODS.issueAutomationRefreshScopes]: (input) => issueAutomation.refreshScopes(input),
+        [WS_METHODS.issueAutomationListRemoteIssues]: (input) =>
+          issueAutomation.listRemoteIssues(input),
+        [WS_METHODS.issueAutomationGetRemoteIssueDetail]: (input) =>
+          issueAutomation.getRemoteIssueDetail(input),
+        [WS_METHODS.issueAutomationSaveProfile]: (input) => issueAutomation.saveProfile(input),
+        [WS_METHODS.issueAutomationDeleteProfile]: (input) => issueAutomation.deleteProfile(input),
+        [WS_METHODS.issueAutomationSetProfileEnabled]: (input) =>
+          issueAutomation.setProfileEnabled(input),
+        [WS_METHODS.issueAutomationTriggerPoll]: (input) => issueAutomation.triggerPoll(input),
+        [WS_METHODS.issueAutomationAnalyzeIssues]: (input) => issueAutomation.analyzeIssues(input),
+        [WS_METHODS.issueAutomationCancelTask]: (input) => issueAutomation.cancelTask(input),
+        [WS_METHODS.issueAutomationWriteBack]: (input) => issueAutomation.writeBack(input),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -3688,6 +3708,7 @@ export const layer = Layer.unwrap(
     const issues = yield* IssueService.IssueService;
     const threadIssues = yield* ThreadIssueService.ThreadIssueService;
     const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
+    const issueAutomation = yield* IssueAutomationService.IssueAutomationService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
@@ -3783,6 +3804,9 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(ThreadIssueService.ThreadIssueService, threadIssues)),
               Layer.provide(
                 Layer.succeed(IssueTrackerConnections.IssueTrackerConnections, issueTrackers),
+              ),
+              Layer.provide(
+                Layer.succeed(IssueAutomationService.IssueAutomationService, issueAutomation),
               ),
               Layer.provide(OtlpEndpointCheck.layer),
               Layer.provide(
