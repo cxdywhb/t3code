@@ -53,6 +53,7 @@ export const ProjectCloneStartInput = Schema.Struct({
   provider: Schema.optional(SourceControlProviderKind),
   repository: Schema.optional(TrimmedNonEmptyString),
   remoteUrl: Schema.optional(TrimmedNonEmptyString),
+  fallbackRemoteUrl: Schema.optional(TrimmedNonEmptyString),
   destinationPath: TrimmedNonEmptyString,
   protocol: Schema.optional(SourceControlCloneProtocol),
 });

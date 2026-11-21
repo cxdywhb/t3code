@@ -67,6 +67,7 @@ import {
 } from "./IssueAutomationConfigModals";
 import {
   cleanIssueText,
+  formatIssueNumber,
   isStageActive,
   RemoteIssueStatusGlyph,
   SeverityIndicator,
@@ -240,6 +241,24 @@ export function IssueAutomationInspectorContent({
       ? activeTask.issueUrl
       : (issueDetail?.url ?? issueSummary?.url ?? activeTask?.issueUrl ?? "");
   const targetIssueKey = issueDetail?.key ?? issueSummary?.key ?? activeTask?.issueKey ?? null;
+  const formattedBugKey = formatIssueNumber(displayKey, targetIssueKey ?? undefined);
+
+  const bugLinkElement = formattedBugKey ? (
+    externalUrl ? (
+      <InlineButton
+        className="shrink-0 font-mono text-xs font-medium text-foreground hover:text-primary"
+        aria-label={gt("Open {issue} in ZenTao", { issue: formattedBugKey })}
+        render={<a href={externalUrl} target="_blank" rel="noopener noreferrer" />}
+      >
+        {formattedBugKey}
+        <ExternalLinkIcon aria-hidden className="size-3" />
+      </InlineButton>
+    ) : (
+      <span className="shrink-0 font-mono text-xs font-medium text-foreground">
+        {formattedBugKey}
+      </span>
+    )
+  ) : null;
 
   const submitComment = async () => {
     const body = commentDraft.trim();
@@ -260,25 +279,9 @@ export function IssueAutomationInspectorContent({
         data-chat-header
         className="flex h-13 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4"
       >
-        <span className="min-w-0 truncate text-xs font-medium text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
           {scopeLabel}
         </span>
-        {externalUrl ? (
-          <InlineButton
-            className="shrink-0 font-mono text-xs font-medium text-foreground"
-            aria-label={gt("Open {issue} in ZenTao", { issue: displayKey })}
-            render={<a href={externalUrl} target="_blank" rel="noopener noreferrer" />}
-          >
-            {displayKey}
-            <ExternalLinkIcon aria-hidden className="size-3" />
-          </InlineButton>
-        ) : (
-          <span className="shrink-0 font-mono text-xs font-medium text-foreground">
-            {displayKey}
-          </span>
-        )}
-
-        <div className="min-w-0 flex-1" />
 
         {issueDetail && targetIssueKey ? (
           <Menu>
@@ -287,6 +290,7 @@ export function IssueAutomationInspectorContent({
                 <Button
                   size="xs"
                   variant="outline"
+                  className="shrink-0"
                   disabled={writingBack}
                   aria-label={gt("Update ZenTao issue status")}
                 />
@@ -375,10 +379,11 @@ export function IssueAutomationInspectorContent({
           </Menu>
         ) : null}
 
-        {activeTask?.primaryThreadId ? (
+        {effectiveTab === "detail" && activeTask?.primaryThreadId ? (
           <Button
             size="xs"
             variant="outline"
+            className="shrink-0"
             onClick={() => onOpenThread(activeTask.primaryThreadId!)}
           >
             <MessageSquareIcon className="size-3.5" />
@@ -390,6 +395,7 @@ export function IssueAutomationInspectorContent({
           <Button
             size="icon-xs"
             variant="ghost"
+            className="shrink-0"
             aria-label={gt("Refresh issue detail")}
             disabled={detailLoading}
             onClick={onRefreshDetail}
@@ -398,7 +404,13 @@ export function IssueAutomationInspectorContent({
           </Button>
         ) : null}
 
-        <Button size="icon-xs" variant="ghost" aria-label={gt("Close inspector")} onClick={onClose}>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0"
+          aria-label={gt("Close inspector")}
+          onClick={onClose}
+        >
           <XIcon className="size-3.5" />
         </Button>
       </div>
@@ -425,7 +437,7 @@ export function IssueAutomationInspectorContent({
             </Toggle>
           </ToggleGroup>
 
-          <StageBadge stage={activeTask.stage} />
+          <StageBadge stage={activeTask.stage} size="default" />
         </div>
       ) : null}
 
@@ -455,13 +467,14 @@ export function IssueAutomationInspectorContent({
                     </h2>
                   </PullRequestDetailTitleRow>
 
-                  <PullRequestMetaLine className="mt-2 min-h-5 text-xs text-muted-foreground">
+                  <PullRequestMetaLine className="mt-2 min-h-5 flex-wrap gap-y-1 text-xs text-muted-foreground">
+                    {bugLinkElement}
                     {issueDetail.author ? (
                       <span>
                         <T>Opened by</T> {issueDetail.author}
                       </span>
                     ) : null}
-                    <span>{issueDetail.createdAt}</span>
+                    <span className="tabular-nums">{issueDetail.createdAt}</span>
                     <span>{issueDetail.confirmed ? <T>Confirmed</T> : <T>Unconfirmed</T>}</span>
                     {issueDetail.openedBuild ? (
                       <span>
@@ -706,18 +719,19 @@ export function IssueAutomationInspectorContent({
                 <h2 className="text-base font-semibold leading-snug text-foreground">
                   {cleanIssueText(activeTask.issueTitle)}
                 </h2>
-                <PullRequestMetaLine className="text-xs text-muted-foreground">
+                <PullRequestMetaLine className="flex-wrap gap-y-1 text-xs text-muted-foreground">
+                  {bugLinkElement}
                   <span className="font-mono">{activeTask.assignedModelLabel}</span>
                   {activeTask.targetProjectId ? (
                     <span className="inline-flex items-center gap-1">
-                      <FolderGit2Icon className="size-3" />
+                      <FolderGit2Icon className="size-3 shrink-0" />
                       {projects.find((p) => p.id === activeTask.targetProjectId)?.title ??
                         activeTask.targetProjectId}
                     </span>
                   ) : null}
                   {activeTask.worktreeBranch ? (
                     <span className="inline-flex items-center gap-1 font-mono">
-                      <GitBranchIcon className="size-3" />
+                      <GitBranchIcon className="size-3 shrink-0" />
                       {activeTask.worktreeBranch}
                     </span>
                   ) : null}
@@ -726,9 +740,13 @@ export function IssueAutomationInspectorContent({
 
               <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                 {activeTask.primaryThreadId ? (
-                  <Button size="xs" onClick={() => onOpenThread(activeTask.primaryThreadId!)}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => onOpenThread(activeTask.primaryThreadId!)}
+                  >
                     <MessageSquareIcon className="size-3.5" />
-                    <T>Open live Thread & Diff</T>
+                    <T>Thread & Diff</T>
                   </Button>
                 ) : null}
                 {activeTask.reviewThreadId ? (
@@ -754,7 +772,7 @@ export function IssueAutomationInspectorContent({
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/60 bg-card/40 px-3.5 py-3">
+            <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-2.5 rounded-xl border border-border/60 bg-card/40 px-3.5 py-3 sm:grid-cols-6">
               {[
                 { idx: 1, label: gt("Fetch") },
                 { idx: 2, label: gt("Route") },
@@ -762,7 +780,7 @@ export function IssueAutomationInspectorContent({
                 { idx: 4, label: gt("Cross-review") },
                 { idx: 5, label: gt("Write-back") },
                 { idx: 6, label: gt("Done") },
-              ].map((step, i, arr) => {
+              ].map((step) => {
                 const currentIdx = stageStepIndex(activeTask.stage);
                 const done =
                   currentIdx > step.idx ||
@@ -770,38 +788,28 @@ export function IssueAutomationInspectorContent({
                   activeTask.stage === "needs_human";
                 const current = currentIdx === step.idx && isStageActive(activeTask.stage);
                 return (
-                  <div
-                    key={step.idx}
-                    className={cn("flex items-center gap-1.5", i < arr.length - 1 && "flex-1")}
-                  >
-                    <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs">
-                      {done ? (
-                        <CheckCircle2Icon className="size-3.5 text-primary" />
-                      ) : current ? (
-                        <Spinner size="xs" />
-                      ) : (
-                        <span className="size-2 rounded-full bg-muted-foreground/35" />
-                      )}
-                      <span
-                        className={cn(
-                          done
-                            ? "font-medium text-foreground"
-                            : current
-                              ? "font-medium text-primary"
-                              : "text-muted-foreground",
-                        )}
-                      >
-                        {step.label}
+                  <div key={step.idx} className="flex min-w-0 items-center gap-1.5">
+                    {done ? (
+                      <CheckCircle2Icon className="size-3.5 shrink-0 text-success" />
+                    ) : current ? (
+                      <span className="inline-flex shrink-0 text-info">
+                        <Spinner size="xs" className="shrink-0" />
                       </span>
+                    ) : (
+                      <span className="size-2 shrink-0 rounded-full bg-muted-foreground/35" />
+                    )}
+                    <span
+                      className={cn(
+                        "truncate text-xs",
+                        done
+                          ? "font-medium text-foreground"
+                          : current
+                            ? "font-medium text-info"
+                            : "text-muted-foreground",
+                      )}
+                    >
+                      {step.label}
                     </span>
-                    {i < arr.length - 1 ? (
-                      <span
-                        className={cn(
-                          "mx-1 hidden h-px flex-1 xl:block",
-                          done ? "bg-primary/45" : "bg-border",
-                        )}
-                      />
-                    ) : null}
                   </div>
                 );
               })}

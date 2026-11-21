@@ -1723,6 +1723,17 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:repositories",
+    searchTerms: ["repositories", "repos", "gitlab", "groups", "clone", "仓库"],
+    title: gt("Browse GitLab repositories"),
+    icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/repositories" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
     value: "action:use-in-another-app",
     searchTerms: [
       "mcp",

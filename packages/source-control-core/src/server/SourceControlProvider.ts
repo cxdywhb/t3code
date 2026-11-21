@@ -1,16 +1,25 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
+import type * as Redacted from "effect/Redacted";
 import type {
   RepositoryIdentity,
   ChangeRequest,
   ChangeRequestState,
+  SourceControlNamespace,
+  SourceControlNamespaceKind,
   SourceControlProviderError,
   SourceControlProviderInfo,
   SourceControlProviderKind,
   SourceControlRepositoryCloneUrls,
+  SourceControlRepositorySummary,
   SourceControlRepositoryVisibility,
 } from "@t3tools/contracts";
+
+export interface SourceControlCloneHttpAuth {
+  readonly username: string;
+  readonly token: Redacted.Redacted<string>;
+}
 
 export interface SourceControlLinkSubject {
   readonly title: string;
@@ -210,6 +219,36 @@ export class SourceControlProvider extends Context.Service<
       /** The host the repository is on. Without it, the checkout's host. */
       readonly host?: string;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
+    readonly listNamespaces?: (input: { readonly host?: string }) => Effect.Effect<
+      {
+        readonly host: string;
+        readonly namespaces: ReadonlyArray<SourceControlNamespace>;
+      },
+      SourceControlProviderError
+    >;
+    readonly listRepositories?: (input: {
+      readonly host?: string;
+      readonly namespaceId?: string;
+      readonly namespaceKind?: SourceControlNamespaceKind;
+      readonly includeSubgroups?: boolean;
+      readonly includeArchived?: boolean;
+      readonly search?: string;
+      readonly page?: number;
+      readonly perPage?: number;
+    }) => Effect.Effect<
+      {
+        readonly host: string;
+        readonly repositories: ReadonlyArray<SourceControlRepositorySummary>;
+        readonly page: number;
+        readonly nextPage: number | null;
+        readonly totalCount: number | null;
+      },
+      SourceControlProviderError
+    >;
+    /** Optional HTTP Basic credential for authenticated HTTPS clones on `host` without writing secrets into `.git/config`. */
+    readonly getCloneHttpAuth?: (input: {
+      readonly host: string;
+    }) => Effect.Effect<SourceControlCloneHttpAuth | null>;
     readonly createRepository: (input: {
       readonly cwd: string;
       readonly repository: string;

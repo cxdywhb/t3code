@@ -19,7 +19,7 @@ const ZENTAO_DESCRIPTOR: IssueAutomationPlatformDescriptor = {
     {
       key: "baseUrl",
       label: "禅道地址",
-      placeholder: "https://zentao.company.com/zentao",
+      placeholder: "https://zentao.example.com/zentao",
       kind: "url",
       required: true,
     },

@@ -3,6 +3,7 @@ import {
   ArrowRightIcon,
   BotIcon,
   ChartNoAxesColumnIcon,
+  FolderGit2Icon,
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -263,6 +264,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     closeMobileSidebar();
     void navigate({ to: "/issue-automation" });
   };
+  const handleRepositoriesClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/repositories" });
+  };
   const handleSettingsClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
@@ -319,6 +324,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handleIssueAutomationClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<FolderGit2Icon />}
+            label={gt("Repositories")}
+            onClick={handleRepositoriesClick}
+          />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label={gt("Usage")}

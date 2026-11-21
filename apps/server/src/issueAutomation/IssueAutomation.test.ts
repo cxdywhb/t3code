@@ -5,6 +5,7 @@ import {
   extractZenTaoImageUrls,
   markdownToZenTaoHtml,
   normalizeZenTaoBaseUrl,
+  sortZenTaoScopesDesc,
   zenTaoHtmlToMarkdown,
 } from "./connectors/zentao/ZenTaoClient.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
@@ -48,6 +49,16 @@ describe("ZenTaoClient helpers", () => {
     expect(html).toContain("<strong>【问题根因分析】</strong>");
     expect(html).toContain("<code>OrderService.ts:42</code>");
     expect(html).toContain('<pre class="prettyprint">if (!order) return;</pre>');
+  });
+
+  it("sorts ZenTao product scopes by numeric ID descending so newer projects appear first", () => {
+    const sorted = sortZenTaoScopesDesc([
+      { id: "22", name: "Example Product A" },
+      { id: "105", name: "Example Product C" },
+      { id: "9", name: "Legacy Example" },
+      { id: "83", name: "Example Product B" },
+    ]);
+    expect(sorted.map((s) => s.id)).toEqual(["105", "83", "22", "9"]);
   });
 });
 

@@ -181,6 +181,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.issueAutomationCancelTask]: "issues",
   [WS_METHODS.issueAutomationWriteBack]: "issues",
   [WS_METHODS.sourceControlLookupRepository]: "source-control",
+  [WS_METHODS.sourceControlListNamespaces]: "source-control",
+  [WS_METHODS.sourceControlListRepositories]: "source-control",
   [WS_METHODS.sourceControlCloneRepository]: "source-control",
   [WS_METHODS.sourceControlPublishRepository]: "source-control",
   [WS_METHODS.sourceControlSignInStart]: "source-control",

@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -20,6 +21,7 @@ import {
   type SourceControlCloneRepositoryInput,
 } from "@t3tools/contracts";
 
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import type { GitCloneProgressLine } from "../project/gitCloneProgress.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -70,11 +72,16 @@ function layer(input: {
   readonly git?: Partial<GitVcsDriver.GitVcsDriver["Service"]>;
   readonly fileSystem?: FileSystem.FileSystem;
 }) {
+  const resolvedProvider = input.provider ?? makeProvider();
   const layerService = SourceControlRepositoryService.layer.pipe(
     Layer.provide(
       Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
         resolveLink: () => undefined,
-        get: () => Effect.succeed(input.provider ?? makeProvider()),
+        get: () => Effect.succeed(resolvedProvider),
+        getCloneHttpAuth: ({ host }) =>
+          resolvedProvider.getCloneHttpAuth
+            ? resolvedProvider.getCloneHttpAuth({ host })
+            : Effect.succeed(null),
       }),
     ),
     Layer.provide(
@@ -989,3 +996,143 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
     ),
   );
 });
+
+it.effect("lists namespaces and repositories via the provider", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const namespaces = yield* service.listNamespaces({
+      provider: SourceControlProviderKind.make("gitlab"),
+      host: "gitlab.example.test",
+    });
+    assert.strictEqual(namespaces.host, "gitlab.example.test");
+    assert.strictEqual(namespaces.namespaces.length, 1);
+
+    const repositories = yield* service.listRepositories({
+      provider: SourceControlProviderKind.make("gitlab"),
+      host: "gitlab.example.test",
+      namespaceId: "10",
+      includeSubgroups: true,
+    });
+    assert.strictEqual(repositories.host, "gitlab.example.test");
+    assert.strictEqual(repositories.repositories.length, 1);
+    assert.strictEqual(repositories.repositories[0]!.pathWithNamespace, "acme/app");
+  }).pipe(
+    Effect.provide(
+      layer({
+        provider: makeProvider({
+          kind: SourceControlProviderKind.make("gitlab"),
+          listNamespaces: () =>
+            Effect.succeed({
+              host: "gitlab.example.test",
+              namespaces: [
+                {
+                  id: "10",
+                  kind: "group",
+                  name: "acme",
+                  path: "acme",
+                  parentId: null,
+                  description: null,
+                  webUrl: "https://gitlab.example.test/acme",
+                  avatarUrl: null,
+                },
+              ],
+            }),
+          listRepositories: () =>
+            Effect.succeed({
+              host: "gitlab.example.test",
+              repositories: [
+                {
+                  id: "101",
+                  name: "app",
+                  pathWithNamespace: "acme/app",
+                  namespacePath: "acme",
+                  description: null,
+                  defaultBranch: "main",
+                  visibility: "private",
+                  sshUrl: "git@gitlab.example.test:acme/app.git",
+                  httpUrl: "https://gitlab.example.test/acme/app.git",
+                  webUrl: "https://gitlab.example.test/acme/app",
+                  archived: false,
+                  lastActivityAt: null,
+                },
+              ],
+              page: 1,
+              nextPage: null,
+              totalCount: 1,
+            }),
+        }),
+      }),
+    ),
+  ),
+);
+
+it.effect(
+  "falls back from custom-port SSH to fallbackRemoteUrl HTTPS and injects provider HTTP auth via git env",
+  () => {
+    const executed: Array<{
+      readonly args: ReadonlyArray<string>;
+      readonly env: NodeJS.ProcessEnv | undefined;
+    }> = [];
+    return Effect.gen(function* () {
+      const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const result = yield* service.cloneRepository({
+        provider: SourceControlProviderKind.make("gitlab"),
+        remoteUrl: "ssh://git@gitlab.example.test:2222/acme/app.git",
+        fallbackRemoteUrl: "https://gitlab.example.test/acme/app.git",
+        destinationPath: "/workspace/acme/app",
+        protocol: "auto",
+      });
+
+      assert.strictEqual(result.remoteUrl, "https://gitlab.example.test/acme/app.git");
+      assert.strictEqual(executed.length, 2);
+      assert.include(executed[0]!.args, "ssh://git@gitlab.example.test:2222/acme/app.git");
+      assert.strictEqual(executed[0]!.env?.GIT_CONFIG_COUNT, undefined);
+      assert.include(executed[1]!.args, "https://gitlab.example.test/acme/app.git");
+      assert.strictEqual(executed[1]!.env?.GIT_CONFIG_COUNT, "3");
+      assert.strictEqual(
+        executed[1]!.env?.GIT_CONFIG_KEY_2,
+        "http.https://gitlab.example.test/.extraHeader",
+      );
+      assert.strictEqual(
+        executed[1]!.env?.GIT_CONFIG_VALUE_2,
+        `Authorization: Basic ${Buffer.from("oauth2:glpat-secret", "utf8").toString("base64")}`,
+      );
+    }).pipe(
+      Effect.provide(
+        layer({
+          fileSystem: FileSystem.makeNoop({
+            exists: () => Effect.succeed(false),
+            makeDirectory: () => Effect.void,
+          }),
+          provider: makeProvider({
+            kind: SourceControlProviderKind.make("gitlab"),
+            getCloneHttpAuth: ({ host }) =>
+              Effect.succeed(
+                host === "gitlab.example.test"
+                  ? { username: "oauth2", token: Redacted.make("glpat-secret") }
+                  : null,
+              ),
+          }),
+          git: {
+            execute: (input) => {
+              executed.push({ args: input.args, env: input.env });
+              if (executed.length === 1) {
+                return Effect.fail(
+                  new GitCommandError({
+                    operation: input.operation,
+                    command: "git clone",
+                    cwd: input.cwd,
+                    detail: "Permission denied (publickey).",
+                    reason: "authentication_failed",
+                  }),
+                );
+              }
+              return Effect.succeed(processOutput());
+            },
+          },
+        }),
+      ),
+      Effect.provideService(HostProcess.Environment, { GIT_CONFIG_COUNT: "2" }),
+    );
+  },
+);

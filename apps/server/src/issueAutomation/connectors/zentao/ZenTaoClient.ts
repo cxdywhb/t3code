@@ -238,6 +238,24 @@ function statusLabelOf(status: string): string {
   }
 }
 
+function compareZenTaoScopeIdDesc(
+  a: Pick<IssueAutomationRemoteScope, "id">,
+  b: Pick<IssueAutomationRemoteScope, "id">,
+): number {
+  const numA = Number(a.id);
+  const numB = Number(b.id);
+  if (Number.isFinite(numA) && Number.isFinite(numB) && numA !== numB) {
+    return numB - numA;
+  }
+  return b.id.localeCompare(a.id, undefined, { numeric: true });
+}
+
+export function sortZenTaoScopesDesc(
+  scopes: ReadonlyArray<IssueAutomationRemoteScope>,
+): IssueAutomationRemoteScope[] {
+  return [...scopes].toSorted(compareZenTaoScopeIdDesc);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -467,14 +485,16 @@ export class ZenTaoSessionClient {
           this.sessions.delete(this.cacheKey(credentials));
           const { session, data } = await this.requestData(credentials, "bug", "browse");
           const productsMap = isRecord(data.products) ? data.products : {};
-          const scopes: IssueAutomationRemoteScope[] = Object.entries(productsMap)
-            .filter(
-              ([id, name]) => id !== "0" && typeof name === "string" && name.trim().length > 0,
-            )
-            .map(([id, name]) => ({
-              id: id.trim(),
-              name: decodeHtmlEntities(String(name).trim()),
-            }));
+          const scopes: IssueAutomationRemoteScope[] = sortZenTaoScopesDesc(
+            Object.entries(productsMap)
+              .filter(
+                ([id, name]) => id !== "0" && typeof name === "string" && name.trim().length > 0,
+              )
+              .map(([id, name]) => ({
+                id: id.trim(),
+                name: decodeHtmlEntities(String(name).trim()),
+              })),
+          );
 
           return {
             normalizedBaseUrl: session.baseUrl,
@@ -549,7 +569,7 @@ export class ZenTaoSessionClient {
 
               return {
                 key: id,
-                displayKey: `BUG #${id}`,
+                displayKey: `#${id}`,
                 scopeId: String(bug.product ?? input.scopeId).trim() || input.scopeId,
                 scopeName: productName,
                 title: decodeHtmlEntities(String(bug.title ?? "").trim()),
@@ -575,6 +595,8 @@ export class ZenTaoSessionClient {
             .filter(
               (item) =>
                 item.key.length > 0 &&
+                (input.browseType !== "unresolved" ||
+                  (item.status !== "resolved" && item.status !== "closed")) &&
                 (needle.length === 0 ||
                   item.title.toLowerCase().includes(needle) ||
                   item.key.includes(needle) ||
@@ -668,7 +690,7 @@ export class ZenTaoSessionClient {
 
           return {
             key: id,
-            displayKey: `BUG #${id}`,
+            displayKey: `#${id}`,
             scopeId: String(bug.product ?? input.scopeId).trim() || input.scopeId,
             scopeName:
               typeof data.productName === "string" && data.productName.trim().length > 0

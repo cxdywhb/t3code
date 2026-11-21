@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
@@ -15,6 +16,10 @@ import {
   type SourceControlCloneRepositoryInput,
   type SourceControlCloneRepositoryResult,
   type SourceControlCloneProtocol,
+  type SourceControlListNamespacesInput,
+  type SourceControlListNamespacesResult,
+  type SourceControlListRepositoriesInput,
+  type SourceControlListRepositoriesResult,
   SourceControlProviderKind,
   type SourceControlPublishRepositoryInput,
   type SourceControlPublishRepositoryResult,
@@ -47,6 +52,12 @@ export class SourceControlRepositoryService extends Context.Service<
     readonly lookupRepository: (
       input: SourceControlRepositoryLookupInput,
     ) => Effect.Effect<SourceControlRepositoryInfo, SourceControlRepositoryError>;
+    readonly listNamespaces: (
+      input: SourceControlListNamespacesInput,
+    ) => Effect.Effect<SourceControlListNamespacesResult, SourceControlRepositoryError>;
+    readonly listRepositories: (
+      input: SourceControlListRepositoriesInput,
+    ) => Effect.Effect<SourceControlListRepositoriesResult, SourceControlRepositoryError>;
     readonly prepareClone: (
       input: SourceControlCloneRepositoryInput,
     ) => Effect.Effect<SourceControlPreparedClone, SourceControlRepositoryError>;
@@ -178,6 +189,10 @@ function httpsFallbackUrl(
   prepared: SourceControlPreparedClone,
 ): string | null {
   if (input.protocol === "ssh" || cloneUrlProtocol(prepared.cloneUrl) !== "ssh") return null;
+  const explicitFallback = input.fallbackRemoteUrl?.trim();
+  if (explicitFallback && cloneUrlProtocol(explicitFallback) === "https") {
+    return explicitFallback;
+  }
   if (prepared.repository?.sshUrl === prepared.cloneUrl) return prepared.repository.url;
   return cloneUrlForProtocol(prepared.cloneUrl, "https");
 }
@@ -206,6 +221,7 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
   const providers = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const environment = yield* HostProcess.Environment;
 
   const ensureConcreteProvider = (input: {
     readonly operation: string;
@@ -234,6 +250,7 @@ export const make = Effect.gen(function* () {
       const urls = yield* provider.getRepositoryCloneUrls({
         cwd: input.cwd ?? config.cwd,
         repository: input.repository.trim(),
+        ...(input.host ? { host: input.host.trim() } : {}),
       });
       return toRepositoryInfo(providerKind, urls);
     },
@@ -241,6 +258,104 @@ export const make = Effect.gen(function* () {
     // refuse the lookup.
     Effect.provideService(SourceControlRateLimit.Interactive, true),
   );
+
+  const listNamespaces = Effect.fn("SourceControlRepositoryService.listNamespaces")(
+    function* (input: SourceControlListNamespacesInput) {
+      const providerKind = yield* ensureConcreteProvider({
+        operation: "listNamespaces",
+        provider: input.provider,
+      });
+      const provider = yield* providers.get(providerKind);
+      if (!provider.listNamespaces) {
+        return yield* new SourceControlRepositoryError({
+          operation: "listNamespaces",
+          provider: providerKind,
+          detail: `${providerKind} does not support browsing repository groups.`,
+        });
+      }
+      const result = yield* provider.listNamespaces(input.host ? { host: input.host.trim() } : {});
+      return {
+        provider: providerKind,
+        host: result.host,
+        namespaces: result.namespaces,
+      } satisfies SourceControlListNamespacesResult;
+    },
+    Effect.provideService(SourceControlRateLimit.Interactive, true),
+  );
+
+  const listRepositories = Effect.fn("SourceControlRepositoryService.listRepositories")(
+    function* (input: SourceControlListRepositoriesInput) {
+      const providerKind = yield* ensureConcreteProvider({
+        operation: "listRepositories",
+        provider: input.provider,
+      });
+      const provider = yield* providers.get(providerKind);
+      if (!provider.listRepositories) {
+        return yield* new SourceControlRepositoryError({
+          operation: "listRepositories",
+          provider: providerKind,
+          detail: `${providerKind} does not support browsing repositories.`,
+        });
+      }
+      const result = yield* provider.listRepositories({
+        ...(input.host ? { host: input.host.trim() } : {}),
+        ...(input.namespaceId ? { namespaceId: input.namespaceId.trim() } : {}),
+        ...(input.namespaceKind ? { namespaceKind: input.namespaceKind } : {}),
+        ...(input.includeSubgroups !== undefined
+          ? { includeSubgroups: input.includeSubgroups }
+          : {}),
+        ...(input.includeArchived !== undefined ? { includeArchived: input.includeArchived } : {}),
+        ...(input.search !== undefined ? { search: input.search } : {}),
+        ...(input.page !== undefined ? { page: input.page } : {}),
+        ...(input.perPage !== undefined ? { perPage: input.perPage } : {}),
+      });
+      return {
+        provider: providerKind,
+        host: result.host,
+        repositories: result.repositories,
+        page: result.page,
+        nextPage: result.nextPage,
+        totalCount: result.totalCount,
+      } satisfies SourceControlListRepositoriesResult;
+    },
+    Effect.provideService(SourceControlRateLimit.Interactive, true),
+  );
+
+  const resolveCloneEnv = Effect.fn("SourceControlRepositoryService.resolveCloneEnv")(function* (
+    provider: SourceControlProviderKind,
+    cloneUrl: string,
+  ) {
+    const parsedUrl = URL.parse(cloneUrl);
+    if (
+      !parsedUrl ||
+      (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") ||
+      parsedUrl.username.length > 0 ||
+      parsedUrl.password.length > 0
+    ) {
+      return CLONE_ENV;
+    }
+    const getAuth = providers.getCloneHttpAuth;
+    if (!getAuth) return CLONE_ENV;
+    const auth = yield* getAuth({
+      ...(provider !== "unknown" ? { provider } : {}),
+      host: parsedUrl.host,
+    }).pipe(Effect.orElseSucceed(() => null));
+    if (auth === null) return CLONE_ENV;
+
+    const encoded = Buffer.from(`${auth.username}:${Redacted.value(auth.token)}`, "utf8").toString(
+      "base64",
+    );
+    const existingCountRaw = Number.parseInt(environment.GIT_CONFIG_COUNT ?? "", 10);
+    const existingCount =
+      Number.isInteger(existingCountRaw) && existingCountRaw > 0 ? existingCountRaw : 0;
+
+    return {
+      ...CLONE_ENV,
+      GIT_CONFIG_COUNT: String(existingCount + 1),
+      [`GIT_CONFIG_KEY_${existingCount}`]: `http.${parsedUrl.origin}/.extraHeader`,
+      [`GIT_CONFIG_VALUE_${existingCount}`]: `Authorization: Basic ${encoded}`,
+    } satisfies NodeJS.ProcessEnv;
+  });
 
   const normalizeDestinationPath = Effect.fn("SourceControlRepositoryService.normalizeDestination")(
     function* (destinationPath: string) {
@@ -388,6 +503,7 @@ export const make = Effect.gen(function* () {
     const normalizedCloneUrl = cloneUrl.replace(/^([a-z][a-z0-9+.-]*:\/\/[^/?#]+)\?/i, "$1/?");
     const provider = input.provider ?? SourceControlProviderKind.make("unknown");
     const timeoutMs = options?.timeoutMs === undefined ? CLONE_TIMEOUT_MS : options.timeoutMs;
+    const cloneEnv = yield* resolveCloneEnv(provider, normalizedCloneUrl);
     const clone = git
       .execute({
         operation: "SourceControlRepositoryService.cloneRepository",
@@ -399,7 +515,7 @@ export const make = Effect.gen(function* () {
         maxOutputBytes: 256 * 1024,
         appendTruncationMarker: true,
         keepLineCallbacksAfterTruncation: true,
-        env: CLONE_ENV,
+        env: cloneEnv,
         progress: { onStderrLine },
       })
       .pipe(
@@ -622,6 +738,16 @@ export const make = Effect.gen(function* () {
     lookupRepository: Effect.fnUntraced(function* (input) {
       return yield* lookupRepository(input).pipe(
         mapRepositoryError("lookupRepository", input.provider),
+      );
+    }),
+    listNamespaces: Effect.fnUntraced(function* (input) {
+      return yield* listNamespaces(input).pipe(
+        mapRepositoryError("listNamespaces", input.provider),
+      );
+    }),
+    listRepositories: Effect.fnUntraced(function* (input) {
+      return yield* listRepositories(input).pipe(
+        mapRepositoryError("listRepositories", input.provider),
       );
     }),
     prepareClone: Effect.fnUntraced(function* (input) {

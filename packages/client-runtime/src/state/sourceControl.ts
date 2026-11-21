@@ -42,6 +42,14 @@ export function createSourceControlEnvironmentAtoms<R, E>(
       label: "environment-data:source-control:repository",
       tag: WS_METHODS.sourceControlLookupRepository,
     }),
+    namespaces: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:source-control:namespaces",
+      tag: WS_METHODS.sourceControlListNamespaces,
+    }),
+    repositories: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:source-control:repositories",
+      tag: WS_METHODS.sourceControlListRepositories,
+    }),
     // Clone-backed project creation. The RPC returns once the project exists
     // and the clone runs in the background; `projectClones` carries progress.
     startProjectClone: createEnvironmentRpcCommand(runtime, {

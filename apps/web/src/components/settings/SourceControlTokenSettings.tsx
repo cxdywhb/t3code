@@ -24,6 +24,20 @@ import { SecretSourceInput, useSecretSources } from "./SecretSourceInput";
 const hasToken = (token: SettingsSecretValue | undefined) =>
   typeof token === "string" ? token.length > 0 : token !== undefined;
 
+function normalizeHostInput(rawHost: string): string {
+  const trimmed = rawHost.trim();
+  if (trimmed.length === 0) return "";
+  if (/^https?:\/\//i.test(trimmed) || trimmed.includes("/")) {
+    try {
+      const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+      if (parsed.host) return parsed.host.toLowerCase();
+    } catch {
+      // Fall back to trimming slashes below.
+    }
+  }
+  return trimmed.replace(/\/+$/u, "").toLowerCase();
+}
+
 export function SourceControlTokenSettings({
   environmentId,
   definition,
@@ -36,11 +50,13 @@ export function SourceControlTokenSettings({
   readonly onSaved: () => void;
 }) {
   const gt = useGT();
-  // Translates the GitHub definition's English `tokenAccess`.
+  // Translates each provider definition's English `tokenAccess`.
   const tokenAccess =
     definition.kind === "github"
       ? gt("read and write access to pull requests and contents")
-      : credentials.tokenAccess;
+      : definition.kind === "gitlab"
+        ? gt("read_api (and read_repository for HTTPS clone)")
+        : credentials.tokenAccess;
   const { tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
@@ -55,7 +71,7 @@ export function SourceControlTokenSettings({
     readonly draft: string | SecretReference;
   } | null>(null);
   const [saving, setSaving] = useState(false);
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeHostInput(host);
   const savedToken = tokens[normalizedHost];
   const isSaved = hasToken(savedToken);
   const savedHosts = Object.entries(tokens)
@@ -153,15 +169,35 @@ export function SourceControlTokenSettings({
             />
           </div>
         </div>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            {savedHosts.length === 0
-              ? gt("No token saved; the server uses {envVar} or the {cliName} login.", {
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            {savedHosts.length === 0 ? (
+              <span>
+                {gt("No token saved; the server uses {envVar} or the {cliName} login.", {
                   envVar: credentials.tokenEnvVar,
                   cliName: credentials.cliName,
-                })
-              : gt("Saved for {hosts}.", { hosts: savedHosts.join(", ") })}
-          </p>
+                })}
+              </span>
+            ) : (
+              <>
+                <span>{gt("Saved for:")}</span>
+                {savedHosts.map((savedHost) => (
+                  <button
+                    key={savedHost}
+                    type="button"
+                    onClick={() => setHost(savedHost)}
+                    className={`rounded border px-1.5 py-0.5 font-mono text-2xs transition-colors ${
+                      savedHost === normalizedHost
+                        ? "border-primary/40 bg-primary/10 text-foreground"
+                        : "border-border bg-muted/50 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {savedHost}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
           <div className="flex shrink-0 gap-2">
             {isSaved ? (
               <Button

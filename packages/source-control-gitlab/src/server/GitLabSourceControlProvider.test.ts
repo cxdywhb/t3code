@@ -10,7 +10,9 @@ import * as Option from "effect/Option";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+import * as GitLabApi from "./GitLabApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import { parseGitLabAuthStatusHosts } from "./gitLabAuthStatus.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
 import { definition } from "../shared/definition.ts";
@@ -18,7 +20,17 @@ import { definition } from "../shared/definition.ts";
 function makeProvider(gitlab: Partial<GitLabCli.GitLabCli["Service"]>) {
   return GitLabSourceControlProvider.make.pipe(
     Effect.provide(
-      Layer.mergeAll(Layer.mock(GitLabCli.GitLabCli)(gitlab), TestSourceControlHost.layer()),
+      Layer.mergeAll(
+        Layer.mock(GitLabCli.GitLabCli)(gitlab),
+        Layer.mock(GitLabApi.GitLabApi)({}),
+        Layer.mock(GitLabCredentials.GitLabCredentials)({
+          get: () => Effect.succeedNone,
+          configuredHosts: Effect.succeed([]),
+          defaultHost: Effect.succeed(null),
+          hasConfiguredHost: () => Effect.succeed(false),
+        }),
+        TestSourceControlHost.layer(),
+      ),
     ),
   );
 }
@@ -343,8 +355,15 @@ it.effect.each([
     });
     const provider = yield* GitLabSourceControlProvider.make.pipe(
       Effect.provide(
-        Layer.merge(
+        Layer.mergeAll(
           host,
+          Layer.mock(GitLabApi.GitLabApi)({}),
+          Layer.mock(GitLabCredentials.GitLabCredentials)({
+            get: () => Effect.succeedNone,
+            configuredHosts: Effect.succeed([]),
+            defaultHost: Effect.succeed(null),
+            hasConfiguredHost: () => Effect.succeed(false),
+          }),
           GitLabCli.layer.pipe(
             Layer.provide(host),
             Layer.provide(FileSystem.layerNoop({ readFileString: () => Effect.succeed("Body") })),

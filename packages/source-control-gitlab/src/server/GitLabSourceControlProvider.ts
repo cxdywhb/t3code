@@ -1,14 +1,21 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { SourceControlProviderError, type ChangeRequest } from "@t3tools/contracts";
+import {
+  SourceControlProviderError,
+  type ChangeRequest,
+  type SourceControlProviderDiscoveryItem,
+} from "@t3tools/contracts";
 import {
   parseGitRemoteHost,
   unknownRemoteProvider as unknownHostProvider,
 } from "@t3tools/source-control-core/shared/definition";
 
+import * as GitLabApi from "./GitLabApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import * as GitLabChangeRequestTemplate from "./gitLabChangeRequestTemplate.ts";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
@@ -17,9 +24,11 @@ import {
   firstSafeAuthLine,
   matchFirst,
   parseCliHost,
+  probeSourceControlProvider,
   providerAuth,
   type SourceControlAuthProbeInput,
   type SourceControlCliDiscoverySpec,
+  type SourceControlManagedCliDiscoverySpec,
   type SourceControlUnknownRemoteRefinementInput,
 } from "@t3tools/source-control-core/server/discovery";
 import { findAuthenticatedGitLabHost, parseGitLabAuthStatusHosts } from "./gitLabAuthStatus.ts";
@@ -163,11 +172,236 @@ export const discovery = {
   parseAuth: parseGitLabAuth,
   refineUnknownRemote: refineUnknownGitLabRemote,
   installHint:
-    "Install the GitLab command-line tool (`glab`) from https://gitlab.com/gitlab-org/cli or your package manager (for example `brew install glab`).",
+    "Add a GitLab Personal Access Token in Settings (works with self-hosted GitLab without `glab`), or install GitLab CLI (`glab`) from https://gitlab.com/gitlab-org/cli.",
 } satisfies SourceControlCliDiscoverySpec;
+
+const DISCOVERY_API_TIMEOUT = Duration.seconds(5);
+
+function parseRepositoryHostAndPath(
+  repository: string,
+  explicitHost?: string,
+): { readonly host: string | null; readonly projectPath: string } {
+  const trimmed = repository.trim();
+  const explicit = explicitHost ? GitLabCredentials.normalizeGitLabHost(explicitHost) : "";
+  if (explicit && GitLabCredentials.isValidGitLabHost(explicit)) {
+    return { host: explicit, projectPath: trimmed.replace(/^\/+/, "").replace(/\.git$/i, "") };
+  }
+  const parsedUrl = URL.parse(trimmed);
+  if (parsedUrl && (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:")) {
+    const path = parsedUrl.pathname.replace(/^\/+/, "").replace(/\.git$/i, "");
+    if (path.includes("/")) {
+      return { host: parsedUrl.host.toLowerCase(), projectPath: path };
+    }
+  }
+  const segments = trimmed.split("/").filter(Boolean);
+  if (segments.length >= 3 && segments[0]!.includes(".")) {
+    const host = GitLabCredentials.normalizeGitLabHost(segments[0]!);
+    if (GitLabCredentials.isValidGitLabHost(host)) {
+      return {
+        host,
+        projectPath: segments
+          .slice(1)
+          .join("/")
+          .replace(/\.git$/i, ""),
+      };
+    }
+  }
+  return { host: null, projectPath: trimmed.replace(/^\/+/, "").replace(/\.git$/i, "") };
+}
+
+function toGitLabApiProviderError(
+  operation: string,
+  error: GitLabApi.GitLabApiError,
+  repository?: string,
+): SourceControlProviderError {
+  return new SourceControlProviderError({
+    provider: SourceControlProviderKind.make("gitlab"),
+    operation,
+    cwd: ".",
+    ...(repository
+      ? { repository: SourceControlProvider.transportSafeSourceControlErrorValue(repository) }
+      : {}),
+    detail: error.message,
+    cause: error,
+  });
+}
+
+export const makeDiscovery = Effect.gen(function* () {
+  const sourceControlHost = yield* SourceControlHost.SourceControlHost;
+  const credentials = yield* GitLabCredentials.GitLabCredentials;
+  const api = yield* GitLabApi.GitLabApi;
+
+  return {
+    type: "managed-cli",
+    kind: discovery.kind,
+    label: discovery.label,
+    installHint: discovery.installHint,
+    probe: Effect.fn("GitLabSourceControlProvider.discovery")(function* (cwd: string) {
+      const [cli, configured] = yield* Effect.all(
+        [
+          probeSourceControlProvider({
+            cwd,
+            process: sourceControlHost.process,
+            spec: discovery,
+          }),
+          credentials.configuredHosts,
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const enabledConfigured = configured.filter((entry) => entry.enabled);
+      if (enabledConfigured.length === 0) {
+        return cli;
+      }
+
+      const checked = yield* Effect.forEach(
+        enabledConfigured,
+        (entry) => {
+          if (Option.isNone(entry.token)) {
+            return Effect.succeed({
+              host: entry.host,
+              source: entry.source,
+              status: "error" as const,
+              detail: entry.error ?? `Token for ${entry.host} could not be resolved.`,
+            });
+          }
+          return api
+            .getCurrentUser({
+              host: entry.host,
+              token: entry.token.value,
+              timeout: DISCOVERY_API_TIMEOUT,
+            })
+            .pipe(
+              Effect.map((user) => ({
+                host: entry.host,
+                source: entry.source,
+                status: "authenticated" as const,
+                account: user.username,
+              })),
+              Effect.catch((error) =>
+                Effect.succeed({
+                  host: entry.host,
+                  source: entry.source,
+                  status:
+                    error._tag === "GitLabApiAuthenticationError"
+                      ? ("unauthenticated" as const)
+                      : ("error" as const),
+                  detail: error.message,
+                }),
+              ),
+            );
+        },
+        { concurrency: 4 },
+      );
+
+      const cliAccounts = cli.auth.accounts ?? [];
+      const tokenHosts = new Set(checked.map((item) => item.host));
+      const mergedAccounts = [
+        ...checked.map((item) =>
+          item.status === "authenticated"
+            ? {
+                host: item.host,
+                account: item.account,
+                active: true,
+                authenticated: true,
+                ...(item.source === "env" ? { environmentVariable: "GITLAB_TOKEN" } : {}),
+              }
+            : {
+                host: item.host,
+                account: "token",
+                active: true,
+                authenticated: false,
+                error: item.detail,
+                ...(item.source === "env" ? { environmentVariable: "GITLAB_TOKEN" } : {}),
+              },
+        ),
+        ...cliAccounts.filter((account) => !tokenHosts.has(account.host.toLowerCase())),
+      ];
+
+      const primaryAuthenticated = checked.find((item) => item.status === "authenticated");
+      if (primaryAuthenticated && primaryAuthenticated.status === "authenticated") {
+        const additionalHosts = checked.filter(
+          (item) => item.status === "authenticated" && item.host !== primaryAuthenticated.host,
+        ).length;
+        return {
+          ...cli,
+          status: "available" as const,
+          auth: {
+            ...providerAuth({
+              status: "authenticated",
+              account: primaryAuthenticated.account,
+              host: primaryAuthenticated.host,
+              detail:
+                primaryAuthenticated.source === "settings"
+                  ? additionalHosts > 0
+                    ? `Using token saved in Settings for ${primaryAuthenticated.host} (+${additionalHosts} more).`
+                    : `Using the token saved in Settings for ${primaryAuthenticated.host}.`
+                  : `Using GITLAB_TOKEN from the server environment for ${primaryAuthenticated.host}.`,
+            }),
+            accounts: mergedAccounts,
+          },
+        } satisfies SourceControlProviderDiscoveryItem;
+      }
+
+      if (cli.status === "available" && cli.auth.status === "authenticated") {
+        return {
+          ...cli,
+          auth: {
+            ...cli.auth,
+            accounts: mergedAccounts,
+          },
+        } satisfies SourceControlProviderDiscoveryItem;
+      }
+
+      const firstFailed = checked[0];
+      return {
+        ...cli,
+        status: "available" as const,
+        auth: {
+          ...providerAuth({
+            status: firstFailed?.status === "unauthenticated" ? "unauthenticated" : "unknown",
+            host: firstFailed?.host,
+            detail: firstFailed?.status === "authenticated" ? undefined : firstFailed?.detail,
+          }),
+          accounts: mergedAccounts,
+        },
+      } satisfies SourceControlProviderDiscoveryItem;
+    }),
+    refineUnknownRemote: Effect.fn("GitLabSourceControlProvider.refineUnknownRemote")(function* ({
+      cwd,
+      context,
+    }) {
+      const parsed = URL.parse(context.provider.baseUrl);
+      const host = GitLabCredentials.normalizeGitLabHost(parsed?.host || context.provider.name);
+      if (host && (yield* credentials.hasConfiguredHost(host))) {
+        return {
+          kind: SourceControlProviderKind.make("gitlab"),
+          name: host === "gitlab.com" ? "GitLab" : "GitLab Self-Hosted",
+          baseUrl: context.provider.baseUrl,
+        } as const;
+      }
+      const cliAuth = yield* sourceControlHost.process
+        .run({
+          operation: "source-control.discovery.refine-unknown-remote",
+          command: discovery.executable,
+          args: discovery.remoteRefinementArgs(context),
+          cwd,
+          allowNonZeroExit: true,
+          timeoutMs: 5_000,
+          maxOutputBytes: 8_000,
+          appendTruncationMarker: true,
+        })
+        .pipe(Effect.orElseSucceed(() => null));
+      if (cliAuth === null) return null;
+      return refineUnknownGitLabRemote({ cwd, context, auth: cliAuth }) ?? null;
+    }),
+  } satisfies SourceControlManagedCliDiscoverySpec;
+});
 
 export const make = Effect.gen(function* () {
   const gitlab = yield* GitLabCli.GitLabCli;
+  const api = yield* GitLabApi.GitLabApi;
+  const credentials = yield* GitLabCredentials.GitLabCredentials;
   const { git } = yield* SourceControlHost.SourceControlHost;
 
   const readLinkSubject = Effect.fn("GitLabSourceControlProvider.readLinkSubject")(function* (
@@ -317,8 +551,31 @@ export const make = Effect.gen(function* () {
       },
     ),
     getRepositoryCloneUrls: Effect.fn("GitLabSourceControlProvider.getRepositoryCloneUrls")(
-      function (input) {
-        return gitlab.getRepositoryCloneUrls(input).pipe(
+      function* (input) {
+        const parsed = parseRepositoryHostAndPath(input.repository, input.host);
+        const targetHost = parsed.host ?? (yield* credentials.defaultHost);
+        if (targetHost !== null) {
+          const token = yield* credentials
+            .get(targetHost)
+            .pipe(
+              Effect.mapError((error) =>
+                toGitLabApiProviderError("getRepositoryCloneUrls", error, input.repository),
+              ),
+            );
+          if (Option.isSome(token)) {
+            return yield* api
+              .getProject({
+                host: targetHost,
+                projectPath: parsed.projectPath,
+              })
+              .pipe(
+                Effect.mapError((error) =>
+                  toGitLabApiProviderError("getRepositoryCloneUrls", error, input.repository),
+                ),
+              );
+          }
+        }
+        return yield* gitlab.getRepositoryCloneUrls(input).pipe(
           Effect.mapError(
             (error) =>
               new SourceControlProviderError({
@@ -336,6 +593,27 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
+    listNamespaces: Effect.fn("GitLabSourceControlProvider.listNamespaces")(function (input) {
+      return api
+        .listNamespaces(input)
+        .pipe(Effect.mapError((error) => toGitLabApiProviderError("listNamespaces", error)));
+    }),
+    listRepositories: Effect.fn("GitLabSourceControlProvider.listRepositories")(function (input) {
+      return api
+        .listRepositories(input)
+        .pipe(Effect.mapError((error) => toGitLabApiProviderError("listRepositories", error)));
+    }),
+    getCloneHttpAuth: Effect.fn("GitLabSourceControlProvider.getCloneHttpAuth")(function* (input) {
+      const credential = yield* credentials
+        .get(input.host)
+        .pipe(Effect.orElseSucceed(() => Option.none<GitLabCredentials.GitLabCredential>()));
+      if (Option.isNone(credential)) return null;
+      // GitLab accepts `oauth2` as the HTTP Basic username for PATs, project tokens, and group tokens.
+      return {
+        username: "oauth2",
+        token: credential.value.token,
+      };
+    }),
     createRepository: Effect.fn("GitLabSourceControlProvider.createRepository")(function (input) {
       return gitlab.createRepository(input).pipe(
         Effect.mapError(

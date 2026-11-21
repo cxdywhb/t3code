@@ -473,6 +473,10 @@ import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
+  SourceControlListNamespacesInput,
+  SourceControlListNamespacesResult,
+  SourceControlListRepositoriesInput,
+  SourceControlListRepositoriesResult,
   SourceControlPublishRepositoryInput,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryError,
@@ -722,6 +726,8 @@ export const WS_METHODS = {
   issueAutomationWriteBack: "issueAutomation.writeBack",
 
   sourceControlLookupRepository: "sourceControl.lookupRepository",
+  sourceControlListNamespaces: "sourceControl.listNamespaces",
+  sourceControlListRepositories: "sourceControl.listRepositories",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
   sourceControlSignInStart: "sourceControl.signInStart",
@@ -1639,6 +1645,18 @@ const WsIssueAutomationWriteBackRpc = Rpc.make(WS_METHODS.issueAutomationWriteBa
 const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLookupRepository, {
   payload: SourceControlRepositoryLookupInput,
   success: SourceControlRepositoryInfo,
+  error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+});
+
+const WsSourceControlListNamespacesRpc = Rpc.make(WS_METHODS.sourceControlListNamespaces, {
+  payload: SourceControlListNamespacesInput,
+  success: SourceControlListNamespacesResult,
+  error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+});
+
+const WsSourceControlListRepositoriesRpc = Rpc.make(WS_METHODS.sourceControlListRepositories, {
+  payload: SourceControlListRepositoriesInput,
+  success: SourceControlListRepositoriesResult,
   error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
 });
 
@@ -2632,6 +2650,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsLabelCandidatesRpc,
   WsPullRequestsSetLabelsRpc,
   WsSourceControlLookupRepositoryRpc,
+  WsSourceControlListNamespacesRpc,
+  WsSourceControlListRepositoriesRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsSourceControlSignInStartRpc,

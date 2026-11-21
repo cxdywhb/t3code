@@ -1,8 +1,9 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { makeProviderSettingsSchema, SourceControlProviderKind } from "@t3tools/contracts";
 import {
   buildCommitUrl,
   changeRequestUrlBelow,
   defineSourceControl,
+  hostCredentialSettingsFields,
   isChangeRequestInProjectRepository,
   isChangeRequestOnProjectHost,
   parseChangeRequestPath,
@@ -28,11 +29,23 @@ const REPOSITORY_PAGE_PATH = /^\/([^/]+(?:\/[^/]+)+?)\/-\//u;
 
 const KIND = SourceControlProviderKind.make("gitlab");
 
+export const settings = makeProviderSettingsSchema(hostCredentialSettingsFields);
+export type GitLabSettings = typeof settings.Type;
+
 export const definition = defineSourceControl({
   kind: KIND,
   label: "GitLab",
   pickerLabel: "GitLab",
   icon,
+  searchKeywords: ["self-hosted", "enterprise", "pat", "token"],
+  credentials: {
+    cliName: "glab",
+    cliLabel: "GitLab CLI",
+    loginCommand: "glab auth login",
+    tokenEnvVar: "GITLAB_TOKEN",
+    tokenAccess: "read_api (and read_repository for HTTPS clone)",
+    newTokenUrl: (host) => `https://${host}/-/user_settings/personal_access_tokens`,
+  },
   changeRequest: {
     shortLabel: "MR",
     shortLabelWithArticle: "an MR",
@@ -95,4 +108,5 @@ export const definition = defineSourceControl({
     isChangeRequestInProjectRepository(projectChangeRequestHost(identity, KIND), identity, link),
   canReadChangeRequestOnHost: (identity, link) =>
     isChangeRequestOnProjectHost(projectChangeRequestHost(identity, KIND), identity, link),
+  settings,
 });

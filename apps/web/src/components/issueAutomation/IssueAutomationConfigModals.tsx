@@ -58,6 +58,8 @@ import {
 } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
+import { cn } from "~/lib/utils";
+import { sortScopesByIdDesc } from "./issueAutomationAnalytics.logic";
 import { useActionModeLabel } from "./issueAutomationPresentation";
 
 /**
@@ -112,9 +114,10 @@ export function SearchableScopeMenu({
 }) {
   const gt = useGT();
   const [query, setQuery] = useState("");
-  const current = scopes.find((s) => s.id === value) ?? scopes[0] ?? null;
+  const sortedScopes = sortScopesByIdDesc(scopes);
+  const current = sortedScopes.find((s) => s.id === value) ?? sortedScopes[0] ?? null;
   const needle = query.trim().toLowerCase();
-  const filtered = scopes.filter(
+  const filtered = sortedScopes.filter(
     (s) =>
       needle.length === 0 ||
       s.name.toLowerCase().includes(needle) ||
@@ -125,7 +128,7 @@ export function SearchableScopeMenu({
     <Menu>
       <MenuTrigger
         aria-label={ariaLabel}
-        render={<Button variant="outline" className={className} />}
+        render={<Button variant="outline" className={cn("justify-between", className)} />}
       >
         <span className="min-w-0 flex-1 truncate text-left">
           {current ? `#${current.id} · ${current.name}` : gt("Select product")}
@@ -133,7 +136,7 @@ export function SearchableScopeMenu({
         <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 opacity-70" />
       </MenuTrigger>
       <MenuPopup align="start">
-        {scopes.length > 6 ? (
+        {sortedScopes.length > 6 ? (
           <MenuSearchInput
             autoFocus
             value={query}
@@ -157,7 +160,7 @@ export function SearchableScopeMenu({
               filtered.map((scope) => (
                 <MenuRadioItem key={scope.id} value={scope.id}>
                   <span className="flex min-w-0 items-center gap-2">
-                    <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    <span className="min-w-9 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                       #{scope.id}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{scope.name}</span>
@@ -179,6 +182,7 @@ export function SearchableModelMenu({
   onChange,
   ariaLabel,
   size = "sm",
+  triggerVariant = "select",
   emptyOptionLabel,
   leadingIcon,
   className,
@@ -188,6 +192,7 @@ export function SearchableModelMenu({
   readonly onChange: (next: string) => void;
   readonly ariaLabel: string;
   readonly size?: "compact" | "sm" | "default";
+  readonly triggerVariant?: "select" | "outline";
   readonly emptyOptionLabel?: string | undefined;
   readonly leadingIcon?: ReactNode;
   readonly className?: string;
@@ -210,15 +215,28 @@ export function SearchableModelMenu({
 
   return (
     <Menu>
-      <MenuTrigger
-        aria-label={ariaLabel}
-        render={<SelectButton size={size} className={className} />}
-      >
-        <span className="inline-flex min-w-0 items-center gap-1.5">
-          {leadingIcon}
-          <span className="truncate">{triggerText}</span>
-        </span>
-      </MenuTrigger>
+      {triggerVariant === "outline" ? (
+        <MenuTrigger
+          aria-label={ariaLabel}
+          render={<Button variant="outline" className={cn("justify-between", className)} />}
+        >
+          <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left">
+            {leadingIcon}
+            <span className="truncate">{triggerText}</span>
+          </span>
+          <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 opacity-70" />
+        </MenuTrigger>
+      ) : (
+        <MenuTrigger
+          aria-label={ariaLabel}
+          render={<SelectButton size={size} className={className} />}
+        >
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            {leadingIcon}
+            <span className="truncate">{triggerText}</span>
+          </span>
+        </MenuTrigger>
+      )}
       <MenuPopup align="start">
         {options.length > 8 ? (
           <MenuSearchInput
@@ -271,6 +289,7 @@ export function SearchableProjectMenu({
   onChange,
   ariaLabel,
   size = "sm",
+  triggerVariant = "select",
   leadingIcon,
   className,
 }: {
@@ -279,6 +298,7 @@ export function SearchableProjectMenu({
   readonly onChange: (next: string) => void;
   readonly ariaLabel: string;
   readonly size?: "compact" | "sm" | "default";
+  readonly triggerVariant?: "select" | "outline";
   readonly leadingIcon?: ReactNode;
   readonly className?: string;
 }) {
@@ -295,15 +315,28 @@ export function SearchableProjectMenu({
 
   return (
     <Menu>
-      <MenuTrigger
-        aria-label={ariaLabel}
-        render={<SelectButton size={size} className={className} />}
-      >
-        <span className="inline-flex min-w-0 items-center gap-1.5">
-          {leadingIcon}
-          <span className="truncate">{current?.title ?? gt("Select repository")}</span>
-        </span>
-      </MenuTrigger>
+      {triggerVariant === "outline" ? (
+        <MenuTrigger
+          aria-label={ariaLabel}
+          render={<Button variant="outline" className={cn("justify-between", className)} />}
+        >
+          <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left">
+            {leadingIcon}
+            <span className="truncate">{current?.title ?? gt("Select repository")}</span>
+          </span>
+          <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 opacity-70" />
+        </MenuTrigger>
+      ) : (
+        <MenuTrigger
+          aria-label={ariaLabel}
+          render={<SelectButton size={size} className={className} />}
+        >
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            {leadingIcon}
+            <span className="truncate">{current?.title ?? gt("Select repository")}</span>
+          </span>
+        </MenuTrigger>
+      )}
       <MenuPopup align="start">
         {projects.length > 8 ? (
           <MenuSearchInput
@@ -551,7 +584,7 @@ export function ConnectorModal({
                 id="connector-url"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={gt("https://zentao.company.com/zentao")}
+                placeholder={gt("https://zentao.example.com/zentao")}
                 required
               />
               <p className="text-xs text-muted-foreground">
@@ -646,10 +679,11 @@ export function ProfileModal({
   const [connectorId, setConnectorId] = useState<string>(firstConnector?.id ?? "");
   const activeConnector = connectors.find((c) => c.id === connectorId) ?? firstConnector;
 
-  const initialScope = initial?.scopeId ?? defaultScopeId ?? activeConnector?.scopes[0]?.id ?? "";
+  const activeSortedScopes = activeConnector ? sortScopesByIdDesc(activeConnector.scopes) : [];
+  const initialScope = initial?.scopeId ?? defaultScopeId ?? activeSortedScopes[0]?.id ?? "";
   const [scopeId, setScopeId] = useState<string>(initialScope);
   const [name, setName] = useState(
-    initial?.name ?? activeConnector?.scopes.find((s) => s.id === initialScope)?.name ?? "",
+    initial?.name ?? activeSortedScopes.find((s) => s.id === initialScope)?.name ?? "",
   );
   const [enabled, setEnabled] = useState<boolean>(initial?.enabled ?? true);
 
@@ -682,7 +716,7 @@ export function ProfileModal({
   );
 
   const [browseType, setBrowseType] = useState<IssueAutomationBrowseFilter>(
-    initial?.filter.browseType ?? "unclosed",
+    initial?.filter.browseType ?? "unresolved",
   );
   const [onlyUnconfirmed, setOnlyUnconfirmed] = useState<boolean>(
     initial?.filter.onlyUnconfirmed ?? false,
@@ -711,6 +745,8 @@ export function ProfileModal({
 
   const browseFilterLabel = (val: IssueAutomationBrowseFilter): string => {
     switch (val) {
+      case "unresolved":
+        return gt("Unresolved bugs");
       case "unclosed":
         return gt("Unclosed bugs");
       case "assigntome":
@@ -831,7 +867,8 @@ export function ProfileModal({
                       if (!next) return;
                       setConnectorId(next);
                       const nextConn = connectors.find((c) => c.id === next);
-                      if (nextConn?.scopes[0]) setScopeId(nextConn.scopes[0].id);
+                      const nextSorted = nextConn ? sortScopesByIdDesc(nextConn.scopes) : [];
+                      if (nextSorted[0]) setScopeId(nextSorted[0].id);
                     }}
                   >
                     <SelectTrigger size="sm" aria-label={gt("Platform connection")}>
@@ -903,6 +940,9 @@ export function ProfileModal({
                         <SelectValue>{browseFilterLabel(browseType)}</SelectValue>
                       </SelectTrigger>
                       <SelectPopup>
+                        <SelectItem value="unresolved">
+                          {browseFilterLabel("unresolved")}
+                        </SelectItem>
                         <SelectItem value="unclosed">{browseFilterLabel("unclosed")}</SelectItem>
                         <SelectItem value="assigntome">
                           {browseFilterLabel("assigntome")}
@@ -1198,212 +1238,6 @@ export function ProfileModal({
           </Button>
           <DialogAction form="issue-automation-profile-form" type="submit" disabled={busy}>
             {busy ? <T>Saving…</T> : <T>Save rule</T>}
-          </DialogAction>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-export function CreatePlatformIssueModal({
-  open,
-  onOpenChange,
-  environmentId,
-  connector,
-  defaultScopeId,
-}: {
-  readonly open: boolean;
-  readonly onOpenChange: (next: boolean) => void;
-  readonly environmentId: EnvironmentId;
-  readonly connector: IssueAutomationConnector;
-  readonly defaultScopeId: string;
-}) {
-  const gt = useGT();
-  const writeBack = useAtomCommand(issueAutomationEnvironment.writeBack, { reportFailure: false });
-  const [scopeId, setScopeId] = useState(defaultScopeId || connector.scopes[0]?.id || "");
-  const [title, setTitle] = useState("");
-  const [steps, setSteps] = useState("");
-  const [severity, setSeverity] = useState("3");
-  const [priority, setPriority] = useState("3");
-  const [assignedTo, setAssignedTo] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [errorText, setErrorText] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!scopeId || !title.trim()) return;
-    setBusy(true);
-    setErrorText(null);
-    const res = await writeBack({
-      environmentId,
-      input: {
-        connectorId: connector.id,
-        action: {
-          kind: "create",
-          scopeId,
-          title: title.trim(),
-          steps: steps.trim() || title.trim(),
-          severity: Number(severity) || 3,
-          priority: Number(priority) || 3,
-          ...(assignedTo.trim() ? { assignedTo: assignedTo.trim() } : {}),
-        },
-      },
-    });
-    setBusy(false);
-    if (res._tag === "Failure") {
-      const err = squashAtomCommandFailure(res);
-      setErrorText(err instanceof Error ? err.message : gt("Failed to create issue."));
-      return;
-    }
-    setTitle("");
-    setSteps("");
-    onOpenChange(false);
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-lg" style={MODAL_POPUP_STYLE}>
-        <DialogHeader className="shrink-0">
-          <DialogTitle>
-            <T>New issue in ZenTao</T>
-          </DialogTitle>
-          <DialogDescription>
-            <T>Submit a bug directly to the selected ZenTao product.</T>
-          </DialogDescription>
-        </DialogHeader>
-
-        <DialogPanel>
-          <form
-            id="issue-automation-create-issue-form"
-            className="min-w-0 space-y-4"
-            onSubmit={(e) => void handleSubmit(e)}
-          >
-            <div className="space-y-1.5">
-              <Label>
-                <T>Target product</T>
-              </Label>
-              <SearchableScopeMenu
-                scopes={connector.scopes}
-                value={scopeId}
-                onChange={setScopeId}
-                ariaLabel={gt("Target product")}
-                className="w-full"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="new-bug-title">
-                <T>Issue title</T>
-              </Label>
-              <Input
-                id="new-bug-title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={gt("Describe the defect concisely")}
-                required
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <Label>
-                  <T>Severity</T>
-                </Label>
-                <Select
-                  value={severity}
-                  onValueChange={(next) => {
-                    if (next) setSeverity(next);
-                  }}
-                >
-                  <SelectTrigger size="sm" className="min-w-0" aria-label={gt("Severity")}>
-                    <SelectValue>{`S${severity}`}</SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup>
-                    <SelectItem value="1">
-                      <T>S1 · Critical</T>
-                    </SelectItem>
-                    <SelectItem value="2">
-                      <T>S2 · Major</T>
-                    </SelectItem>
-                    <SelectItem value="3">
-                      <T>S3 · Normal</T>
-                    </SelectItem>
-                    <SelectItem value="4">
-                      <T>S4 · Minor</T>
-                    </SelectItem>
-                  </SelectPopup>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>
-                  <T>Priority</T>
-                </Label>
-                <Select
-                  value={priority}
-                  onValueChange={(next) => {
-                    if (next) setPriority(next);
-                  }}
-                >
-                  <SelectTrigger size="sm" className="min-w-0" aria-label={gt("Priority")}>
-                    <SelectValue>{`P${priority}`}</SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup>
-                    <SelectItem value="1">{`P1`}</SelectItem>
-                    <SelectItem value="2">{`P2`}</SelectItem>
-                    <SelectItem value="3">{`P3`}</SelectItem>
-                    <SelectItem value="4">{`P4`}</SelectItem>
-                  </SelectPopup>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="new-bug-assignee">
-                  <T>Assignee</T>
-                </Label>
-                <Input
-                  id="new-bug-assignee"
-                  size="sm"
-                  value={assignedTo}
-                  onChange={(e) => setAssignedTo(e.target.value)}
-                  placeholder={gt("Account")}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="new-bug-steps">
-                <T>Reproduction steps</T>
-              </Label>
-              <Textarea
-                id="new-bug-steps"
-                rows={5}
-                value={steps}
-                onChange={(e) => setSteps(e.target.value)}
-                placeholder={gt("1. Preconditions\n2. Steps to reproduce\n3. Expected vs actual")}
-              />
-            </div>
-
-            {errorText ? (
-              <Alert variant="error">
-                <AlertTitle>{gt("Could not create issue")}</AlertTitle>
-                <AlertDescription>{errorText}</AlertDescription>
-              </Alert>
-            ) : null}
-          </form>
-        </DialogPanel>
-
-        <DialogFooter className="shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onOpenChange(false)}
-          >
-            <T>Cancel</T>
-          </Button>
-          <DialogAction form="issue-automation-create-issue-form" type="submit" disabled={busy}>
-            {busy ? <T>Creating…</T> : <T>Create issue</T>}
           </DialogAction>
         </DialogFooter>
       </DialogPopup>

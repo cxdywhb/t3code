@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { toServerClock } from "@t3tools/client-runtime/clock";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -15,11 +16,13 @@ import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/reactivity";
 import { T, useGT } from "gt-react";
 import {
+  BarChart3Icon,
   BotIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleDotIcon,
+  ClockIcon,
   FolderGit2Icon,
   GitBranchIcon,
   LayersIcon,
@@ -27,7 +30,6 @@ import {
   PanelRightIcon,
   PlayIcon,
   Plug2Icon,
-  PlusIcon,
   Settings2Icon,
   UserRoundIcon,
   XIcon,
@@ -42,11 +44,14 @@ import {
   PullRequestRowLines,
 } from "~/components/pullRequest/PullRequestListRow";
 import { PullRequestMetaLine } from "~/components/pullRequest/pullRequestPresentation";
+import { RelativeTime } from "~/components/RelativeTime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
 import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
 import {
   deriveProviderInstanceEntries,
@@ -88,8 +93,23 @@ import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
+  computeIssueAutomationAnalytics,
+  DEFAULT_WORKBENCH_PREFS,
+  formatCompactDuration,
+  isStageRunning,
+  IssueAutomationWorkbenchPrefsSchema,
+  makeScopePrefKey,
+  resolvePersistedTarget,
+  resolveTaskDurationMs,
+  sortScopesByIdDesc,
+  type AnalyticsScopeMode,
+  type AnalyticsTimeRange,
+  type RunStatusFilter,
+  type WorkbenchTab,
+} from "./issueAutomationAnalytics.logic";
+import { IssueAutomationAnalyticsView } from "./IssueAutomationAnalyticsView";
+import {
   ConnectorModal,
-  CreatePlatformIssueModal,
   decodeModelOptionKey,
   encodeModelOptionKey,
   ProfileModal,
@@ -107,6 +127,7 @@ import {
 } from "./IssueAutomationInspector";
 import {
   cleanIssueText,
+  formatIssueNumber,
   isStageActive,
   RemoteIssueStatusGlyph,
   SeverityIndicator,
@@ -116,12 +137,46 @@ import {
 } from "./issueAutomationPresentation";
 import { IssueAutomationRulesView } from "./IssueAutomationRulesView";
 
-type WorkbenchTab = "issues" | "runs" | "rules";
-type RunStatusFilter = "all" | "active" | "needs_human" | "completed" | "failed";
-
-const DEFAULT_INSPECTOR_WIDTH = 660;
 const MIN_INSPECTOR_WIDTH = 440;
 const MAX_INSPECTOR_WIDTH = 960;
+
+function LiveRunningDuration({
+  task,
+  environmentId,
+}: {
+  readonly task: IssueAutomationTask;
+  readonly environmentId: EnvironmentId | null;
+}) {
+  const nowMs = useNowSecond();
+  const effectiveNowMs = environmentId !== null ? toServerClock(environmentId, nowMs) : nowMs;
+  const durationMs = resolveTaskDurationMs(task, effectiveNowMs);
+  return (
+    <span className="inline-flex items-center justify-end gap-1 whitespace-nowrap font-mono text-xs text-info tabular-nums">
+      <ClockIcon className="size-3 shrink-0" />
+      {formatCompactDuration(durationMs)}
+    </span>
+  );
+}
+
+function TaskDurationBadge({
+  task,
+  environmentId,
+}: {
+  readonly task: IssueAutomationTask;
+  readonly environmentId: EnvironmentId | null;
+}) {
+  if (isStageRunning(task.stage)) {
+    return <LiveRunningDuration task={task} environmentId={environmentId} />;
+  }
+  const durationMs = resolveTaskDurationMs(task, 0);
+  if (durationMs === null) return null;
+  return (
+    <span className="inline-flex items-center justify-end gap-1 whitespace-nowrap font-mono text-xs text-muted-foreground tabular-nums">
+      <ClockIcon className="size-3 shrink-0 opacity-70" />
+      {formatCompactDuration(durationMs)}
+    </span>
+  );
+}
 
 export function IssueAutomationPage() {
   const gt = useGT();
@@ -131,6 +186,13 @@ export function IssueAutomationPage() {
   const environmentId = usePrimaryEnvironmentId();
   const { snapshot } = useIssueAutomationLiveState(environmentId);
 
+  const storageKey = `t3code:issue-automation:prefs:v1:${environmentId ?? "default"}`;
+  const [prefs, setPrefs] = useLocalStorage(
+    storageKey,
+    DEFAULT_WORKBENCH_PREFS,
+    IssueAutomationWorkbenchPrefsSchema,
+  );
+
   const allProjects = useProjects();
   const envProjects: ReadonlyArray<SelectableProjectOption> = allProjects
     .filter((p) => environmentId === null || p.environmentId === environmentId)
@@ -139,6 +201,8 @@ export function IssueAutomationPage() {
       title: p.title,
       workspaceRoot: p.workspaceRoot,
     }));
+
+  const projectTitleById = new Map(envProjects.map((p) => [p.id as string, p.title]));
 
   const serverConfigResult = useAtomValue(
     environmentId !== null
@@ -169,23 +233,40 @@ export function IssueAutomationPage() {
       })),
     );
 
-  const [activeTab, setActiveTab] = useState<WorkbenchTab>("issues");
-  const [selectedConnectorId, setSelectedConnectorId] = useState<string>("");
+  const activeTab = prefs.activeTab;
+  const setActiveTab = (next: WorkbenchTab) => {
+    setPrefs((prev) => ({ ...prev, activeTab: next }));
+  };
+
   const activeConnector: IssueAutomationConnector | null =
-    snapshot.connectors.find((c) => c.id === selectedConnectorId) ?? snapshot.connectors[0] ?? null;
+    snapshot.connectors.find((c) => c.id === prefs.selectedConnectorId) ??
+    snapshot.connectors[0] ??
+    null;
 
-  const [selectedScopeId, setSelectedScopeId] = useState<string>("");
-  const effectiveScopeId = activeConnector?.scopes.some((s) => s.id === selectedScopeId)
-    ? selectedScopeId
-    : (activeConnector?.scopes[0]?.id ?? "");
+  const sortedConnectorScopes = activeConnector ? sortScopesByIdDesc(activeConnector.scopes) : [];
+
+  const persistedScopeForConnector = activeConnector
+    ? prefs.scopeByConnector[activeConnector.id]
+    : undefined;
+  const effectiveScopeId =
+    persistedScopeForConnector &&
+    sortedConnectorScopes.some((s) => s.id === persistedScopeForConnector)
+      ? persistedScopeForConnector
+      : (sortedConnectorScopes[0]?.id ?? "");
   const effectiveScopeName =
-    activeConnector?.scopes.find((s) => s.id === effectiveScopeId)?.name ?? effectiveScopeId;
+    sortedConnectorScopes.find((s) => s.id === effectiveScopeId)?.name ?? effectiveScopeId;
 
-  const [browseType, setBrowseType] = useState<IssueAutomationBrowseFilter>("unclosed");
+  const browseType = prefs.browseType;
+  const runFilter = prefs.runFilter;
+  const analyticsRange = prefs.analyticsRange;
+  const analyticsScopeMode = prefs.analyticsScopeMode;
+  const inspectorWidth = Math.max(
+    MIN_INSPECTOR_WIDTH,
+    Math.min(MAX_INSPECTOR_WIDTH, prefs.inspectorWidth || DEFAULT_WORKBENCH_PREFS.inspectorWidth),
+  );
+
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
-
-  const [runFilter, setRunFilter] = useState<RunStatusFilter>("all");
   const [runQuery, setRunQuery] = useState("");
 
   const [selectedIssueKey, setSelectedIssueKey] = useState<string | null>(null);
@@ -193,17 +274,124 @@ export function IssueAutomationPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorSubTab>("detail");
-  const [inspectorWidth, setInspectorWidth] = useState<number>(DEFAULT_INSPECTOR_WIDTH);
-
-  const [adhocProjectId, setAdhocProjectId] = useState<string>("");
-  const [adhocModelKey, setAdhocModelKey] = useState<string>("");
-  const [adhocMode, setAdhocMode] = useState<IssueAutomationActionMode>("fix_worktree_review");
 
   const [connectorModalOpen, setConnectorModalOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<IssueAutomationConnector | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<IssueAutomationProfile | null>(null);
-  const [createIssueOpen, setCreateIssueOpen] = useState(false);
+
+  const scopePrefKey = makeScopePrefKey(activeConnector?.id, effectiveScopeId);
+
+  const matchedScopeProfile =
+    activeConnector && effectiveScopeId
+      ? (snapshot.profiles.find(
+          (p) => p.connectorId === activeConnector.id && p.scopeId === effectiveScopeId,
+        ) ?? null)
+      : null;
+
+  const validProjectIds = envProjects.map((p) => p.id);
+  const validModelKeys = modelOptions.map((m) => m.key);
+
+  const resolvedTargets = resolvePersistedTarget({
+    prefs,
+    scopeKey: scopePrefKey,
+    profilePrimaryProjectId: matchedScopeProfile?.repositories.primaryProjectId,
+    profilePrimaryModelKey: encodeModelOptionKey(matchedScopeProfile?.models.primaryModel ?? null),
+    profileActionMode: matchedScopeProfile?.policy.actionMode,
+    validProjectIds,
+    validModelKeys,
+  });
+
+  const resolvedProjectId = resolvedTargets.projectId;
+  const resolvedModelKey = resolvedTargets.modelKey;
+  const resolvedActionMode = resolvedTargets.actionMode;
+
+  const handleSelectConnector = (nextConnectorId: string) => {
+    setPrefs((prev) => ({
+      ...prev,
+      selectedConnectorId: nextConnectorId,
+    }));
+    setSelectedIssueKey(null);
+    setCheckedIssueKeys([]);
+    setPage(1);
+  };
+
+  const handleSelectScope = (nextScopeId: string) => {
+    if (!activeConnector) return;
+    setPrefs((prev) => ({
+      ...prev,
+      selectedConnectorId: activeConnector.id,
+      scopeByConnector: {
+        ...prev.scopeByConnector,
+        [activeConnector.id]: nextScopeId,
+      },
+    }));
+    setSelectedIssueKey(null);
+    setCheckedIssueKeys([]);
+    setPage(1);
+  };
+
+  const handleSelectBrowseType = (nextBrowseType: IssueAutomationBrowseFilter) => {
+    setPrefs((prev) => ({ ...prev, browseType: nextBrowseType }));
+    setPage(1);
+  };
+
+  const handleSelectProject = (nextProjectId: string) => {
+    setPrefs((prev) => ({
+      ...prev,
+      lastProjectId: nextProjectId,
+      ...(scopePrefKey
+        ? {
+            projectByScope: {
+              ...prev.projectByScope,
+              [scopePrefKey]: nextProjectId,
+            },
+          }
+        : {}),
+    }));
+  };
+
+  const handleSelectModel = (nextModelKey: string) => {
+    setPrefs((prev) => ({
+      ...prev,
+      lastModelKey: nextModelKey,
+      ...(scopePrefKey
+        ? {
+            modelByScope: {
+              ...prev.modelByScope,
+              [scopePrefKey]: nextModelKey,
+            },
+          }
+        : {}),
+    }));
+  };
+
+  const handleSelectActionMode = (nextMode: IssueAutomationActionMode) => {
+    setPrefs((prev) => ({
+      ...prev,
+      lastMode: nextMode,
+      ...(scopePrefKey
+        ? {
+            modeByScope: {
+              ...prev.modeByScope,
+              [scopePrefKey]: nextMode,
+            },
+          }
+        : {}),
+    }));
+  };
+
+  const handleSelectRunFilter = (nextFilter: RunStatusFilter) => {
+    setPrefs((prev) => ({ ...prev, runFilter: nextFilter }));
+  };
+
+  const handleSelectAnalyticsRange = (nextRange: AnalyticsTimeRange) => {
+    setPrefs((prev) => ({ ...prev, analyticsRange: nextRange }));
+  };
+
+  const handleSelectAnalyticsScopeMode = (nextMode: AnalyticsScopeMode) => {
+    setPrefs((prev) => ({ ...prev, analyticsScopeMode: nextMode }));
+  };
 
   const remoteIssuesQuery = useEnvironmentQuery(
     environmentId !== null && activeConnector !== null && effectiveScopeId.length > 0
@@ -282,28 +470,31 @@ export function IssueAutomationPage() {
           ) ?? null)
         : null;
 
-  const matchedScopeProfile =
-    activeConnector && effectiveScopeId
-      ? (snapshot.profiles.find(
-          (p) => p.connectorId === activeConnector.id && p.scopeId === effectiveScopeId,
-        ) ?? null)
-      : null;
-
-  const resolvedProjectId =
-    adhocProjectId ||
-    matchedScopeProfile?.repositories.primaryProjectId ||
-    envProjects[0]?.id ||
-    "";
-  const resolvedModelKey =
-    adhocModelKey ||
-    encodeModelOptionKey(
-      matchedScopeProfile?.models.primaryModel ?? modelOptions[0]?.selection ?? null,
-    );
-
   const hasSelection = selectedIssueKey !== null || activeTask !== null;
   const inspectorActive =
-    inspectorOpen && hasSelection && activeTab !== "rules" && environmentId !== null;
+    inspectorOpen &&
+    hasSelection &&
+    (activeTab === "issues" || activeTab === "runs") &&
+    environmentId !== null;
   const desktopInspectorVisible = inspectorActive && isWideDesktop;
+
+  const analyticsSummary = computeIssueAutomationAnalytics({
+    tasks: snapshot.tasks,
+    range: analyticsRange,
+    scopeMode: analyticsScopeMode,
+    currentConnectorId: activeConnector?.id ?? null,
+    currentScopeId: effectiveScopeId,
+    projectTitleById,
+  });
+
+  const allRunsQuickSummary = computeIssueAutomationAnalytics({
+    tasks: snapshot.tasks,
+    range: "all",
+    scopeMode: "all",
+    currentConnectorId: activeConnector?.id ?? null,
+    currentScopeId: effectiveScopeId,
+    projectTitleById,
+  });
 
   const openThread = (threadId: ThreadId) => {
     if (!environmentId) return;
@@ -316,11 +507,7 @@ export function IssueAutomationPage() {
 
   const selectIssue = (issueKey: string, linkedTaskId: IssueAutomationTask["id"] | null) => {
     setSelectedIssueKey(issueKey);
-    if (linkedTaskId) {
-      setSelectedTaskId(linkedTaskId);
-    } else {
-      setSelectedTaskId(null);
-    }
+    setSelectedTaskId(linkedTaskId ?? null);
     setInspectorTab("detail");
     setInspectorOpen(true);
   };
@@ -336,11 +523,12 @@ export function IssueAutomationPage() {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = inspectorWidth;
+    let latestWidth = startWidth;
     const onMove = (moveEvent: PointerEvent) => {
       const delta = startX - moveEvent.clientX;
       const maxAllowed = Math.min(MAX_INSPECTOR_WIDTH, Math.round(window.innerWidth * 0.62));
-      const next = Math.max(MIN_INSPECTOR_WIDTH, Math.min(maxAllowed, startWidth + delta));
-      setInspectorWidth(next);
+      latestWidth = Math.max(MIN_INSPECTOR_WIDTH, Math.min(maxAllowed, startWidth + delta));
+      setPrefs((prev) => ({ ...prev, inspectorWidth: latestWidth }));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -352,12 +540,9 @@ export function IssueAutomationPage() {
 
   const handleDispatchIssues = async (keysToRun: ReadonlyArray<string>) => {
     if (!environmentId || !activeConnector || !effectiveScopeId || keysToRun.length === 0) return;
-    const chosenProjectId =
-      (adhocProjectId as ProjectId) ||
-      matchedScopeProfile?.repositories.primaryProjectId ||
-      envProjects[0]?.id;
+    const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
-      decodeModelOptionKey(adhocModelKey, modelOptions) ??
+      decodeModelOptionKey(resolvedModelKey, modelOptions) ??
       matchedScopeProfile?.models.primaryModel ??
       modelOptions[0]?.selection ??
       null;
@@ -371,6 +556,12 @@ export function IssueAutomationPage() {
       return;
     }
 
+    const baseLinkedIds =
+      matchedScopeProfile?.repositories.linkedProjectIds ?? envProjects.map((p) => p.id);
+    const mergedLinkedIds = baseLinkedIds.includes(chosenProjectId)
+      ? baseLinkedIds
+      : [chosenProjectId, ...baseLinkedIds];
+
     setDispatching(true);
     const res = await analyzeIssuesCmd({
       environmentId,
@@ -380,23 +571,23 @@ export function IssueAutomationPage() {
         scopeName: effectiveScopeName,
         issueKeys: [...keysToRun],
         ...(matchedScopeProfile ? { profileId: matchedScopeProfile.id } : {}),
-        overrideRepositories: matchedScopeProfile?.repositories ?? {
+        overrideRepositories: {
           primaryProjectId: chosenProjectId,
-          linkedProjectIds: envProjects.map((p) => p.id),
-          moduleMappings: [],
+          linkedProjectIds: [...mergedLinkedIds],
+          moduleMappings: matchedScopeProfile?.repositories.moduleMappings ?? [],
         },
-        overrideModels: matchedScopeProfile?.models ?? {
+        overrideModels: {
           primaryModel: chosenModel,
-          highSeverityModel: null,
-          triageModel: null,
-          reviewModel: null,
-          fallbackModel: null,
+          highSeverityModel: matchedScopeProfile?.models.highSeverityModel ?? null,
+          triageModel: matchedScopeProfile?.models.triageModel ?? null,
+          reviewModel: matchedScopeProfile?.models.reviewModel ?? null,
+          fallbackModel: matchedScopeProfile?.models.fallbackModel ?? null,
         },
-        overridePolicy: matchedScopeProfile?.policy ?? {
-          actionMode: adhocMode,
-          autoWriteComment: true,
-          baseBranch: null,
-          customPromptInstructions: null,
+        overridePolicy: {
+          actionMode: resolvedActionMode,
+          autoWriteComment: matchedScopeProfile?.policy.autoWriteComment ?? true,
+          baseBranch: matchedScopeProfile?.policy.baseBranch ?? null,
+          customPromptInstructions: matchedScopeProfile?.policy.customPromptInstructions ?? null,
         },
       },
     });
@@ -453,6 +644,8 @@ export function IssueAutomationPage() {
 
   const browseFilterLabel = (filter: IssueAutomationBrowseFilter): string => {
     switch (filter) {
+      case "unresolved":
+        return gt("Unresolved");
       case "unclosed":
         return gt("Unclosed");
       case "assigntome":
@@ -499,12 +692,12 @@ export function IssueAutomationPage() {
         projects={envProjects}
         modelOptions={modelOptions}
         matchedProfile={matchedScopeProfile}
-        adhocProjectId={adhocProjectId}
-        onAdhocProjectIdChange={setAdhocProjectId}
-        adhocModelKey={adhocModelKey}
-        onAdhocModelKeyChange={setAdhocModelKey}
-        adhocMode={adhocMode}
-        onAdhocModeChange={setAdhocMode}
+        adhocProjectId={resolvedProjectId}
+        onAdhocProjectIdChange={handleSelectProject}
+        adhocModelKey={resolvedModelKey}
+        onAdhocModelKeyChange={handleSelectModel}
+        adhocMode={resolvedActionMode}
+        onAdhocModeChange={handleSelectActionMode}
         dispatching={dispatching}
         onDispatchIssue={(key) => void handleDispatchIssues([key])}
         writingBack={writingBack}
@@ -521,12 +714,12 @@ export function IssueAutomationPage() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="relative flex min-h-0 flex-1">
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
           <WorkspacePageHeader
             data-chat-header
             electron={isElectron}
             reserveNativeControls={!desktopInspectorVisible}
-            className="relative border-b border-border/50 bg-background"
+            className="relative shrink-0 border-b border-border/50 bg-background"
           >
             <WorkspaceBreadcrumb ariaLabel={gt("ZenTao Issue Auto-Analysis")}>
               <WorkspaceBreadcrumbItem current>
@@ -548,7 +741,7 @@ export function IssueAutomationPage() {
                   }}
                 >
                   <Toggle value="issues">
-                    <T>Issues</T>
+                    <T>Issue list</T>
                   </Toggle>
                   <Toggle value="runs">
                     <span className="inline-flex items-center gap-1.5">
@@ -558,6 +751,9 @@ export function IssueAutomationPage() {
                         {snapshot.tasks.length}
                       </span>
                     </span>
+                  </Toggle>
+                  <Toggle value="analytics">
+                    <T>Analytics</T>
                   </Toggle>
                   <Toggle value="rules">
                     <span className="inline-flex items-center gap-1.5">
@@ -584,13 +780,6 @@ export function IssueAutomationPage() {
                     {activeConnector.name} · {activeConnector.viewerName ?? activeConnector.account}
                   </span>
                 </span>
-              ) : null}
-
-              {activeConnector ? (
-                <Button size="xs" variant="outline" onClick={() => setCreateIssueOpen(true)}>
-                  <PlusIcon className="size-3.5" />
-                  <T>New issue</T>
-                </Button>
               ) : (
                 <Button
                   size="xs"
@@ -619,7 +808,7 @@ export function IssueAutomationPage() {
                 </Button>
               ) : null}
 
-              {activeTab !== "rules" ? (
+              {activeTab === "issues" || activeTab === "runs" ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -642,579 +831,772 @@ export function IssueAutomationPage() {
             </div>
           </WorkspacePageHeader>
 
-          <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
-            <div className="flex min-h-full w-full flex-col gap-4 px-5 pt-5 pb-24 sm:px-7">
-              {snapshot.connectors.length > 0 ? (
-                <div className="flex sm:hidden">
-                  <ToggleGroup
-                    variant="segmented"
-                    size="segmented"
-                    value={[activeTab]}
-                    onValueChange={(next) => {
-                      const picked = next[0] as WorkbenchTab | undefined;
-                      if (picked) setActiveTab(picked);
+          {snapshot.connectors.length > 0 ? (
+            <div className="flex shrink-0 border-b border-border/50 bg-background px-5 py-2.5 sm:hidden">
+              <ToggleGroup
+                variant="segmented"
+                size="segmented"
+                value={[activeTab]}
+                onValueChange={(next) => {
+                  const picked = next[0] as WorkbenchTab | undefined;
+                  if (picked) setActiveTab(picked);
+                }}
+              >
+                <Toggle value="issues">
+                  <T>Issue list</T>
+                </Toggle>
+                <Toggle value="runs">
+                  <T>Runs</T> ({snapshot.tasks.length})
+                </Toggle>
+                <Toggle value="analytics">
+                  <T>Analytics</T>
+                </Toggle>
+                <Toggle value="rules">
+                  <T>Automation</T> ({snapshot.profiles.length})
+                </Toggle>
+              </ToggleGroup>
+            </div>
+          ) : null}
+
+          {snapshot.connectors.length === 0 ? (
+            <div className="scrollbar-gutter-both flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-5 py-12">
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <BotIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    <T>Enterprise Issue Auto-Analysis & Resolution</T>
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    <T>
+                      Connect your internal ZenTao server, bind products to multiple local code
+                      repositories, and dispatch local AI models for unattended root-cause
+                      diagnosis, isolated Worktree fixes, and automatic comment write-back.
+                    </T>
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button
+                    onClick={() => {
+                      setEditingConnector(null);
+                      setConnectorModalOpen(true);
                     }}
                   >
-                    <Toggle value="issues">
-                      <T>Issues</T>
-                    </Toggle>
-                    <Toggle value="runs">
-                      <T>Runs</T> ({snapshot.tasks.length})
-                    </Toggle>
-                    <Toggle value="rules">
-                      <T>Automation</T> ({snapshot.profiles.length})
-                    </Toggle>
-                  </ToggleGroup>
-                </div>
-              ) : null}
-
-              {snapshot.connectors.length === 0 ? (
-                <Empty className="my-auto">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <BotIcon />
-                    </EmptyMedia>
-                    <EmptyTitle>
-                      <T>Enterprise Issue Auto-Analysis & Resolution</T>
-                    </EmptyTitle>
-                    <EmptyDescription>
-                      <T>
-                        Connect your internal ZenTao server, bind products to multiple local code
-                        repositories, and dispatch local AI models for unattended root-cause
-                        diagnosis, isolated Worktree fixes, and automatic comment write-back.
-                      </T>
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  <EmptyContent>
-                    <Button
-                      onClick={() => {
-                        setEditingConnector(null);
-                        setConnectorModalOpen(true);
-                      }}
-                    >
-                      <Plug2Icon className="size-4" />
-                      <T>Connect internal ZenTao</T>
-                    </Button>
-                  </EmptyContent>
-                </Empty>
-              ) : activeTab === "issues" ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="min-w-52 flex-1">
-                      <PullRequestSearchInput
-                        value={keyword}
-                        busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
-                        label={gt("Search issues")}
-                        placeholder={gt("Search bug ID, title, or module…")}
-                        onChange={(next) => {
-                          setKeyword(next);
-                          setPage(1);
-                        }}
-                        onSubmit={(next) => {
-                          setKeyword(next);
-                          setPage(1);
-                        }}
-                      />
-                    </div>
-
-                    {snapshot.connectors.length > 1 ? (
-                      <Menu>
-                        <MenuTrigger
-                          aria-label={gt("Select platform connection")}
-                          render={<Button variant="outline" />}
-                        >
-                          <Plug2Icon className="size-3.5" />
-                          <span className="max-w-36 truncate">{activeConnector?.name}</span>
-                          <ChevronDownIcon className="size-3.5 opacity-70" />
-                        </MenuTrigger>
-                        <MenuPopup align="start">
-                          <div
-                            className="overflow-y-auto overscroll-contain"
-                            style={SELECTOR_SCROLL_LIST_STYLE}
-                          >
-                            <MenuRadioGroup
-                              value={activeConnector?.id ?? ""}
-                              onValueChange={(next) => {
-                                if (!next) return;
-                                setSelectedConnectorId(next);
-                                setSelectedIssueKey(null);
-                                setPage(1);
-                              }}
-                            >
-                              {snapshot.connectors.map((c) => (
-                                <MenuRadioItem key={c.id} value={c.id}>
-                                  <span className="flex items-center gap-2">
-                                    <span className="truncate">{c.name}</span>
-                                    <MenuRadioItemIndicator />
-                                  </span>
-                                </MenuRadioItem>
-                              ))}
-                            </MenuRadioGroup>
-                          </div>
-                        </MenuPopup>
-                      </Menu>
-                    ) : null}
-
-                    <SearchableScopeMenu
-                      scopes={activeConnector?.scopes ?? []}
-                      value={effectiveScopeId}
+                    <Plug2Icon className="size-4" />
+                    <T>Connect internal ZenTao</T>
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            </div>
+          ) : activeTab === "issues" ? (
+            <>
+              {/* Fixed Non-Scrolling Issues Toolbar */}
+              <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-2.5 sm:px-7">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-48 flex-1">
+                    <PullRequestSearchInput
+                      value={keyword}
+                      busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
+                      label={gt("Search issues")}
+                      placeholder={gt("Search bug ID, title, or module…")}
                       onChange={(next) => {
-                        setSelectedScopeId(next);
-                        setSelectedIssueKey(null);
-                        setCheckedIssueKeys([]);
+                        setKeyword(next);
                         setPage(1);
                       }}
-                      ariaLabel={gt("Select ZenTao product")}
-                      className="max-w-64"
+                      onSubmit={(next) => {
+                        setKeyword(next);
+                        setPage(1);
+                      }}
                     />
+                  </div>
 
+                  {snapshot.connectors.length > 1 ? (
                     <Menu>
                       <MenuTrigger
-                        aria-label={gt("Filter issues")}
+                        aria-label={gt("Select platform connection")}
                         render={<Button variant="outline" />}
                       >
-                        {browseType === "assigntome" || browseType === "openedbyme" ? (
-                          <UserRoundIcon className="size-3.5" />
-                        ) : browseType === "all" ? (
-                          <LayersIcon className="size-3.5" />
-                        ) : (
-                          <CircleDotIcon className="size-3.5" />
-                        )}
-                        <span>{browseFilterLabel(browseType)}</span>
+                        <Plug2Icon className="size-3.5" />
+                        <span className="max-w-36 truncate">{activeConnector?.name}</span>
                         <ChevronDownIcon className="size-3.5 opacity-70" />
                       </MenuTrigger>
                       <MenuPopup align="start">
-                        <MenuRadioGroup
-                          value={browseType}
-                          onValueChange={(next) => {
-                            if (!next) return;
-                            setBrowseType(next as IssueAutomationBrowseFilter);
-                            setPage(1);
-                          }}
+                        <div
+                          className="overflow-y-auto overscroll-contain"
+                          style={SELECTOR_SCROLL_LIST_STYLE}
                         >
-                          {(["unclosed", "assigntome", "openedbyme", "all"] as const).map((opt) => (
-                            <MenuRadioItem key={opt} value={opt}>
-                              <span className="flex items-center gap-2">
-                                <span className="flex-1">{browseFilterLabel(opt)}</span>
-                                <MenuRadioItemIndicator />
-                              </span>
-                            </MenuRadioItem>
-                          ))}
-                        </MenuRadioGroup>
+                          <MenuRadioGroup
+                            value={activeConnector?.id ?? ""}
+                            onValueChange={(next) => {
+                              if (next) handleSelectConnector(next);
+                            }}
+                          >
+                            {snapshot.connectors.map((c) => (
+                              <MenuRadioItem key={c.id} value={c.id}>
+                                <span className="flex items-center gap-2">
+                                  <span className="truncate">{c.name}</span>
+                                  <MenuRadioItemIndicator />
+                                </span>
+                              </MenuRadioItem>
+                            ))}
+                          </MenuRadioGroup>
+                        </div>
                       </MenuPopup>
                     </Menu>
+                  ) : null}
 
-                    {!desktopInspectorVisible && envProjects.length > 0 ? (
-                      <SearchableProjectMenu
-                        projects={envProjects}
-                        value={resolvedProjectId}
-                        onChange={setAdhocProjectId}
-                        ariaLabel={gt("Default target repository")}
-                        size="default"
-                        leadingIcon={
-                          <FolderGit2Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                        }
-                        className="hidden w-44 min-w-0 xl:inline-flex"
-                      />
-                    ) : null}
+                  <SearchableScopeMenu
+                    scopes={sortedConnectorScopes}
+                    value={effectiveScopeId}
+                    onChange={handleSelectScope}
+                    ariaLabel={gt("Select ZenTao product")}
+                    className="max-w-60"
+                  />
 
-                    {!desktopInspectorVisible && modelOptions.length > 0 ? (
-                      <SearchableModelMenu
-                        options={modelOptions}
-                        value={resolvedModelKey}
-                        onChange={setAdhocModelKey}
-                        ariaLabel={gt("Default AI model")}
-                        size="default"
-                        leadingIcon={
-                          <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        }
-                        className="hidden w-48 min-w-0 2xl:inline-flex"
-                      />
-                    ) : null}
-
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      aria-label={gt("Refresh issues")}
-                      disabled={remoteIssuesQuery.isPending}
-                      onClick={remoteIssuesQuery.refresh}
+                  <Menu>
+                    <MenuTrigger
+                      aria-label={gt("Filter issues")}
+                      render={<Button variant="outline" />}
                     >
-                      <RefreshIcon size="md" refreshing={remoteIssuesQuery.isPending} />
+                      {browseType === "assigntome" || browseType === "openedbyme" ? (
+                        <UserRoundIcon className="size-3.5 text-muted-foreground" />
+                      ) : browseType === "all" ? (
+                        <LayersIcon className="size-3.5 text-muted-foreground" />
+                      ) : (
+                        <CircleDotIcon className="size-3.5 text-muted-foreground" />
+                      )}
+                      <span>{browseFilterLabel(browseType)}</span>
+                      <ChevronDownIcon className="size-3.5 opacity-70" />
+                    </MenuTrigger>
+                    <MenuPopup align="start">
+                      <MenuRadioGroup
+                        value={browseType}
+                        onValueChange={(next) => {
+                          if (next) handleSelectBrowseType(next as IssueAutomationBrowseFilter);
+                        }}
+                      >
+                        {(
+                          ["unresolved", "unclosed", "assigntome", "openedbyme", "all"] as const
+                        ).map((opt) => (
+                          <MenuRadioItem key={opt} value={opt}>
+                            <span className="flex items-center gap-2">
+                              <span className="flex-1">{browseFilterLabel(opt)}</span>
+                              <MenuRadioItemIndicator />
+                            </span>
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuPopup>
+                  </Menu>
+
+                  {envProjects.length > 0 ? (
+                    <SearchableProjectMenu
+                      projects={envProjects}
+                      value={resolvedProjectId}
+                      onChange={handleSelectProject}
+                      ariaLabel={gt("Default target repository")}
+                      size="default"
+                      triggerVariant="outline"
+                      leadingIcon={
+                        <FolderGit2Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                      }
+                      className={cn(
+                        "min-w-0",
+                        desktopInspectorVisible
+                          ? "hidden w-36 xl:inline-flex"
+                          : "hidden w-44 lg:inline-flex",
+                      )}
+                    />
+                  ) : null}
+
+                  {modelOptions.length > 0 ? (
+                    <SearchableModelMenu
+                      options={modelOptions}
+                      value={resolvedModelKey}
+                      onChange={handleSelectModel}
+                      ariaLabel={gt("Default AI model")}
+                      size="default"
+                      triggerVariant="outline"
+                      leadingIcon={<BotIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+                      className={cn(
+                        "min-w-0",
+                        desktopInspectorVisible
+                          ? "hidden w-44 2xl:inline-flex"
+                          : "hidden w-52 xl:inline-flex",
+                      )}
+                    />
+                  ) : null}
+
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    aria-label={gt("Refresh issues")}
+                    disabled={remoteIssuesQuery.isPending}
+                    onClick={remoteIssuesQuery.refresh}
+                  >
+                    <RefreshIcon size="md" refreshing={remoteIssuesQuery.isPending} />
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2.5">
+                    <Checkbox
+                      checked={allVisibleChecked}
+                      aria-label={gt("Select all issues on this page")}
+                      onCheckedChange={(checked) => {
+                        if (checked) {
+                          setCheckedIssueKeys(issues.map((i) => i.key));
+                        } else {
+                          setCheckedIssueKeys([]);
+                        }
+                      }}
+                    />
+                    <span>
+                      <strong className="font-medium text-foreground">{effectiveScopeName}</strong>{" "}
+                      · <T>Total</T> {remoteIssuesQuery.data?.total ?? 0}
+                    </span>
+                    {matchedScopeProfile ? (
+                      <Badge variant="secondary" size="sm">
+                        {matchedScopeProfile.enabled ? (
+                          <T>Unattended polling active</T>
+                        ) : (
+                          <T>Rule paused</T>
+                        )}
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={gt("Previous page")}
+                      disabled={page <= 1 || remoteIssuesQuery.isPending}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    >
+                      <ChevronLeftIcon className="size-3.5" />
+                    </Button>
+                    <span className="px-1.5 font-mono tabular-nums">
+                      <T>Page</T> {page}
+                    </span>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={gt("Next page")}
+                      disabled={issues.length < 25 || remoteIssuesQuery.isPending}
+                      onClick={() => setPage((p) => p + 1)}
+                    >
+                      <ChevronRightIcon className="size-3.5" />
                     </Button>
                   </div>
+                </div>
+              </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-2.5">
-                      <Checkbox
-                        checked={allVisibleChecked}
-                        aria-label={gt("Select all issues on this page")}
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            setCheckedIssueKeys(issues.map((i) => i.key));
-                          } else {
-                            setCheckedIssueKeys([]);
-                          }
-                        }}
-                      />
-                      <span>
-                        <strong className="font-medium text-foreground">
-                          {effectiveScopeName}
-                        </strong>{" "}
-                        · <T>Total</T> {remoteIssuesQuery.data?.total ?? 0}
-                      </span>
-                      {matchedScopeProfile ? (
-                        <Badge variant="secondary" size="sm">
-                          {matchedScopeProfile.enabled ? (
-                            <T>Unattended polling active</T>
-                          ) : (
-                            <T>Rule paused</T>
-                          )}
-                        </Badge>
-                      ) : null}
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={gt("Previous page")}
-                        disabled={page <= 1 || remoteIssuesQuery.isPending}
-                        onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      >
-                        <ChevronLeftIcon className="size-3.5" />
-                      </Button>
-                      <span className="px-1.5 font-mono tabular-nums">
-                        <T>Page</T> {page}
-                      </span>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={gt("Next page")}
-                        disabled={issues.length < 25 || remoteIssuesQuery.isPending}
-                        onClick={() => setPage((p) => p + 1)}
-                      >
-                        <ChevronRightIcon className="size-3.5" />
-                      </Button>
-                    </div>
+              {/* Independent Scrollable Issue Rows */}
+              <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-24 sm:px-7">
+                {remoteIssuesQuery.isPending && issues.length === 0 ? (
+                  <div className="space-y-2 pt-2">
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
                   </div>
-
-                  {remoteIssuesQuery.isPending && issues.length === 0 ? (
-                    <div className="space-y-2 px-2 pt-2">
-                      <Skeleton className="h-12 w-full" />
-                      <Skeleton className="h-12 w-full" />
-                      <Skeleton className="h-12 w-full" />
-                      <Skeleton className="h-12 w-full" />
-                      <Skeleton className="h-12 w-full" />
-                    </div>
-                  ) : remoteIssuesQuery.error !== null && issues.length === 0 ? (
+                ) : remoteIssuesQuery.error !== null && issues.length === 0 ? (
+                  <div className="pt-3">
                     <Alert variant="error">
                       <AlertTitle>{gt("Could not load issues from ZenTao")}</AlertTitle>
                       <AlertDescription>{remoteIssuesQuery.error}</AlertDescription>
                     </Alert>
-                  ) : issues.length === 0 ? (
-                    <Empty size="compact">
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <CircleDotIcon />
-                        </EmptyMedia>
-                        <EmptyTitle>
-                          <T>No matching issues</T>
-                        </EmptyTitle>
-                        <EmptyDescription>
-                          <T>Try switching the product or status filter above.</T>
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
-                  ) : (
-                    <div className="flex flex-col gap-0.5">
-                      {issues.map((issue) => {
-                        const checked = checkedIssueKeys.includes(issue.key);
-                        const selected = inspectorActive && selectedIssueKey === issue.key;
-                        return (
-                          <div
-                            key={issue.key}
-                            className={cn(
-                              "group/issue-row flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
-                              selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-                            )}
+                  </div>
+                ) : issues.length === 0 ? (
+                  <Empty size="compact" className="my-12">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <CircleDotIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>
+                        <T>No matching issues</T>
+                      </EmptyTitle>
+                      <EmptyDescription>
+                        <T>Try switching the product or status filter above.</T>
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {issues.map((issue) => {
+                      const checked = checkedIssueKeys.includes(issue.key);
+                      const selected = inspectorActive && selectedIssueKey === issue.key;
+                      return (
+                        <div
+                          key={issue.key}
+                          className={cn(
+                            "group/issue-row flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
+                            selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                          )}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            aria-label={gt("Select {issue}", { issue: issue.displayKey })}
+                            onCheckedChange={(next) =>
+                              setCheckedIssueKeys((prev) =>
+                                next ? [...prev, issue.key] : prev.filter((k) => k !== issue.key),
+                              )
+                            }
+                          />
+
+                          <button
+                            type="button"
+                            aria-current={selected ? "true" : undefined}
+                            onClick={() => selectIssue(issue.key, issue.latestTaskId)}
+                            className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
                           >
-                            <Checkbox
-                              checked={checked}
-                              aria-label={gt("Select {issue}", { issue: issue.displayKey })}
-                              onCheckedChange={(next) =>
-                                setCheckedIssueKeys((prev) =>
-                                  next ? [...prev, issue.key] : prev.filter((k) => k !== issue.key),
-                                )
+                            <RemoteIssueStatusGlyph
+                              status={issue.status}
+                              statusLabel={issue.statusLabel}
+                            />
+                            <PullRequestRowLines
+                              number={
+                                <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
+                                  {formatIssueNumber(issue.displayKey, issue.key)}
+                                </span>
+                              }
+                              title={cleanIssueText(issue.title)}
+                              signals={
+                                <>
+                                  <SeverityIndicator severity={issue.severity} />
+                                  {issue.latestStage ? (
+                                    <StageBadge stage={issue.latestStage} />
+                                  ) : null}
+                                </>
+                              }
+                              meta={
+                                <PullRequestMetaLine className="min-w-0 truncate">
+                                  <span>{issue.statusLabel}</span>
+                                  {issue.moduleName ? (
+                                    <span className="truncate">
+                                      {cleanIssueText(issue.moduleName)}
+                                    </span>
+                                  ) : null}
+                                  {issue.assignee ? (
+                                    <span className="truncate">{issue.assignee}</span>
+                                  ) : null}
+                                  <span className="font-mono tabular-nums">{issue.updatedAt}</span>
+                                </PullRequestMetaLine>
                               }
                             />
+                          </button>
 
-                            <button
-                              type="button"
-                              aria-current={selected ? "true" : undefined}
-                              onClick={() => selectIssue(issue.key, issue.latestTaskId)}
-                              className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
-                            >
-                              <RemoteIssueStatusGlyph
-                                status={issue.status}
-                                statusLabel={issue.statusLabel}
-                              />
-                              <PullRequestRowLines
-                                number={
-                                  <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
-                                    {issue.displayKey}
-                                  </span>
-                                }
-                                title={cleanIssueText(issue.title)}
-                                signals={
-                                  <>
-                                    <SeverityIndicator severity={issue.severity} />
-                                    {issue.latestStage ? (
-                                      <StageBadge stage={issue.latestStage} />
-                                    ) : null}
-                                  </>
-                                }
-                                meta={
-                                  <PullRequestMetaLine className="min-w-0 truncate">
-                                    <span>{issue.statusLabel}</span>
-                                    {issue.moduleName ? (
-                                      <span className="truncate">
-                                        {cleanIssueText(issue.moduleName)}
-                                      </span>
-                                    ) : null}
-                                    {issue.assignee ? (
-                                      <span className="truncate">{issue.assignee}</span>
-                                    ) : null}
-                                    <span className="font-mono tabular-nums">
-                                      {issue.updatedAt}
-                                    </span>
-                                  </PullRequestMetaLine>
-                                }
-                              />
-                            </button>
-
-                            <div className="flex shrink-0 items-center gap-1">
-                              {issue.latestTaskId ? (
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    setSelectedIssueKey(issue.key);
-                                    setSelectedTaskId(issue.latestTaskId);
-                                    setInspectorTab("trace");
-                                    setInspectorOpen(true);
-                                  }}
-                                >
-                                  <T>Trace</T>
-                                </Button>
-                              ) : null}
+                          <div className="flex shrink-0 items-center gap-1">
+                            {issue.latestTaskId ? (
                               <Button
                                 size="xs"
-                                variant="outline"
-                                disabled={dispatching}
-                                onClick={() => void handleDispatchIssues([issue.key])}
+                                variant="ghost"
+                                onClick={() => {
+                                  setSelectedIssueKey(issue.key);
+                                  setSelectedTaskId(issue.latestTaskId);
+                                  setInspectorTab("trace");
+                                  setInspectorOpen(true);
+                                }}
                               >
-                                <PlayIcon className="size-3" />
-                                <T>Diagnose</T>
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
-              ) : activeTab === "runs" ? (
-                <>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <ToggleGroup
-                      variant="segmented"
-                      size="segmented"
-                      value={[runFilter]}
-                      onValueChange={(next) => {
-                        const picked = next[0] as RunStatusFilter | undefined;
-                        if (picked) setRunFilter(picked);
-                      }}
-                    >
-                      <Toggle value="all">
-                        <T>All</T>
-                      </Toggle>
-                      <Toggle value="active">
-                        <T>Running</T>
-                      </Toggle>
-                      <Toggle value="needs_human">
-                        <T>Needs review</T>
-                      </Toggle>
-                      <Toggle value="completed">
-                        <T>Completed</T>
-                      </Toggle>
-                      <Toggle value="failed">
-                        <T>Failed</T>
-                      </Toggle>
-                    </ToggleGroup>
-
-                    <div className="min-w-52 flex-1 sm:max-w-sm">
-                      <PullRequestSearchInput
-                        value={runQuery}
-                        label={gt("Search automation runs")}
-                        placeholder={gt("Filter runs by bug, title, or model…")}
-                        onChange={setRunQuery}
-                        onSubmit={setRunQuery}
-                      />
-                    </div>
-                  </div>
-
-                  {filteredTasks.length === 0 ? (
-                    <Empty size="compact">
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <BotIcon />
-                        </EmptyMedia>
-                        <EmptyTitle>
-                          <T>No automation runs</T>
-                        </EmptyTitle>
-                        <EmptyDescription>
-                          <T>
-                            Select any issue in the Issues view to start diagnosis, or enable an
-                            unattended polling rule.
-                          </T>
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
-                  ) : (
-                    <div className="flex flex-col gap-0.5">
-                      {filteredTasks.map((task) => {
-                        const selected = inspectorActive && activeTask?.id === task.id;
-                        const repoTitle =
-                          envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
-                        return (
-                          <div
-                            key={task.id}
-                            className={cn(
-                              "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
-                              selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-                            )}
-                          >
-                            <button
-                              type="button"
-                              aria-current={selected ? "true" : undefined}
-                              onClick={() => selectRun(task)}
-                              className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
-                            >
-                              <TaskStageGlyph stage={task.stage} />
-                              <PullRequestRowLines
-                                number={
-                                  <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
-                                    {task.displayKey}
-                                  </span>
-                                }
-                                title={cleanIssueText(task.issueTitle)}
-                                signals={
-                                  <>
-                                    <StageBadge stage={task.stage} />
-                                    {task.commentSyncedAt ? (
-                                      <Badge variant="outline" size="sm">
-                                        <T>Synced</T>
-                                      </Badge>
-                                    ) : null}
-                                  </>
-                                }
-                                meta={
-                                  <PullRequestMetaLine className="min-w-0 truncate">
-                                    <span>{task.scopeName}</span>
-                                    {repoTitle ? (
-                                      <span className="inline-flex items-center gap-1">
-                                        <FolderGit2Icon className="size-3" />
-                                        {repoTitle}
-                                      </span>
-                                    ) : null}
-                                    <span className="font-mono">{task.assignedModelLabel}</span>
-                                    {task.worktreeBranch ? (
-                                      <span className="inline-flex items-center gap-1 font-mono">
-                                        <GitBranchIcon className="size-3" />
-                                        {task.worktreeBranch}
-                                      </span>
-                                    ) : null}
-                                  </PullRequestMetaLine>
-                                }
-                                updatedAt={task.updatedAt}
-                              />
-                            </button>
-
-                            {task.primaryThreadId ? (
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                className="shrink-0"
-                                onClick={() => openThread(task.primaryThreadId!)}
-                              >
-                                <MessageSquareIcon className="size-3.5" />
-                                <T>Open Thread</T>
+                                <T>Trace</T>
                               </Button>
                             ) : null}
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={dispatching}
+                              onClick={() => void handleDispatchIssues([issue.key])}
+                            >
+                              <PlayIcon className="size-3" />
+                              <T>Diagnose</T>
+                            </Button>
                           </div>
-                        );
-                      })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : activeTab === "runs" ? (
+            <>
+              {/* Fixed Non-Scrolling Runs Toolbar + Compact Telemetry Strip */}
+              <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-3 sm:px-7">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <ToggleGroup
+                    variant="segmented"
+                    size="segmented"
+                    value={[runFilter]}
+                    onValueChange={(next) => {
+                      const picked = next[0] as RunStatusFilter | undefined;
+                      if (picked) handleSelectRunFilter(picked);
+                    }}
+                  >
+                    <Toggle value="all">
+                      <span className="inline-flex items-center gap-1">
+                        <T>All</T>
+                        <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                          {allRunsQuickSummary.totalRunsCount}
+                        </span>
+                      </span>
+                    </Toggle>
+                    <Toggle value="active">
+                      <span className="inline-flex items-center gap-1">
+                        <T>Running</T>
+                        {allRunsQuickSummary.activeCount > 0 ? (
+                          <span className="font-mono text-2xs text-info tabular-nums">
+                            {allRunsQuickSummary.activeCount}
+                          </span>
+                        ) : null}
+                      </span>
+                    </Toggle>
+                    <Toggle value="needs_human">
+                      <span className="inline-flex items-center gap-1">
+                        <T>Needs review</T>
+                        {allRunsQuickSummary.needsHumanCount > 0 ? (
+                          <span className="font-mono text-2xs text-warning tabular-nums">
+                            {allRunsQuickSummary.needsHumanCount}
+                          </span>
+                        ) : null}
+                      </span>
+                    </Toggle>
+                    <Toggle value="completed">
+                      <span className="inline-flex items-center gap-1">
+                        <T>Completed</T>
+                        <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                          {allRunsQuickSummary.completedCount}
+                        </span>
+                      </span>
+                    </Toggle>
+                    <Toggle value="failed">
+                      <span className="inline-flex items-center gap-1">
+                        <T>Failed</T>
+                        {allRunsQuickSummary.failedCount > 0 ? (
+                          <span className="font-mono text-2xs text-destructive tabular-nums">
+                            {allRunsQuickSummary.failedCount}
+                          </span>
+                        ) : null}
+                      </span>
+                    </Toggle>
+                  </ToggleGroup>
+
+                  <div className="min-w-52 flex-1 sm:max-w-sm">
+                    <PullRequestSearchInput
+                      value={runQuery}
+                      label={gt("Search automation runs")}
+                      placeholder={gt("Filter runs by bug, title, or model…")}
+                      onChange={setRunQuery}
+                      onSubmit={setRunQuery}
+                    />
+                  </div>
+                </div>
+
+                {allRunsQuickSummary.totalRunsCount > 0 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums">
+                      <span>
+                        <T>Covered</T>:{" "}
+                        <strong className="font-mono text-foreground">
+                          {allRunsQuickSummary.uniqueIssuesCount}
+                        </strong>
+                      </span>
+                      <span>
+                        <T>Success rate</T>:{" "}
+                        <strong className="font-mono text-success">
+                          {allRunsQuickSummary.successRate !== null
+                            ? `${allRunsQuickSummary.successRate.toFixed(1)}%`
+                            : "-"}
+                        </strong>
+                      </span>
+                      <span>
+                        <T>Completion</T>:{" "}
+                        <strong className="font-mono text-foreground">
+                          {allRunsQuickSummary.completionRate !== null
+                            ? `${allRunsQuickSummary.completionRate.toFixed(1)}%`
+                            : "-"}
+                        </strong>
+                      </span>
+                      <span>
+                        <T>Avg time</T>:{" "}
+                        <strong className="font-mono text-foreground">
+                          {formatCompactDuration(allRunsQuickSummary.avgDurationMs)}
+                        </strong>
+                      </span>
+                      <span>
+                        <T>Saved</T>:{" "}
+                        <strong className="font-mono text-primary">
+                          ≈ {allRunsQuickSummary.estimatedHoursSaved.toFixed(1)}h
+                        </strong>
+                      </span>
                     </div>
-                  )}
-                </>
-              ) : (
-                <IssueAutomationRulesView
-                  environmentId={environmentId}
-                  platforms={snapshot.platforms}
-                  connectors={snapshot.connectors}
-                  profiles={snapshot.profiles}
-                  projects={envProjects}
-                  onAddConnector={() => {
-                    setEditingConnector(null);
-                    setConnectorModalOpen(true);
+
+                    <Button size="xs" variant="ghost" onClick={() => setActiveTab("analytics")}>
+                      <BarChart3Icon className="size-3.5 text-primary" />
+                      <T>Full analytics</T>
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Independent Scrollable Run Rows */}
+              <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
+                {filteredTasks.length === 0 ? (
+                  <Empty size="compact" className="my-12">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <BotIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>
+                        <T>No automation runs</T>
+                      </EmptyTitle>
+                      <EmptyDescription>
+                        <T>
+                          Select any issue in the Issues view to start diagnosis, or enable an
+                          unattended polling rule.
+                        </T>
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {filteredTasks.map((task) => {
+                      const selected = inspectorActive && activeTask?.id === task.id;
+                      const repoTitle =
+                        envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
+                      return (
+                        <div
+                          key={task.id}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
+                            selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                          )}
+                        >
+                          <button
+                            type="button"
+                            aria-current={selected ? "true" : undefined}
+                            onClick={() => selectRun(task)}
+                            className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                          >
+                            <TaskStageGlyph stage={task.stage} />
+                            <PullRequestRowLines
+                              number={
+                                <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
+                                  {formatIssueNumber(task.displayKey, task.issueKey)}
+                                </span>
+                              }
+                              title={cleanIssueText(task.issueTitle)}
+                              signals={
+                                <>
+                                  <SeverityIndicator severity={task.severity} />
+                                  <StageBadge stage={task.stage} />
+                                  {task.commentSyncedAt ? (
+                                    <Badge variant="outline" size="sm">
+                                      <T>Synced</T>
+                                    </Badge>
+                                  ) : null}
+                                </>
+                              }
+                              meta={
+                                <PullRequestMetaLine className="min-w-0 truncate">
+                                  <span className="truncate">{task.scopeName}</span>
+                                  {repoTitle ? (
+                                    <span className="inline-flex shrink-0 items-center gap-1">
+                                      <FolderGit2Icon className="size-3" />
+                                      {repoTitle}
+                                    </span>
+                                  ) : null}
+                                  <span className="truncate font-mono">
+                                    {task.assignedModelLabel}
+                                  </span>
+                                  {task.worktreeBranch ? (
+                                    <span className="inline-flex shrink-0 items-center gap-1 font-mono">
+                                      <GitBranchIcon className="size-3" />
+                                      {task.worktreeBranch}
+                                    </span>
+                                  ) : null}
+                                </PullRequestMetaLine>
+                              }
+                            />
+                          </button>
+
+                          <div className="flex shrink-0 items-center gap-3 pl-2">
+                            <div className="flex min-w-16 items-center justify-end">
+                              <TaskDurationBadge task={task} environmentId={environmentId} />
+                            </div>
+                            <span className="hidden w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums sm:inline-block">
+                              <RelativeTime timestamp={task.updatedAt} />
+                            </span>
+                            <div className="flex w-22 shrink-0 items-center justify-end">
+                              {task.primaryThreadId ? (
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  className="shrink-0"
+                                  onClick={() => openThread(task.primaryThreadId!)}
+                                >
+                                  <MessageSquareIcon className="size-3.5" />
+                                  <T>Open Thread</T>
+                                </Button>
+                              ) : isStageActive(task.stage) && environmentId ? (
+                                <Button
+                                  size="xs"
+                                  variant="ghost-destructive"
+                                  className="shrink-0"
+                                  onClick={() =>
+                                    void cancelTaskCmd({
+                                      environmentId,
+                                      input: { taskId: task.id },
+                                    })
+                                  }
+                                >
+                                  <XIcon className="size-3.5" />
+                                  <T>Cancel</T>
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : activeTab === "analytics" ? (
+            <>
+              {/* Fixed Non-Scrolling Analytics Filter Bar */}
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-background px-5 py-3 sm:px-7">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ToggleGroup
+                    variant="segmented"
+                    size="segmented"
+                    value={[analyticsScopeMode]}
+                    onValueChange={(next) => {
+                      const picked = next[0] as AnalyticsScopeMode | undefined;
+                      if (picked) handleSelectAnalyticsScopeMode(picked);
+                    }}
+                  >
+                    <Toggle value="all">
+                      <T>All products</T>
+                    </Toggle>
+                    <Toggle value="current">
+                      <span className="max-w-52 truncate">
+                        {effectiveScopeName
+                          ? `#${effectiveScopeId} · ${effectiveScopeName}`
+                          : gt("Current product")}
+                      </span>
+                    </Toggle>
+                  </ToggleGroup>
+
+                  {analyticsScopeMode === "current" ? (
+                    <SearchableScopeMenu
+                      scopes={sortedConnectorScopes}
+                      value={effectiveScopeId}
+                      onChange={handleSelectScope}
+                      ariaLabel={gt("Switch product for analytics")}
+                      className="max-w-56"
+                    />
+                  ) : null}
+                </div>
+
+                <ToggleGroup
+                  variant="segmented"
+                  size="segmented"
+                  value={[analyticsRange]}
+                  onValueChange={(next) => {
+                    const picked = next[0] as AnalyticsTimeRange | undefined;
+                    if (picked) handleSelectAnalyticsRange(picked);
                   }}
-                  onEditConnector={(conn) => {
-                    setEditingConnector(conn);
-                    setConnectorModalOpen(true);
-                  }}
-                  onRefreshScopes={(connectorId) => {
-                    if (!environmentId) return;
-                    void refreshScopesCmd({ environmentId, input: { connectorId } });
-                  }}
-                  onDeleteConnector={(connectorId) => {
-                    if (!environmentId) return;
-                    void deleteConnectorCmd({ environmentId, input: { connectorId } });
-                  }}
-                  onAddProfile={() => {
-                    setEditingProfile(null);
-                    setProfileModalOpen(true);
-                  }}
-                  onEditProfile={(prof) => {
-                    setEditingProfile(prof);
-                    setProfileModalOpen(true);
-                  }}
-                  onToggleProfile={(profileId, enabled) => {
-                    if (!environmentId) return;
-                    void setProfileEnabledCmd({
-                      environmentId,
-                      input: { profileId, enabled },
-                    });
-                  }}
-                  onTriggerPoll={(profileId) => {
-                    if (!environmentId) return;
-                    void triggerPollCmd({ environmentId, input: { profileId } }).then((r) => {
-                      if (r._tag === "Success") {
-                        toastManager.add({
-                          type: "success",
-                          title: gt("Poll completed"),
-                          description: `${String(r.value.enqueuedCount)} enqueued`,
-                        });
-                      }
-                    });
-                  }}
-                  onDeleteProfile={(profileId) => {
-                    if (!environmentId) return;
-                    void deleteProfileCmd({ environmentId, input: { profileId } });
+                >
+                  <Toggle value="today">
+                    <T>Today</T>
+                  </Toggle>
+                  <Toggle value="7d">
+                    <T>Last 7 days</T>
+                  </Toggle>
+                  <Toggle value="30d">
+                    <T>Last 30 days</T>
+                  </Toggle>
+                  <Toggle value="all">
+                    <T>All time</T>
+                  </Toggle>
+                </ToggleGroup>
+              </div>
+
+              <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 sm:px-7">
+                <IssueAutomationAnalyticsView
+                  summary={analyticsSummary}
+                  onJumpToRuns={(targetFilter) => {
+                    setPrefs((prev) => ({
+                      ...prev,
+                      activeTab: "runs",
+                      runFilter: targetFilter,
+                    }));
                   }}
                 />
-              )}
+              </div>
+            </>
+          ) : (
+            <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-24 sm:px-7">
+              <IssueAutomationRulesView
+                environmentId={environmentId}
+                platforms={snapshot.platforms}
+                connectors={snapshot.connectors}
+                profiles={snapshot.profiles}
+                projects={envProjects}
+                onAddConnector={() => {
+                  setEditingConnector(null);
+                  setConnectorModalOpen(true);
+                }}
+                onEditConnector={(conn) => {
+                  setEditingConnector(conn);
+                  setConnectorModalOpen(true);
+                }}
+                onRefreshScopes={(connectorId) => {
+                  if (!environmentId) return;
+                  void refreshScopesCmd({ environmentId, input: { connectorId } });
+                }}
+                onDeleteConnector={(connectorId) => {
+                  if (!environmentId) return;
+                  void deleteConnectorCmd({ environmentId, input: { connectorId } });
+                }}
+                onAddProfile={() => {
+                  setEditingProfile(null);
+                  setProfileModalOpen(true);
+                }}
+                onEditProfile={(prof) => {
+                  setEditingProfile(prof);
+                  setProfileModalOpen(true);
+                }}
+                onToggleProfile={(profileId, enabled) => {
+                  if (!environmentId) return;
+                  void setProfileEnabledCmd({
+                    environmentId,
+                    input: { profileId, enabled },
+                  });
+                }}
+                onTriggerPoll={(profileId) => {
+                  if (!environmentId) return;
+                  void triggerPollCmd({ environmentId, input: { profileId } }).then((r) => {
+                    if (r._tag === "Success") {
+                      toastManager.add({
+                        type: "success",
+                        title: gt("Poll completed"),
+                        description: `${String(r.value.enqueuedCount)} enqueued`,
+                      });
+                    }
+                  });
+                }}
+                onDeleteProfile={(profileId) => {
+                  if (!environmentId) return;
+                  void deleteProfileCmd({ environmentId, input: { profileId } });
+                }}
+              />
             </div>
-          </div>
+          )}
 
           {activeTab === "issues" && checkedIssueKeys.length > 0 ? (
             <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
@@ -1234,7 +1616,7 @@ export function IssueAutomationPage() {
                       <SearchableProjectMenu
                         projects={envProjects}
                         value={resolvedProjectId}
-                        onChange={setAdhocProjectId}
+                        onChange={handleSelectProject}
                         ariaLabel={gt("Batch target repository")}
                         size="compact"
                         className="w-36 min-w-0"
@@ -1243,16 +1625,16 @@ export function IssueAutomationPage() {
                       <SearchableModelMenu
                         options={modelOptions}
                         value={resolvedModelKey}
-                        onChange={setAdhocModelKey}
+                        onChange={handleSelectModel}
                         ariaLabel={gt("Batch AI model")}
                         size="compact"
                         className="w-40 min-w-0"
                       />
 
                       <Select
-                        value={adhocMode}
+                        value={resolvedActionMode}
                         onValueChange={(next) => {
-                          if (next) setAdhocMode(next as IssueAutomationActionMode);
+                          if (next) handleSelectActionMode(next as IssueAutomationActionMode);
                         }}
                       >
                         <SelectTrigger
@@ -1260,7 +1642,7 @@ export function IssueAutomationPage() {
                           className="w-40 min-w-0"
                           aria-label={gt("Batch execution mode")}
                         >
-                          <SelectValue>{actionModeLabel(adhocMode)}</SelectValue>
+                          <SelectValue>{actionModeLabel(resolvedActionMode)}</SelectValue>
                         </SelectTrigger>
                         <SelectPopup>
                           <SelectItem value="fix_worktree_review">
@@ -1345,16 +1727,6 @@ export function IssueAutomationPage() {
           modelOptions={modelOptions}
           initial={editingProfile}
           defaultConnectorId={activeConnector?.id}
-          defaultScopeId={effectiveScopeId}
-        />
-      ) : null}
-
-      {environmentId && activeConnector && createIssueOpen ? (
-        <CreatePlatformIssueModal
-          open={createIssueOpen}
-          onOpenChange={setCreateIssueOpen}
-          environmentId={environmentId}
-          connector={activeConnector}
           defaultScopeId={effectiveScopeId}
         />
       ) : null}

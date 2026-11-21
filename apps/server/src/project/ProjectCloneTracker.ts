@@ -86,6 +86,8 @@ interface TrackedClone {
   readonly input: {
     /** What git is given; may carry credentials and never leaves the server. */
     readonly cloneUrl: string;
+    readonly fallbackRemoteUrl?: string;
+    readonly provider?: SourceControlProviderKind;
     readonly destinationPath: string;
     readonly repository: SourceControlRepositoryInfo | null;
     readonly protocol: SourceControlCloneProtocol;
@@ -221,7 +223,11 @@ export const make = Effect.gen(function* () {
     yield* watchForStall(projectId, pulses).pipe(Effect.forkScoped);
     return yield* repositories.cloneRepository(
       {
+        ...(tracked.input.provider ? { provider: tracked.input.provider } : {}),
         remoteUrl: tracked.input.cloneUrl,
+        ...(tracked.input.fallbackRemoteUrl
+          ? { fallbackRemoteUrl: tracked.input.fallbackRemoteUrl }
+          : {}),
         destinationPath: tracked.input.destinationPath,
         protocol: tracked.input.protocol,
       },
@@ -311,6 +317,16 @@ export const make = Effect.gen(function* () {
           hooks,
           input: {
             cloneUrl: prepared.cloneUrl,
+            ...(input.fallbackRemoteUrl
+              ? { fallbackRemoteUrl: input.fallbackRemoteUrl }
+              : prepared.repository?.url && prepared.repository.sshUrl === prepared.cloneUrl
+                ? { fallbackRemoteUrl: prepared.repository.url }
+                : {}),
+            ...(input.provider
+              ? { provider: input.provider }
+              : prepared.repository?.provider
+                ? { provider: prepared.repository.provider }
+                : {}),
             destinationPath: prepared.destinationPath,
             repository: prepared.repository,
             protocol: input.protocol ?? "auto",

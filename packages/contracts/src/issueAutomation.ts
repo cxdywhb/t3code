@@ -124,6 +124,7 @@ export const IssueAutomationModelStrategy = Schema.Struct({
 export type IssueAutomationModelStrategy = typeof IssueAutomationModelStrategy.Type;
 
 export const IssueAutomationBrowseFilter = Schema.Literals([
+  "unresolved",
   "unclosed",
   "assigntome",
   "openedbyme",

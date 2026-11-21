@@ -24,6 +24,14 @@ export function cleanIssueText(input: string): string {
     .replace(/&amp;/gi, "&");
 }
 
+export function formatIssueNumber(displayKey: string, fallbackKey?: string): string {
+  const normalized = displayKey.replace(/^bug\s+/i, "").trim();
+  if (normalized.length > 0) {
+    return normalized.startsWith("#") ? normalized : `#${normalized}`;
+  }
+  return fallbackKey ? `#${fallbackKey}` : "";
+}
+
 export function isStageActive(stage: IssueAutomationStage): boolean {
   return (
     stage === "queued" ||
@@ -99,11 +107,15 @@ export function TaskStageGlyph({
   readonly className?: string;
 }) {
   if (isStageActive(stage)) {
-    return <Spinner size="sm" className={cn("shrink-0", className)} />;
+    return (
+      <span className="inline-flex shrink-0 text-info">
+        <Spinner size="md" className={cn("shrink-0", className)} />
+      </span>
+    );
   }
   if (stage === "completed") {
     return (
-      <CheckCircle2Icon aria-hidden className={cn("size-4 shrink-0 text-primary", className)} />
+      <CheckCircle2Icon aria-hidden className={cn("size-4 shrink-0 text-success", className)} />
     );
   }
   if (stage === "needs_human") {
@@ -124,65 +136,76 @@ export function TaskStageGlyph({
   );
 }
 
-export function StageBadge({ stage }: { readonly stage: IssueAutomationStage }) {
+export function StageBadge({
+  stage,
+  size = "sm",
+}: {
+  readonly stage: IssueAutomationStage;
+  readonly size?: "sm" | "default";
+}) {
   switch (stage) {
     case "queued":
       return (
-        <Badge variant="outline" size="sm">
+        <Badge variant="outline" size={size}>
           <T>Queued</T>
         </Badge>
       );
     case "enriching":
       return (
-        <Badge variant="secondary" size="sm">
+        <Badge variant="info" size={size}>
+          <span aria-hidden className="size-1.5 rounded-full bg-info" />
           <T>Fetching context</T>
         </Badge>
       );
     case "routing":
       return (
-        <Badge variant="secondary" size="sm">
+        <Badge variant="info" size={size}>
+          <span aria-hidden className="size-1.5 rounded-full bg-info" />
           <T>Routing repo</T>
         </Badge>
       );
     case "diagnosing":
       return (
-        <Badge variant="default" size="sm">
+        <Badge variant="info" size={size}>
+          <span aria-hidden className="size-1.5 rounded-full bg-info" />
           <T>Diagnosing</T>
         </Badge>
       );
     case "reviewing":
       return (
-        <Badge variant="secondary" size="sm">
+        <Badge variant="info" size={size}>
+          <span aria-hidden className="size-1.5 rounded-full bg-info" />
           <T>Cross-review</T>
         </Badge>
       );
     case "writing_back":
       return (
-        <Badge variant="secondary" size="sm">
+        <Badge variant="info" size={size}>
+          <span aria-hidden className="size-1.5 rounded-full bg-info" />
           <T>Syncing</T>
         </Badge>
       );
     case "completed":
       return (
-        <Badge variant="secondary" size="sm">
+        <Badge variant="success" size={size}>
           <T>Completed</T>
         </Badge>
       );
     case "needs_human":
       return (
-        <Badge variant="warning" size="sm">
+        <Badge variant="warning" size={size}>
           <T>Needs review</T>
         </Badge>
       );
     case "failed":
       return (
-        <Badge variant="error" size="sm">
+        <Badge variant="error" size={size}>
           <T>Failed</T>
         </Badge>
       );
     case "cancelled":
       return (
-        <Badge variant="outline" size="sm">
+        <Badge variant="outline" size={size}>
           <T>Cancelled</T>
         </Badge>
       );
@@ -194,21 +217,21 @@ export function SeverityIndicator({ severity }: { readonly severity: number | nu
   if (severity <= 1) {
     return (
       <Badge variant="error" size="sm">
-        S{severity}
+        <span className="font-mono tabular-nums">S{severity}</span>
       </Badge>
     );
   }
   if (severity === 2) {
     return (
       <Badge variant="warning" size="sm">
-        S{severity}
+        <span className="font-mono tabular-nums">S{severity}</span>
       </Badge>
     );
   }
   return (
-    <span className="shrink-0 font-mono text-2xs text-muted-foreground tabular-nums">
-      S{severity}
-    </span>
+    <Badge variant="outline" size="sm">
+      <span className="font-mono text-muted-foreground tabular-nums">S{severity}</span>
+    </Badge>
   );
 }
 

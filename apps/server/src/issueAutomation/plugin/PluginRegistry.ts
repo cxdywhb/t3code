@@ -21,14 +21,14 @@ const JIRA_RESERVED_DESCRIPTOR: IssueAutomationPlatformDescriptor = {
     {
       key: "baseUrl",
       label: "Jira 地址",
-      placeholder: "https://jira.company.com",
+      placeholder: "https://jira.example.com",
       kind: "url",
       required: true,
     },
     {
       key: "account",
       label: "账号 / 邮箱",
-      placeholder: "user@company.com",
+      placeholder: "user@example.com",
       kind: "text",
       required: true,
     },

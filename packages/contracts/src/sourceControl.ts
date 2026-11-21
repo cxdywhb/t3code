@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { VcsDriverKind } from "./vcs.ts";
 
 /** Accept unknown hosts so clients can fall back to generic presentation. */
@@ -62,14 +62,93 @@ export type SourceControlRepositoryInfo = typeof SourceControlRepositoryInfo.Typ
 export const SourceControlRepositoryLookupInput = Schema.Struct({
   provider: SourceControlProviderKind,
   repository: TrimmedNonEmptyString,
+  host: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type SourceControlRepositoryLookupInput = typeof SourceControlRepositoryLookupInput.Type;
+
+export const SourceControlNamespaceKind = Schema.Literals(["group", "user"]);
+export type SourceControlNamespaceKind = typeof SourceControlNamespaceKind.Type;
+
+export const SourceControlNamespace = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  kind: SourceControlNamespaceKind,
+  name: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  parentId: Schema.NullOr(TrimmedNonEmptyString),
+  description: Schema.NullOr(Schema.String),
+  webUrl: Schema.NullOr(Schema.String),
+  avatarUrl: Schema.NullOr(Schema.String),
+});
+export type SourceControlNamespace = typeof SourceControlNamespace.Type;
+
+export const SourceControlListNamespacesInput = Schema.Struct({
+  provider: SourceControlProviderKind,
+  host: Schema.optional(TrimmedNonEmptyString),
+});
+export type SourceControlListNamespacesInput = typeof SourceControlListNamespacesInput.Type;
+
+export const SourceControlListNamespacesResult = Schema.Struct({
+  provider: SourceControlProviderKind,
+  host: TrimmedNonEmptyString,
+  namespaces: Schema.Array(SourceControlNamespace),
+});
+export type SourceControlListNamespacesResult = typeof SourceControlListNamespacesResult.Type;
+
+export const SourceControlRepositoryVisibilityLevel = Schema.Literals([
+  "private",
+  "internal",
+  "public",
+]);
+export type SourceControlRepositoryVisibilityLevel =
+  typeof SourceControlRepositoryVisibilityLevel.Type;
+
+export const SourceControlRepositorySummary = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  pathWithNamespace: TrimmedNonEmptyString,
+  namespacePath: Schema.NullOr(TrimmedNonEmptyString),
+  description: Schema.NullOr(Schema.String),
+  defaultBranch: Schema.NullOr(TrimmedNonEmptyString),
+  visibility: Schema.NullOr(SourceControlRepositoryVisibilityLevel),
+  sshUrl: TrimmedNonEmptyString,
+  httpUrl: TrimmedNonEmptyString,
+  webUrl: TrimmedNonEmptyString,
+  archived: Schema.Boolean,
+  emptyRepo: Schema.optionalKey(Schema.Boolean),
+  lastActivityAt: Schema.NullOr(Schema.String),
+});
+export type SourceControlRepositorySummary = typeof SourceControlRepositorySummary.Type;
+
+export const SourceControlListRepositoriesInput = Schema.Struct({
+  provider: SourceControlProviderKind,
+  host: Schema.optional(TrimmedNonEmptyString),
+  namespaceId: Schema.optional(TrimmedNonEmptyString),
+  namespaceKind: Schema.optional(SourceControlNamespaceKind),
+  includeSubgroups: Schema.optional(Schema.Boolean),
+  includeArchived: Schema.optional(Schema.Boolean),
+  search: Schema.optional(Schema.String),
+  page: Schema.optional(PositiveInt),
+  perPage: Schema.optional(PositiveInt),
+});
+export type SourceControlListRepositoriesInput = typeof SourceControlListRepositoriesInput.Type;
+
+export const SourceControlListRepositoriesResult = Schema.Struct({
+  provider: SourceControlProviderKind,
+  host: TrimmedNonEmptyString,
+  repositories: Schema.Array(SourceControlRepositorySummary),
+  page: PositiveInt,
+  nextPage: Schema.NullOr(PositiveInt),
+  totalCount: Schema.NullOr(NonNegativeInt),
+});
+export type SourceControlListRepositoriesResult = typeof SourceControlListRepositoriesResult.Type;
 
 export const SourceControlCloneRepositoryInput = Schema.Struct({
   provider: Schema.optional(SourceControlProviderKind),
   repository: Schema.optional(TrimmedNonEmptyString),
   remoteUrl: Schema.optional(TrimmedNonEmptyString),
+  /** HTTPS URL to fall back to when an auto-mode SSH clone fails (e.g. non-standard SSH ports). */
+  fallbackRemoteUrl: Schema.optional(TrimmedNonEmptyString),
   destinationPath: TrimmedNonEmptyString,
   protocol: Schema.optional(SourceControlCloneProtocol),
 });

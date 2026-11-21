@@ -161,6 +161,8 @@ export class IssueAutomationRepository extends Context.Service<
   }
 >()("t3/issueAutomation/IssueAutomationRepository") {}
 
+import { sortZenTaoScopesDesc } from "./connectors/zentao/ZenTaoClient.ts";
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -168,7 +170,8 @@ const make = Effect.gen(function* () {
     row: ConnectorRow,
     secretPresent: boolean,
   ) {
-    const scopes = yield* decodeScopes(row.scopes_json);
+    const rawScopes = yield* decodeScopes(row.scopes_json);
+    const scopes = sortZenTaoScopesDesc(rawScopes);
     return yield* decodeConnector({
       id: IssueAutomationConnectorId.make(row.connector_id),
       platform: IssueAutomationPlatformKind.make(row.platform),
@@ -369,7 +372,7 @@ const make = Effect.gen(function* () {
   const listTasks: IssueAutomationRepository["Service"]["listTasks"] = Effect.fn(
     "IssueAutomationRepository.listTasks",
   )(
-    function* (limit = 200) {
+    function* (limit = 1000) {
       const rows = yield* sql<TaskRow>`
         SELECT * FROM issue_automation_tasks
         ORDER BY updated_at DESC

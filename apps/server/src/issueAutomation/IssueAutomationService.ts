@@ -368,7 +368,7 @@ const make = Effect.gen(function* () {
       const [connectors, profiles, tasks, runningMap] = yield* Effect.all([
         repo.listConnectors(hasConnectorSecret).pipe(Effect.mapError(mapRepoErr("listConnectors"))),
         repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles"))),
-        repo.listTasks(200).pipe(Effect.mapError(mapRepoErr("listTasks"))),
+        repo.listTasks(1000).pipe(Effect.mapError(mapRepoErr("listTasks"))),
         Ref.get(activeTaskFibers),
       ]);
       return {
@@ -1288,7 +1288,7 @@ const make = Effect.gen(function* () {
     const page = yield* plugin.listIssues({
       credentials,
       scopeId: input.scopeId,
-      browseType: input.browseType ?? "unclosed",
+      browseType: input.browseType ?? "unresolved",
       keyword: input.keyword,
       page: input.page ?? 1,
       pageSize: input.pageSize ?? 25,

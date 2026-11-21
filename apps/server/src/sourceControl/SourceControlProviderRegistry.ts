@@ -65,6 +65,10 @@ export class SourceControlProviderRegistry extends Context.Service<
       SourceControlProvider.SourceControlProvider["Service"],
       SourceControlProviderError
     >;
+    readonly getCloneHttpAuth: (input: {
+      readonly provider?: SourceControlProviderKind;
+      readonly host: string;
+    }) => Effect.Effect<SourceControlProvider.SourceControlCloneHttpAuth | null>;
     readonly discover: Effect.Effect<ReadonlyArray<SourceControlProviderDiscoveryItem>>;
   }
 >()("t3/sourceControl/SourceControlProviderRegistry") {}
@@ -363,6 +367,21 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
       resolve: Effect.fn("SourceControlProviderRegistry.resolve")(function (input) {
         return resolveHandle(input).pipe(Effect.map((handle) => handle.provider));
       }),
+      getCloneHttpAuth: Effect.fn("SourceControlProviderRegistry.getCloneHttpAuth")(
+        function* (input) {
+          if (input.provider && input.provider !== "unknown") {
+            const provider = providers.get(input.provider);
+            if (!provider?.getCloneHttpAuth) return null;
+            return yield* provider.getCloneHttpAuth({ host: input.host });
+          }
+          for (const provider of providers.values()) {
+            if (!provider.getCloneHttpAuth) continue;
+            const auth = yield* provider.getCloneHttpAuth({ host: input.host });
+            if (auth !== null) return auth;
+          }
+          return null;
+        },
+      ),
       discover: Effect.forEach(
         discoverySpecs,
         (spec) =>

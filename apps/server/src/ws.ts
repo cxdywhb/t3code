@@ -2936,6 +2936,10 @@ export const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.setLabels(input)),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           sourceControlRepositories.lookupRepository(input),
+        [WS_METHODS.sourceControlListNamespaces]: (input) =>
+          sourceControlRepositories.listNamespaces(input),
+        [WS_METHODS.sourceControlListRepositories]: (input) =>
+          sourceControlRepositories.listRepositories(input),
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
           sourceControlRepositories.cloneRepository(input),
         [WS_METHODS.sourceControlSignInStart]: (input) => sourceControlSignIn.start(input),

@@ -13,8 +13,20 @@ import * as Option from "effect/Option";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
+import * as GitLabApi from "./GitLabApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
+
+const mockGitLabTokenLayers = Layer.mergeAll(
+  Layer.mock(GitLabApi.GitLabApi)({}),
+  Layer.mock(GitLabCredentials.GitLabCredentials)({
+    get: () => Effect.succeedNone,
+    configuredHosts: Effect.succeed([]),
+    defaultHost: Effect.succeed(null),
+    hasConfiguredHost: () => Effect.succeed(false),
+  }),
+);
 
 it.effect("lists a nested-group fork's merge requests by source branch and names its project", () =>
   Effect.gen(function* () {
@@ -48,19 +60,22 @@ it.effect("lists a nested-group fork's merge requests by source branch and names
     const calls: SourceControlHost.SourceControlProcessInput[] = [];
     const provider = yield* GitLabSourceControlProvider.make.pipe(
       Effect.provide(
-        GitLabCli.layer.pipe(
-          Layer.provideMerge(
-            TestSourceControlHost.layer({
-              process: {
-                run: (input) =>
-                  Effect.sync(() => {
-                    calls.push(input);
-                    return TestSourceControlHost.processOutput(output);
-                  }),
-              },
-            }),
+        Layer.merge(
+          mockGitLabTokenLayers,
+          GitLabCli.layer.pipe(
+            Layer.provideMerge(
+              TestSourceControlHost.layer({
+                process: {
+                  run: (input) =>
+                    Effect.sync(() => {
+                      calls.push(input);
+                      return TestSourceControlHost.processOutput(output);
+                    }),
+                },
+              }),
+            ),
+            Layer.provide(FileSystem.layerNoop({})),
           ),
-          Layer.provide(FileSystem.layerNoop({})),
         ),
       ),
     );
@@ -135,7 +150,7 @@ const withRepository = <A, E>(
     yield* git("add", "README.md");
     yield* git("commit", "-m", "Initial commit");
     const provider = yield* GitLabSourceControlProvider.make.pipe(
-      Effect.provide(Layer.mock(GitLabCli.GitLabCli)({})),
+      Effect.provide(Layer.merge(Layer.mock(GitLabCli.GitLabCli)({}), mockGitLabTokenLayers)),
     );
     return yield* test({
       git,

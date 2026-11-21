@@ -7,17 +7,23 @@ import * as Layer from "effect/Layer";
 
 import { definition } from "../shared/definition.ts";
 
+import * as GitLabApi from "./GitLabApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 import * as GitLabPullRequestProvider from "./GitLabPullRequestProvider.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
 
-const services = GitLabPullRequestCli.layer.pipe(Layer.provideMerge(GitLabCli.layer));
+const services = GitLabPullRequestCli.layer.pipe(
+  Layer.provideMerge(GitLabApi.layer),
+  Layer.provideMerge(GitLabCredentials.layer),
+  Layer.provideMerge(GitLabCli.layer),
+);
 
 const makeInstance = Effect.all({
   sourceControl: GitLabSourceControlProvider.make,
-  discovery: Effect.succeed(GitLabSourceControlProvider.discovery),
+  discovery: GitLabSourceControlProvider.makeDiscovery,
   pullRequests: GitLabPullRequestProvider.make,
   issues: GitLabIssueTracker.make,
 });
