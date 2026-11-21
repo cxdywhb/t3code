@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type * as DateTime from "effect/DateTime";
@@ -303,6 +304,7 @@ export class GitLabCli extends Context.Service<
       readonly host?: string | undefined;
       /** A host taken from caller input, not from a project remote. See `ENVIRONMENT_TOKEN_VARIABLES`. */
       readonly callerNamedHost?: string | undefined;
+      readonly token?: Redacted.Redacted<string>;
       readonly args: ReadonlyArray<string>;
       readonly timeoutMs?: number;
       /** Keeps sensitive payloads out of argv. */
@@ -474,7 +476,11 @@ function parseRepositoryLookup(repository: string): {
 // OAuth login as an `invalid_grant` refresh failure without suggesting `glab auth login`.
 const classifyGlabFailure = (stderr: string): VcsProcessExitFailureKind | null => {
   const normalized = stderr.toLowerCase();
-  if (normalized.includes("glab auth login") || normalized.includes("invalid_grant")) {
+  if (
+    normalized.includes("glab auth login") ||
+    normalized.includes("invalid_grant") ||
+    /\bhttp 401\b/.test(normalized)
+  ) {
     return "authentication";
   }
 
@@ -522,9 +528,11 @@ export const make = Effect.gen(function* () {
         env: {
           // glab may otherwise prefer a different checkout remote.
           ...(input.host === undefined ? {} : { GITLAB_HOST: input.host }),
-          ...(input.callerNamedHost !== undefined && hostOf(input.callerNamedHost) !== defaultHost
-            ? WITHOUT_ENVIRONMENT_TOKEN
-            : {}),
+          ...(input.token !== undefined
+            ? { ...WITHOUT_ENVIRONMENT_TOKEN, GITLAB_TOKEN: Redacted.value(input.token) }
+            : input.callerNamedHost !== undefined && hostOf(input.callerNamedHost) !== defaultHost
+              ? WITHOUT_ENVIRONMENT_TOKEN
+              : {}),
         },
         classifyFailure: classifyGlabFailure,
         notFoundDetail: "Merge request not found.",

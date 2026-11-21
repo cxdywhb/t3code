@@ -4,6 +4,7 @@
  * into the detail.
  */
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
@@ -19,6 +20,7 @@ import {
 } from "@t3tools/source-control-core/server/IssueTracker";
 
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import {
   decodeCreatedIssueJson,
   decodeUserIdsJson,
@@ -168,9 +170,12 @@ function reasonFor(error: GitLabCli.GitLabCliError): IssueTrackerError["reason"]
   }
 }
 
-export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = Effect.gen(
+type GitLabIssueTrackerServices = GitLabCli.GitLabCli | GitLabCredentials.GitLabCredentials;
+
+export const make: Effect.Effect<IssueTrackerApi, never, GitLabIssueTrackerServices> = Effect.gen(
   function* () {
     const gitlab = yield* GitLabCli.GitLabCli;
+    const credentials = yield* GitLabCredentials.GitLabCredentials;
 
     const fail = (operation: string) => (error: GitLabCli.GitLabCliError) =>
       new IssueTrackerError({
@@ -201,7 +206,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
     const refused = (operation: string, detail: string) =>
       new IssueTrackerError({ tracker: KIND, operation, reason: "failed", detail });
 
-    const api = (input: {
+    const api = Effect.fn("GitLabIssueTracker.api")(function* (input: {
       readonly cwd: string;
       readonly host: string;
       readonly operation: string;
@@ -209,14 +214,30 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       readonly method?: string;
       readonly body?: unknown;
       readonly includeHeaders?: boolean;
-    }) =>
-      gitlab
+    }) {
+      const credential = yield* credentials.get(input.host).pipe(
+        Effect.mapError(
+          (cause) =>
+            new IssueTrackerError({
+              tracker: KIND,
+              operation: input.operation,
+              reason: "unauthenticated",
+              detail: "The saved GitLab credential could not be read.",
+              cause,
+            }),
+        ),
+      );
+      const host = Option.isSome(credential) ? credential.value.host : input.host;
+      const result = yield* gitlab
         .execute({
           cwd: input.cwd,
-          host: input.host,
+          host,
+          callerNamedHost: host,
           args: [
             "api",
             input.path,
+            "--hostname",
+            host,
             ...(input.includeHeaders === true ? ["--include"] : []),
             ...(input.method === undefined ? [] : ["--method", input.method]),
             // A JSON body from stdin: argv is visible in process listings, and `glab api --input`
@@ -225,12 +246,12 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               ? []
               : ["--input", "-", "--header", "Content-Type: application/json"]),
           ],
+          ...(Option.isSome(credential) ? { token: credential.value.token } : {}),
           ...(input.body === undefined ? {} : { stdin: encodeBody(input.body) }),
         })
-        .pipe(
-          Effect.map((result) => result.stdout.trim()),
-          Effect.mapError(fail(input.operation)),
-        );
+        .pipe(Effect.mapError(fail(input.operation)));
+      return result.stdout.trim();
+    });
 
     const read = <A>(input: {
       readonly cwd: string;

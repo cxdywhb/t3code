@@ -1,9 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 
 const encode = (value: unknown) => JSON.stringify(value);
@@ -136,16 +139,21 @@ function answer(path: string): string {
 function tracker(
   onExecute: (
     args: ReadonlyArray<string>,
-    input: { readonly host?: string | undefined; readonly stdin?: string },
+    input: Parameters<GitLabCli.GitLabCli["Service"]["execute"]>[0],
   ) => string,
+  credential?: GitLabCredentials.GitLabCredential,
 ) {
   return GitLabIssueTracker.make.pipe(
-    Effect.provide(
+    Effect.provide([
+      Layer.mock(GitLabCredentials.GitLabCredentials)({
+        get: (host) =>
+          Effect.succeed(Option.fromNullishOr(credential?.host === host ? credential : undefined)),
+      }),
       Layer.mock(GitLabCli.GitLabCli)({
         execute: (input) =>
           Effect.succeed(TestSourceControlHost.processOutput(onExecute(input.args, input))),
       }),
-    ),
+    ]),
   );
 }
 
@@ -221,7 +229,10 @@ describe("GitLabIssueTracker", () => {
     Effect.gen(function* () {
       // GitLab before 16.1 has no `Note.awardEmoji`; glab exits 1 on any query naming it.
       const api = yield* GitLabIssueTracker.make.pipe(
-        Effect.provide(
+        Effect.provide([
+          Layer.mock(GitLabCredentials.GitLabCredentials)({
+            get: () => Effect.succeedNone,
+          }),
           Layer.mock(GitLabCli.GitLabCli)({
             execute: (input) =>
               input.args[1] === "graphql"
@@ -235,7 +246,7 @@ describe("GitLabIssueTracker", () => {
                   )
                 : Effect.succeed(TestSourceControlHost.processOutput(answer(input.args[1]!))),
           }),
-        ),
+        ]),
       );
       const target = { cwd: "/w", host: "gitlab.example.com", scope: "acme/web", key: "42" };
       const issue = yield* api.getIssue(target);
@@ -334,10 +345,15 @@ describe("GitLabIssueTracker", () => {
   it.effect("pages a listing by GitLab's page number and stops on a short page", () =>
     Effect.gen(function* () {
       const paths: string[] = [];
-      const api = yield* tracker((args) => {
-        paths.push(args[1]!);
-        return encode([ISSUE]);
-      });
+      const token = Redacted.make("test-issue-token");
+      const api = yield* tracker(
+        (args, input) => {
+          expect(input.token).toBe(token);
+          paths.push(args[1]!);
+          return encode([ISSUE]);
+        },
+        { host: "gitlab.com", token, source: "settings" },
+      );
       const page = yield* api.listIssues({
         cwd: "/w",
         host: "gitlab.com",

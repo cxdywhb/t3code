@@ -7,12 +7,17 @@ import {
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { resolvePullRequestAuthorFilter, VcsProcessExitError } from "@t3tools/contracts";
+import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { quoteGitPatchPath } from "@t3tools/shared/gitPatchPath";
 import type {
   PullRequestAction,
@@ -40,6 +45,8 @@ import type {
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "./GitLabCli.ts";
+import * as GitLabCredentials from "./GitLabCredentials.ts";
+import { isValidGitLabHost, normalizeGitLabHost } from "./GitLabCredentials.ts";
 import {
   AWARD_EMOJI_GRAPHQL_QUERY,
   PIPELINE_STAGES_GRAPHQL_QUERY,
@@ -407,6 +414,24 @@ export class GitLabPullRequestCli extends Context.Service<
        */
       readonly graphql?: boolean;
     }) => Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError>;
+
+    readonly listAccountMergeRequests?: (input: {
+      readonly cwd: string;
+      readonly host: string;
+      readonly state: PullRequestListState;
+      readonly involvement: PullRequestInvolvement;
+      readonly viewer: string;
+      readonly limit: number;
+      readonly query?: string | undefined;
+      readonly filters?: PullRequestListFilters | undefined;
+    }) => Effect.Effect<
+      {
+        readonly items: ReadonlyArray<GitLabMergeRequestListItem & { readonly repository: string }>;
+        readonly truncated: boolean;
+        readonly listStates?: ReadonlyMap<string, GitLabMergeRequestListState>;
+      },
+      GitLabPullRequestCliError
+    >;
 
     /** Whether this host's GraphQL list takes every filter the REST list does. */
     readonly supportsGraphqlList: (input: {
@@ -1055,8 +1080,196 @@ function actionArgs(
 }
 
 /** @public */
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const isGitLabCliCommandError = Schema.is(GitLabCli.GitLabCliCommandError);
+
 export const make = Effect.gen(function* () {
   const gitlab = yield* GitLabCli.GitLabCli;
+  const httpClientOpt = yield* Effect.serviceOption(HttpClient.HttpClient);
+  const credentialsOpt = yield* Effect.serviceOption(GitLabCredentials.GitLabCredentials);
+
+  const resolveTokenCredential = Effect.fn("GitLabPullRequestCli.resolveTokenCredential")(
+    function* (cwd: string, rawHost: string | undefined) {
+      if (Option.isNone(httpClientOpt) || Option.isNone(credentialsOpt)) {
+        return null;
+      }
+      const credentials = credentialsOpt.value;
+      const candidateHost =
+        rawHost && rawHost.trim().length > 0
+          ? normalizeGitLabHost(rawHost)
+          : ((yield* credentials.defaultHost) ?? "");
+      if (!candidateHost || !isValidGitLabHost(candidateHost)) {
+        return null;
+      }
+      const lookedUp = yield* credentials.get(candidateHost).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitLabCli.GitLabCliAuthenticationError({
+              operation: "execute",
+              command: "glab",
+              cwd,
+              cause,
+            }),
+        ),
+      );
+      if (Option.isNone(lookedUp)) return null;
+      return {
+        httpClient: httpClientOpt.value,
+        host: lookedUp.value.host,
+        token: lookedUp.value.token,
+      };
+    },
+  );
+
+  const executeHttpApi = Effect.fn("GitLabPullRequestCli.executeHttpApi")(function* (input: {
+    readonly httpClient: HttpClient.HttpClient;
+    readonly host: string;
+    readonly token: Redacted.Redacted<string>;
+    readonly cwd: string;
+    readonly path: string;
+    readonly method?: string;
+    readonly stdin?: string;
+    readonly headers?: ReadonlyArray<string>;
+    readonly maxOutputBytes?: number;
+    readonly timeoutMs?: number;
+  }): Effect.fn.Return<SourceControlHost.SourceControlProcessOutput, GitLabCli.GitLabCliError> {
+    const cleanPath = input.path.replace(/^\/+/, "");
+    const url =
+      cleanPath === "graphql"
+        ? `https://${input.host}/api/graphql`
+        : `https://${input.host}/api/v4/${cleanPath}`;
+    const method = (
+      input.method ?? (cleanPath === "graphql" && input.stdin !== undefined ? "POST" : "GET")
+    ).toUpperCase();
+
+    let request = HttpClientRequest.make(method as "GET" | "POST" | "PUT" | "DELETE" | "PATCH")(
+      url,
+    ).pipe(
+      HttpClientRequest.setHeader("accept", "application/json"),
+      HttpClientRequest.setHeader("private-token", Redacted.value(input.token)),
+    );
+    if (input.stdin !== undefined) {
+      request = HttpClientRequest.bodyText(request, input.stdin, "application/json");
+    }
+    for (const headerLine of input.headers ?? []) {
+      const colon = headerLine.indexOf(":");
+      if (colon > 0) {
+        const key = headerLine.slice(0, colon).trim();
+        const val = headerLine.slice(colon + 1).trim();
+        if (key.length > 0) {
+          request = HttpClientRequest.setHeader(request, key, val);
+        }
+      }
+    }
+
+    const timeout = Duration.millis(input.timeoutMs ?? 30_000);
+    const maxBytes = input.maxOutputBytes ?? 16 * 1024 * 1024;
+
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* input.httpClient.execute(request).pipe(
+          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+          Effect.timeoutOrElse({
+            duration: timeout,
+            orElse: () =>
+              Effect.fail(
+                new GitLabCli.GitLabCliCommandError({
+                  operation: "execute",
+                  command: "glab",
+                  cwd: input.cwd,
+                  cause: new Error(`GitLab HTTP request to ${input.host} timed out.`),
+                }),
+              ),
+          }),
+          Effect.mapError((cause) =>
+            isGitLabCliCommandError(cause)
+              ? cause
+              : new GitLabCli.GitLabCliCommandError({
+                  operation: "execute",
+                  command: "glab",
+                  cwd: input.cwd,
+                  cause,
+                }),
+          ),
+        );
+
+        const body = yield* response.text.pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitLabCli.GitLabCliCommandError({
+                operation: "execute",
+                command: "glab",
+                cwd: input.cwd,
+                cause,
+              }),
+          ),
+        );
+
+        if (response.status === 401 || response.status === 403) {
+          return yield* new GitLabCli.GitLabCliAuthenticationError({
+            operation: "execute",
+            command: "glab",
+            cwd: input.cwd,
+            cause: new Error(`GitLab HTTP ${response.status}: ${body.slice(0, 300)}`),
+          });
+        }
+        if (response.status === 429) {
+          return yield* new GitLabCli.GitLabCliRateLimitError({
+            operation: "execute",
+            command: "glab",
+            cwd: input.cwd,
+            cause: new Error("GitLab HTTP 429 rate limited"),
+          });
+        }
+        if (response.status === 404) {
+          return yield* new GitLabCli.GitLabCliCommandError({
+            operation: "execute",
+            command: "glab",
+            cwd: input.cwd,
+            cause: new VcsProcessExitError({
+              operation: "GitLabHttp.execute",
+              command: "glab",
+              argumentCount: 2,
+              cwd: input.cwd,
+              exitCode: 1,
+              stderrLength: body.length,
+              detail: "Merge request not found.",
+              failureKind: "not-found",
+            }),
+          });
+        }
+        if (response.status < 200 || response.status >= 300) {
+          return yield* new GitLabCli.GitLabCliCommandError({
+            operation: "execute",
+            command: "glab",
+            cwd: input.cwd,
+            cause: new VcsProcessExitError({
+              operation: "GitLabHttp.execute",
+              command: "glab",
+              argumentCount: 2,
+              cwd: input.cwd,
+              exitCode: 1,
+              stderrLength: body.length,
+              detail: body.slice(0, 300) || `GitLab HTTP ${response.status}`,
+              failureKind: "command-failed",
+            }),
+          });
+        }
+
+        const byteLength = Buffer.byteLength(body, "utf8");
+        const truncated = byteLength > maxBytes;
+        return {
+          stdout: truncated
+            ? Buffer.from(body, "utf8").subarray(0, maxBytes).toString("utf8")
+            : body,
+          stderr: "",
+          exitCode: ChildProcessSpawner.ExitCode(0),
+          stdoutTruncated: truncated,
+          stderrTruncated: false,
+        } satisfies SourceControlHost.SourceControlProcessOutput;
+      }),
+    );
+  });
 
   const api = (input: {
     readonly cwd: string;
@@ -1068,23 +1281,42 @@ export const make = Effect.gen(function* () {
     readonly maxOutputBytes?: number;
     readonly timeoutMs?: number;
   }) =>
-    gitlab.execute({
-      cwd: input.cwd,
-      host: input.host,
-      args: [
-        "api",
-        input.path,
-        ...(input.method === undefined ? [] : ["--method", input.method]),
-        // glab --input keeps payloads out of argv/logs but omits GitLab's required Content-Type.
-        ...(input.stdin === undefined
-          ? []
-          : ["--input", "-", "--header", "Content-Type: application/json"]),
-        ...(input.headers ?? []).flatMap((header) => ["--header", header]),
-      ],
-      ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-      ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
-      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-    });
+    resolveTokenCredential(input.cwd, input.host).pipe(
+      Effect.flatMap((tokenAuth) =>
+        tokenAuth !== null
+          ? executeHttpApi({
+              ...tokenAuth,
+              cwd: input.cwd,
+              path: input.path,
+              ...(input.method === undefined ? {} : { method: input.method }),
+              ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+              ...(input.headers === undefined ? {} : { headers: input.headers }),
+              ...(input.maxOutputBytes === undefined
+                ? {}
+                : { maxOutputBytes: input.maxOutputBytes }),
+              ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+            })
+          : gitlab.execute({
+              cwd: input.cwd,
+              host: input.host,
+              args: [
+                "api",
+                input.path,
+                ...(input.method === undefined ? [] : ["--method", input.method]),
+                // glab --input keeps payloads out of argv/logs but omits GitLab's required Content-Type.
+                ...(input.stdin === undefined
+                  ? []
+                  : ["--input", "-", "--header", "Content-Type: application/json"]),
+                ...(input.headers ?? []).flatMap((header) => ["--header", header]),
+              ],
+              ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+              ...(input.maxOutputBytes === undefined
+                ? {}
+                : { maxOutputBytes: input.maxOutputBytes }),
+              ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+            }),
+      ),
+    );
 
   const listPage = (input: {
     readonly cwd: string;
@@ -2293,6 +2525,128 @@ export const make = Effect.gen(function* () {
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
 
+    listAccountMergeRequests: Effect.fn("GitLabPullRequestCli.listAccountMergeRequests")(
+      function* (input) {
+        const perPage = Math.min(Math.max(1, input.limit + 1), MAX_PAGE_SIZE);
+        const scopes: ReadonlyArray<ReadonlyArray<readonly [string, string]>> =
+          input.involvement === "authored"
+            ? [[["scope", "created_by_me"]]]
+            : input.involvement === "reviewing"
+              ? [
+                  [
+                    ["scope", "all"],
+                    ["reviewer_username", input.viewer],
+                  ],
+                ]
+              : [
+                  [["scope", "created_by_me"]],
+                  [["scope", "assigned_to_me"]],
+                  [
+                    ["scope", "all"],
+                    ["reviewer_username", input.viewer],
+                  ],
+                ];
+
+        const readScope = (scopeParams: ReadonlyArray<readonly [string, string]>) =>
+          api({
+            cwd: input.cwd,
+            host: input.host,
+            path: `merge_requests?${query([
+              ["state", stateParam(input.state)],
+              ...scopeParams,
+              ...searchParams(input.query),
+              ...filterParams(input),
+              ["order_by", "updated_at"],
+              ["sort", "desc"],
+              ["with_labels_details", "true"],
+              ["per_page", String(perPage)],
+              ["page", "1"],
+            ])}`,
+            maxOutputBytes: MERGE_REQUEST_LIST_MAX_OUTPUT_BYTES,
+          }).pipe(
+            Effect.flatMap((result) => {
+              const raw = result.stdout.trim();
+              if (raw.length === 0) {
+                return Effect.succeed({
+                  items: [] as Array<GitLabMergeRequestListItem & { readonly repository: string }>,
+                  truncated: false,
+                });
+              }
+              const decoded = decodeMergeRequestListJson(raw);
+              if (!Result.isSuccess(decoded)) {
+                return Effect.fail(
+                  new GitLabMergeRequestReadError({
+                    command: "glab",
+                    cwd: input.cwd,
+                    operation: "listAccountMergeRequests",
+                    cause: decoded.failure,
+                  }),
+                );
+              }
+              const withRepo = decoded.success.items.flatMap((item) =>
+                item.repository ? [{ ...item, repository: item.repository }] : [],
+              );
+              return Effect.succeed({
+                items: withRepo,
+                truncated: decoded.success.rawCount >= perPage,
+              });
+            }),
+          );
+
+        const pages = yield* Effect.forEach(scopes, readScope, { concurrency: 3 });
+        const byKey = new Map<
+          string,
+          GitLabMergeRequestListItem & { readonly repository: string }
+        >();
+        for (const page of pages) {
+          for (const item of page.items) {
+            const key = `${item.repository.toLowerCase()}!${item.number}`;
+            if (!byKey.has(key)) {
+              byKey.set(key, item);
+            }
+          }
+        }
+        const merged = [...byKey.values()]
+          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .slice(0, input.limit);
+        const truncated = pages.some((page) => page.truncated) || byKey.size > input.limit;
+
+        // Enrich approval and pipeline list states grouped by repository.
+        const numbersByRepo = new Map<string, number[]>();
+        for (const item of merged) {
+          const list = numbersByRepo.get(item.repository) ?? [];
+          list.push(item.number);
+          numbersByRepo.set(item.repository, list);
+        }
+        const repoStateEntries = yield* Effect.forEach(
+          [...numbersByRepo.entries()],
+          ([repository, numbers]) =>
+            listStatesOf({
+              cwd: input.cwd,
+              host: input.host,
+              repository,
+              numbers,
+            }).pipe(
+              Effect.map((states) =>
+                [...states.entries()].map(
+                  ([num, st]) => [`${repository.toLowerCase()}!${num}`, st] as const,
+                ),
+              ),
+              Effect.orElseSucceed(
+                () => [] as ReadonlyArray<readonly [string, GitLabMergeRequestListState]>,
+              ),
+            ),
+          { concurrency: 4 },
+        );
+        const listStates = new Map(repoStateEntries.flat());
+        return {
+          items: merged,
+          truncated,
+          listStates,
+        };
+      },
+    ),
+
     listMergeRequests: Effect.fn("GitLabPullRequestCli.listMergeRequests")(function (input) {
       const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
       const page = Math.floor((input.cursor?.delivered ?? 0) / perPage) + 1;
@@ -2837,6 +3191,114 @@ export const make = Effect.gen(function* () {
           return summary;
         }
         if (input.action === "revert") return yield* revertMergeRequest(input);
+        const tokenAuth = yield* resolveTokenCredential(input.cwd, input.host);
+        if (tokenAuth !== null) {
+          const mrPath = `projects/${projectPath(input.repository)}/merge_requests/${input.number}`;
+          if (input.action === "close" || input.action === "reopen") {
+            yield* api({
+              cwd: input.cwd,
+              host: input.host,
+              path: mrPath,
+              method: "PUT",
+              stdin: encodeJson({ state_event: input.action }),
+            });
+            return;
+          }
+          if (input.action === "ready" || input.action === "draft") {
+            const current = yield* mergeRequestDetail(input);
+            const stripped = current.title.replace(
+              /^\s*(?:\[draft\]|\(draft\)|draft:|wip:)\s*/iu,
+              "",
+            );
+            const nextTitle = input.action === "draft" ? `Draft: ${stripped}` : stripped;
+            yield* api({
+              cwd: input.cwd,
+              host: input.host,
+              path: mrPath,
+              method: "PUT",
+              stdin: encodeJson({ title: nextTitle }),
+            });
+            return;
+          }
+          if (input.action === "update-branch") {
+            yield* api({
+              cwd: input.cwd,
+              host: input.host,
+              path: `${mrPath}/rebase`,
+              method: "PUT",
+            });
+            return;
+          }
+          if (input.action === "merge" || input.action === "enable-auto-merge") {
+            if (input.mergeMethod === "rebase") {
+              if (input.expectedHeadSha !== undefined) {
+                const current = yield* getDiffRefs(input);
+                if (current.headSha !== input.expectedHeadSha) {
+                  return yield* new GitLabMutationRefusedError({
+                    command: "glab",
+                    cwd: input.cwd,
+                    operation: "runMergeRequestAction",
+                    reasons: [`the head is now ${current.headSha}, not ${input.expectedHeadSha}`],
+                  });
+                }
+              }
+              yield* api({
+                cwd: input.cwd,
+                host: input.host,
+                path: `${mrPath}/rebase`,
+                method: "PUT",
+              });
+            }
+            const refs = yield* getDiffRefs(input);
+            const expectedSha =
+              input.mergeMethod === "rebase"
+                ? refs.headSha
+                : (input.expectedHeadSha ?? refs.headSha);
+            let mergeCommitMessage: string | undefined;
+            let squashCommitMessage: string | undefined;
+            let shouldSquash = input.mergeMethod === "squash";
+            if (input.removeAgentCreditsOnMerge === true) {
+              const messages = yield* graphqlRead({
+                cwd: input.cwd,
+                host: input.host,
+                operation: "getMergeMessages",
+                query: MERGE_MESSAGES_GRAPHQL_QUERY,
+                variables: { fullPath: input.repository, iid: String(input.number) },
+                decode: decodeMergeMessagesJson,
+              });
+              const clean = (message: string) => {
+                const cleaned = removeAgentCredits(message);
+                return cleaned.trim() === "" ? (messages.title ?? message) : cleaned;
+              };
+              const merge = messages.merge === null ? null : clean(messages.merge);
+              if (merge !== null && merge !== messages.merge) mergeCommitMessage = merge;
+              const squashes = shouldSquash || messages.squashOnMerge;
+              const squash = messages.squash === null || !squashes ? null : clean(messages.squash);
+              if (squash !== null && squash !== messages.squash) {
+                shouldSquash = true;
+                squashCommitMessage = squash;
+              }
+            }
+            yield* api({
+              cwd: input.cwd,
+              host: input.host,
+              path: `${mrPath}/merge`,
+              method: "PUT",
+              stdin: encodeJson({
+                merge_when_pipeline_succeeds: input.action === "enable-auto-merge",
+                sha: expectedSha,
+                ...(shouldSquash ? { squash: true } : {}),
+                ...(mergeCommitMessage === undefined
+                  ? {}
+                  : { merge_commit_message: mergeCommitMessage }),
+                ...(squashCommitMessage === undefined
+                  ? {}
+                  : { squash_commit_message: squashCommitMessage }),
+              }),
+            });
+            return;
+          }
+        }
         const executeMr = (subcommand: string, ...flags: ReadonlyArray<string>) =>
           gitlab.execute({
             cwd: input.cwd,

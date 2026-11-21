@@ -1,6 +1,7 @@
 import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
-import { Plug2Icon, SearchIcon } from "lucide-react";
+import { Plug2Icon, SearchIcon, ShieldCheckIcon, UserRoundIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { isElectron } from "~/env";
@@ -115,6 +116,7 @@ export function PullRequestsColumn({
 }) {
   const gt = useGT();
   const resolve = useMessages();
+  const navigate = useNavigate();
   const contentArea = workspaceAreaProps("pull-requests", 1, gt("Pull requests"));
   const markerRef = useRef<HTMLDivElement | null>(null);
   const [condensed, setCondensed] = useState(false);
@@ -248,6 +250,14 @@ export function PullRequestsColumn({
               <div className="min-w-0 basis-full @lg/pr-list:basis-0 @lg/pr-list:flex-1">
                 {searchInput}
               </div>
+              <PullRequestCompactFilterMenu
+                label={gt("Filter by involvement")}
+                outlined
+                triggerIcon={<UserRoundIcon aria-hidden className="size-4" />}
+                value={involvement}
+                options={resolveFilterOptions(INVOLVEMENT_TABS, resolve)}
+                onChange={onInvolvement}
+              />
               {sortMenu}
               {filtersMenu}
               {savedViewsMenu}
@@ -261,6 +271,14 @@ export function PullRequestsColumn({
                 options={hostMenuOptions}
                 onChange={(next) => onHost(next === "" ? undefined : next)}
               />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void navigate({ to: "/pr-review" })}
+              >
+                <ShieldCheckIcon className="size-3.5 text-primary" />
+                <T>Fusion Review</T>
+              </Button>
               {!condensed ? (
                 <PullRequestRefreshControl refreshing={refreshing} onRefresh={onRefresh} />
               ) : null}

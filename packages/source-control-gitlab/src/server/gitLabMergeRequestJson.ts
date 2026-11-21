@@ -109,6 +109,13 @@ const RawMergeRequestSchema = Schema.Struct({
   /** Null on merge requests from the same project, where it means nothing. */
   allow_collaboration: Schema.optional(Schema.NullOr(Schema.Boolean)),
   diff_refs: Schema.optional(Schema.NullOr(RawMergeRequestDiffRefs)),
+  references: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        full: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
 });
 
 const RawNoteSchema = Schema.Struct({
@@ -210,6 +217,7 @@ const RawProjectMergeSettingsSchema = Schema.Struct({
 });
 
 export interface GitLabMergeRequestListItem {
+  readonly repository?: string | undefined;
   readonly number: number;
   readonly title: string;
   readonly url: string;
@@ -501,11 +509,34 @@ export function decodePipelineStageChecksJson(
   return Result.succeed(checks.length === 0 ? null : checks);
 }
 
+function extractRepositoryFromRawMergeRequest(
+  raw: Schema.Schema.Type<typeof RawMergeRequestSchema>,
+): string | undefined {
+  const fullRef = trimmed(raw.references?.full);
+  if (fullRef !== null) {
+    const bang = fullRef.lastIndexOf("!");
+    if (bang > 0) {
+      const candidate = fullRef.slice(0, bang).trim();
+      if (candidate.includes("/")) return candidate;
+    }
+  }
+  const parsedUrl = URL.parse(raw.web_url);
+  if (parsedUrl !== null) {
+    const match = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/\d+(?:\/|$)/u.exec(
+      parsedUrl.pathname,
+    );
+    if (match?.[1]) return decodeURIComponent(match[1]);
+  }
+  return undefined;
+}
+
 function toListItem(
   raw: Schema.Schema.Type<typeof RawMergeRequestSchema>,
 ): GitLabMergeRequestListItem {
   const detailedMergeStatus = raw.detailed_merge_status?.trim().toLowerCase();
+  const repository = extractRepositoryFromRawMergeRequest(raw);
   return {
+    ...(repository === undefined ? {} : { repository }),
     number: raw.iid,
     title: raw.title,
     url: raw.web_url,

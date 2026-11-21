@@ -224,6 +224,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueLinkedThreads: Schema.optionalKey(Schema.Boolean),
   /** Serves `issueAutomation.*` pluggable issue diagnosis and resolution workflows. */
   issueAutomation: Schema.optionalKey(Schema.Boolean),
+  /** Serves `prReview.*` multi-model pull request fusion review workstation workflows. */
+  prReview: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

@@ -61,6 +61,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.issueAutomationAnalyzeIssues]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationCancelTask]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationWriteBack]: AuthSourceControlWriteScope,
+  [WS_METHODS.prReviewSavePreset]: AuthOrchestrationOperateScope,
+  [WS_METHODS.prReviewDeletePreset]: AuthOrchestrationOperateScope,
+  [WS_METHODS.prReviewStartReview]: AuthOrchestrationOperateScope,
+  [WS_METHODS.prReviewCancelTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.prReviewWriteBack]: AuthSourceControlWriteScope,
   // Writing a guide runs a model on this environment's providers, which reading one does not.
   [WS_METHODS.pullRequestsGenerateReviewGuide]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectsCreateFromThread]: AuthOrchestrationOperateScope,

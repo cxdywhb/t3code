@@ -159,13 +159,22 @@ export function usePullRequestScope(
     selectedLink.repository.toLowerCase() === search.repository?.toLowerCase()
       ? search.selectedUrl
       : undefined;
-  const linkedSelection =
-    search.repository && search.number && selectedProject
+  const fallbackCloudSelection =
+    selectedProject === undefined &&
+    search.selectedProjectId?.startsWith("cloud:") &&
+    capableEnvironments[0] !== undefined
       ? {
-          environmentId: selectedProject.environmentId,
+          environmentId: selectedEnvironmentId ?? capableEnvironments[0].environmentId,
+          projectId: search.selectedProjectId,
+        }
+      : null;
+  const linkedSelection =
+    search.repository && search.number && (selectedProject || fallbackCloudSelection)
+      ? {
+          environmentId: selectedProject?.environmentId ?? fallbackCloudSelection!.environmentId,
           repository: search.repository,
           number: search.number,
-          projectId: selectedProject.id,
+          projectId: selectedProject?.id ?? fallbackCloudSelection!.projectId,
           ...(selectedUrl ? { url: selectedUrl, revealUrl: selectedUrl } : {}),
           ...(selectedHost ? { host: selectedHost } : {}),
         }

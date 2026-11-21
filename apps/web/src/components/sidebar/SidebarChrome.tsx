@@ -5,6 +5,7 @@ import {
   ChartNoAxesColumnIcon,
   FolderGit2Icon,
   SettingsIcon,
+  ShieldCheckIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
@@ -23,6 +24,7 @@ import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
 import { useIssueAutomationSupported } from "../../state/issueAutomation";
+import { usePrReviewSupported } from "../../state/prReview";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -242,6 +244,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const prReviewSupported = usePrReviewSupported();
   const issuesSupported = useIssuesSupported();
   const issueAutomationSupported = useIssueAutomationSupported();
   const closeMobileSidebar = () => {
@@ -255,6 +258,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       to: "/pull-requests",
       search: readPullRequestListPreferences(),
     });
+  };
+  const handlePrReviewClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/pr-review" });
   };
   const handleIssuesClick = () => {
     closeMobileSidebar();
@@ -308,6 +315,13 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               icon={<PullRequestGlyph.pullRequest />}
               label={gt("Pull requests")}
               onClick={handlePullRequestsClick}
+            />
+          ) : null}
+          {prReviewSupported ? (
+            <SidebarUtilityItem
+              icon={<ShieldCheckIcon />}
+              label={gt("PR Fusion Review")}
+              onClick={handlePrReviewClick}
             />
           ) : null}
           {issuesSupported ? (

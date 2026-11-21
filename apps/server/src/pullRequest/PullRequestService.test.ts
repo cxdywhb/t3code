@@ -5414,3 +5414,149 @@ it.effect.each(["expiry", "commit expiry", "cache hit", "commit cache hit", "ref
       assert.strictEqual(diffReads, 2);
     }),
 );
+
+it.effect(
+  "discovers cloud account-wide MRs on configured hosts, deduplicates local checkouts, and serves cloud: refs without a local clone",
+  () =>
+    Effect.gen(function* () {
+      const commentsPosted: Array<{ repository: string; number: number; body: string }> = [];
+      const gitlabBase = fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
+        getViewer: ({ host }) => {
+          assert.strictEqual(host, "gitlab.example.test");
+          return Effect.succeed("alex");
+        },
+        listChangeRequests: ({ repository }) =>
+          Effect.succeed({
+            items:
+              repository === "team/local-repo"
+                ? [{ ...changeRequest(10, "2026-07-06T00:00:00Z"), title: "Local clone MR" }]
+                : [],
+            truncated: false,
+            continues: false,
+          }),
+        getChangeRequest: ({ host, repository, number }) => {
+          assert.include(["gitlab.example.test", "cloud-only.example.test"], host);
+          return Effect.succeed({
+            ...hostedChangeRequest("Cloud MR description"),
+            number,
+            title: `Uncloned ${repository}#${number}`,
+            url: `https://${host}/${repository}/-/merge_requests/${number}`,
+          });
+        },
+        comment: ({ repository, number, body }) =>
+          Effect.sync(() => {
+            commentsPosted.push({ repository, number, body });
+          }),
+      });
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p-local",
+            title: "local-repo",
+            workspaceRoot: "/repos/local-repo",
+            repository: "team/local-repo",
+            provider: "gitlab",
+            host: "gitlab.example.test",
+          }),
+        ],
+        providers: [
+          {
+            ...gitlabBase,
+            readsConfiguredHostWithoutCheckout: (host) =>
+              Effect.succeed(host === "gitlab.example.test" || host === "cloud-only.example.test"),
+            configuredHosts: Effect.succeed(["gitlab.example.test", "cloud-only.example.test"]),
+            getViewer: ({ host }) => {
+              assert.include(["gitlab.example.test", "cloud-only.example.test"], host);
+              return Effect.succeed("alex");
+            },
+            listAccountChangeRequests: ({ host, viewer, involvement }) => {
+              assert.strictEqual(viewer, "alex");
+              assert.strictEqual(involvement, "authored");
+              if (host === "cloud-only.example.test") {
+                return Effect.succeed({
+                  items: [
+                    {
+                      ...changeRequest(7, "2026-07-08T00:00:00Z"),
+                      repository: "zero-clone/pure-cloud",
+                      title: "Pure cloud MR",
+                    },
+                  ],
+                  truncated: false,
+                });
+              }
+              return Effect.succeed({
+                items: [
+                  {
+                    ...changeRequest(10, "2026-07-06T00:00:00Z"),
+                    repository: "team/local-repo",
+                    title: "Local clone MR",
+                  },
+                  {
+                    ...changeRequest(99, "2026-07-07T00:00:00Z"),
+                    repository: "cloud/uncloned-service",
+                    title: "Uncloned cloud MR",
+                  },
+                ],
+                truncated: false,
+              });
+            },
+          },
+        ],
+      });
+
+      const listed = yield* service.list({ state: "open", involvement: "authored" });
+      assert.deepStrictEqual(
+        listed.entries.map((entry) => ({
+          projectId: entry.projectId,
+          repository: entry.repository,
+          number: entry.number,
+        })),
+        [
+          {
+            projectId: "cloud:cloud-only.example.test" as ProjectId,
+            repository: "zero-clone/pure-cloud",
+            number: 7,
+          },
+          {
+            projectId: "cloud:gitlab.example.test" as ProjectId,
+            repository: "cloud/uncloned-service",
+            number: 99,
+          },
+          {
+            projectId: "p-local" as ProjectId,
+            repository: "team/local-repo",
+            number: 10,
+          },
+        ],
+      );
+
+      const cloudRefWithSibling = {
+        projectId: "cloud:gitlab.example.test" as ProjectId,
+        host: "gitlab.example.test",
+        repository: "cloud/uncloned-service",
+        number: 99,
+      };
+      const detail = yield* service.detail(cloudRefWithSibling);
+      assert.strictEqual(detail.title, "Uncloned cloud/uncloned-service#99");
+      assert.strictEqual(detail.projectId, "cloud:gitlab.example.test");
+      assert.strictEqual(detail.projectTitle, "cloud/uncloned-service");
+
+      const pureCloudRef = {
+        projectId: "cloud:cloud-only.example.test" as ProjectId,
+        host: "cloud-only.example.test",
+        repository: "zero-clone/pure-cloud",
+        number: 7,
+      };
+      const pureDetail = yield* service.detail(pureCloudRef);
+      assert.strictEqual(pureDetail.projectId, "cloud:cloud-only.example.test");
+
+      yield* service.comment({ ...pureCloudRef, body: "Reviewed directly from cloud!" });
+      assert.deepStrictEqual(commentsPosted, [
+        {
+          repository: "zero-clone/pure-cloud",
+          number: 7,
+          body: "Reviewed directly from cloud!",
+        },
+      ]);
+    }),
+);

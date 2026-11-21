@@ -244,6 +244,18 @@ import {
   IssueAutomationWriteBackResult,
 } from "./issueAutomation.ts";
 import {
+  PrReviewCancelTaskInput,
+  PrReviewDeletePresetInput,
+  PrReviewError,
+  PrReviewPreset,
+  PrReviewSavePresetInput,
+  PrReviewStartInput,
+  PrReviewStartResult,
+  PrReviewStateSnapshot,
+  PrReviewWriteBackInput,
+  PrReviewWriteBackResult,
+} from "./prReview.ts";
+import {
   GuestShareCreateError,
   GuestShareCreateInput,
   GuestShareCreateResult,
@@ -724,6 +736,15 @@ export const WS_METHODS = {
   issueAutomationAnalyzeIssues: "issueAutomation.analyzeIssues",
   issueAutomationCancelTask: "issueAutomation.cancelTask",
   issueAutomationWriteBack: "issueAutomation.writeBack",
+
+  // Multi-model PR fusion review workstation methods
+  prReviewGetState: "prReview.getState",
+  prReviewSubscribe: "prReview.subscribe",
+  prReviewSavePreset: "prReview.savePreset",
+  prReviewDeletePreset: "prReview.deletePreset",
+  prReviewStartReview: "prReview.startReview",
+  prReviewCancelTask: "prReview.cancelTask",
+  prReviewWriteBack: "prReview.writeBack",
 
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlListNamespaces: "sourceControl.listNamespaces",
@@ -1640,6 +1661,51 @@ const WsIssueAutomationWriteBackRpc = Rpc.make(WS_METHODS.issueAutomationWriteBa
   payload: IssueAutomationWriteBackInput,
   success: IssueAutomationWriteBackResult,
   error: IssueAutomationRpcError,
+});
+
+const PrReviewRpcError = Schema.Union([PrReviewError, EnvironmentAuthorizationError]);
+
+const WsPrReviewGetStateRpc = Rpc.make(WS_METHODS.prReviewGetState, {
+  payload: Schema.Struct({}),
+  success: PrReviewStateSnapshot,
+  error: PrReviewRpcError,
+});
+
+const WsPrReviewSubscribeRpc = Rpc.make(WS_METHODS.prReviewSubscribe, {
+  payload: Schema.Struct({}),
+  success: PrReviewStateSnapshot,
+  error: PrReviewRpcError,
+  stream: true,
+});
+
+const WsPrReviewSavePresetRpc = Rpc.make(WS_METHODS.prReviewSavePreset, {
+  payload: PrReviewSavePresetInput,
+  success: PrReviewPreset,
+  error: PrReviewRpcError,
+});
+
+const WsPrReviewDeletePresetRpc = Rpc.make(WS_METHODS.prReviewDeletePreset, {
+  payload: PrReviewDeletePresetInput,
+  success: Schema.Void,
+  error: PrReviewRpcError,
+});
+
+const WsPrReviewStartReviewRpc = Rpc.make(WS_METHODS.prReviewStartReview, {
+  payload: PrReviewStartInput,
+  success: PrReviewStartResult,
+  error: PrReviewRpcError,
+});
+
+const WsPrReviewCancelTaskRpc = Rpc.make(WS_METHODS.prReviewCancelTask, {
+  payload: PrReviewCancelTaskInput,
+  success: Schema.Void,
+  error: PrReviewRpcError,
+});
+
+const WsPrReviewWriteBackRpc = Rpc.make(WS_METHODS.prReviewWriteBack, {
+  payload: PrReviewWriteBackInput,
+  success: PrReviewWriteBackResult,
+  error: PrReviewRpcError,
 });
 
 const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLookupRepository, {
@@ -2784,4 +2850,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssueAutomationAnalyzeIssuesRpc,
   WsIssueAutomationCancelTaskRpc,
   WsIssueAutomationWriteBackRpc,
+  WsPrReviewGetStateRpc,
+  WsPrReviewSubscribeRpc,
+  WsPrReviewSavePresetRpc,
+  WsPrReviewDeletePresetRpc,
+  WsPrReviewStartReviewRpc,
+  WsPrReviewCancelTaskRpc,
+  WsPrReviewWriteBackRpc,
 ).middleware(RpcScopeAuthorization);

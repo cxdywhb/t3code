@@ -27,6 +27,7 @@ import {
   type PullRequestSummary,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -36,6 +37,7 @@ import {
   GitCommitHorizontalIcon,
   MessageSquareIcon,
   PanelRightIcon,
+  ShieldCheckIcon,
 } from "lucide-react";
 import {
   lazy,
@@ -167,6 +169,16 @@ import { resolveFilterOptions } from "./pullRequestListOptions";
 import { PullRequestGuideTab } from "./PullRequestGuideTab";
 import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
+import { useNavigate } from "@tanstack/react-router";
+import { AsyncResult } from "effect/reactivity";
+import {
+  deriveProviderInstanceEntries,
+  isProviderInstancePickerVisible,
+} from "~/providerInstances";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
+import { usePrReviewLiveState } from "~/state/prReview";
+import { buildThreadRouteParams } from "~/threadRoutes";
+import { LaunchPrReviewDialog } from "../prReview/PrReviewLaunchModal";
 
 import { changeRequestTermKind, type ChangeRequestTermKind } from "./changeRequestTerm";
 
@@ -825,6 +837,24 @@ export function PullRequestDetailPanel({
   const [pendingAction, setPendingAction] = useState<PullRequestAction | null>(null);
   const actionPending = pendingAction !== null;
   const newThread = useNewThreadHandler();
+  const navigateToRoute = useNavigate();
+  const [fusionModalOpen, setFusionModalOpen] = useState(false);
+  const { snapshot: prReviewSnapshot } = usePrReviewLiveState(environmentId);
+  const prReviewServerConfig = useAtomValue(
+    serverEnvironment.configProjection({ environmentId, input: {} }),
+  );
+  const prReviewModelOptions = deriveProviderInstanceEntries(
+    AsyncResult.getOrElse(prReviewServerConfig, () => null)?.config.providers ??
+      EMPTY_SERVER_PROVIDERS,
+  )
+    .filter(isProviderInstancePickerVisible)
+    .flatMap((entry) =>
+      entry.models.map((mod) => ({
+        key: `${entry.instanceId}::${mod.slug}`,
+        label: `${entry.displayName} · ${mod.name || mod.slug}`,
+        selection: { instanceId: entry.instanceId, model: mod.slug },
+      })),
+    );
   const { environments } = useEnvironments();
   const pickableEnvironments =
     context === "page"
@@ -1627,6 +1657,10 @@ export function PullRequestDetailPanel({
                 resolveConflicts={resolveConflictsControl}
               />
               {checkoutControl}
+              <Button size="xs" variant="outline" onClick={() => setFusionModalOpen(true)}>
+                <ShieldCheckIcon className="size-3.5 text-primary" />
+                <T>Fusion Review</T>
+              </Button>
               <PullRequestActionsMenu
                 environmentId={environmentId}
                 reference={reference}
@@ -1673,6 +1707,7 @@ export function PullRequestDetailPanel({
                 perform={perform}
                 openOnHostText={openOnHostText}
                 copyReference={copyReference}
+                onOpenFusionReview={() => setFusionModalOpen(true)}
               />
             </TooltipProvider>
           ) : null}
@@ -2229,6 +2264,46 @@ export function PullRequestDetailPanel({
             openReviewRequest={openReviewRequest}
           />
         </div>
+      ) : null}
+      {detail && fusionModalOpen ? (
+        <LaunchPrReviewDialog
+          open
+          onOpenChange={setFusionModalOpen}
+          environmentId={environmentId}
+          targets={[
+            {
+              provider: detail.provider,
+              host:
+                reference.host ??
+                sourceControlClients.parseChangeRequestUrl(detail.url)?.link.host ??
+                (detail.provider === "gitlab" ? "gitlab.com" : "github.com"),
+              projectId: reference.projectId,
+              projectTitle: detail.projectTitle,
+              repository: reference.repository,
+              number: reference.number,
+              title: detail.title,
+              url: detail.url,
+              author: detail.author?.login ?? null,
+              headBranch: detail.headBranch,
+              baseBranch: detail.baseBranch,
+            },
+          ]}
+          presets={prReviewSnapshot.presets}
+          availableSkills={prReviewSnapshot.availableSkills}
+          modelOptions={prReviewModelOptions}
+          onLaunched={({ jumpThreadId, mode }) => {
+            if (mode === "direct_agent" && jumpThreadId) {
+              void navigateToRoute({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(
+                  scopeThreadRef(environmentId, jumpThreadId as ThreadId),
+                ),
+              });
+              return;
+            }
+            void navigateToRoute({ to: "/pr-review" });
+          }}
+        />
       ) : null}
     </div>
   );

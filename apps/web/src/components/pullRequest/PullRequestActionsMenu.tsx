@@ -24,6 +24,7 @@ import {
   MoreHorizontalIcon,
   RotateCcwIcon,
   ScrollTextIcon,
+  ShieldCheckIcon,
   Trash2Icon,
 } from "lucide-react";
 import { Branch, msg, T, useGT, useMessages } from "gt-react";
@@ -108,6 +109,7 @@ export function PullRequestActionsMenu({
   perform,
   openOnHostText,
   copyReference,
+  onOpenFusionReview,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
@@ -161,6 +163,7 @@ export function PullRequestActionsMenu({
   perform: PerformPullRequestAction;
   openOnHostText: string;
   copyReference: (value: string, failureTitle: string) => void;
+  onOpenFusionReview?: () => void;
 }) {
   const gt = useGT();
   const openLink = useOpenLink(threadRef);
@@ -266,6 +269,19 @@ export function PullRequestActionsMenu({
           <RefreshIcon size="sm" refreshing={refreshing} />
           <T context="verb, menu item">Refresh</T>
         </MenuItem>
+        {onOpenFusionReview ? (
+          <MenuItem onClick={onOpenFusionReview}>
+            <ShieldCheckIcon className="mt-1 size-3.5 shrink-0 self-start text-primary" />
+            <span className="flex min-w-0 flex-col">
+              <span>
+                <T>Multi-Model Fusion Review</T>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                <T>Run parallel models with skills or jump directly to an Agent review session.</T>
+              </span>
+            </span>
+          </MenuItem>
+        ) : null}
         <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
           <MessageCircleQuestionIcon className="mt-1 size-3.5 shrink-0 self-start" />
           <span className="flex min-w-0 flex-col">

@@ -4,6 +4,7 @@ import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import type {
   PullRequestActor,
   PullRequestCapabilities,
@@ -12,6 +13,7 @@ import type {
   PullRequestViewerPermissions,
 } from "@t3tools/contracts";
 
+import * as GitLabCredentials from "./GitLabCredentials.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import type { GitLabDiffRefs, GitLabMergeRequestListState } from "./gitLabMergeRequestJson.ts";
 import {
@@ -52,8 +54,9 @@ const CAPABILITIES: PullRequestCapabilities = {
 
 const UNAVAILABLE_REQUIREMENT = {
   missing:
-    "GitLab CLI (`glab`) is required to browse change requests on this host. Install it from https://gitlab.com/gitlab-org/cli and reload.",
-  unauthenticated: "GitLab CLI is not authenticated. Run `glab auth login` and retry.",
+    "Add a GitLab Personal Access Token in Settings → Source control & issues, or install GitLab CLI (`glab`) from https://gitlab.com/gitlab-org/cli and reload.",
+  unauthenticated:
+    "GitLab is not authenticated for this host. Add or update your Personal Access Token in Settings → Source control & issues, or run `glab auth login`.",
 };
 
 /**
@@ -128,6 +131,7 @@ const isOutdated = (
 
 export const make = Effect.gen(function* () {
   const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+  const credentialsOpt = yield* Effect.serviceOption(GitLabCredentials.GitLabCredentials);
 
   // Keyed on the checkout as well: `glab` picks the host and the account to answer as from the
   // checkout's remote and config, so two checkouts may read the same project as different people.
@@ -267,13 +271,53 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const listAccountMergeRequests = cli.listAccountMergeRequests;
+
   const provider: PullRequestProviderApi = {
     kind: SourceControlProviderKind.make("gitlab"),
     capabilities: CAPABILITIES,
     mergeMessageRewrite: removeAgentCredits,
     unavailableRequirement: UNAVAILABLE_REQUIREMENT,
+    configuredHosts: Option.isSome(credentialsOpt)
+      ? credentialsOpt.value.configuredHosts.pipe(
+          Effect.map((entries) =>
+            entries
+              .filter((entry) => entry.enabled && Option.isSome(entry.token))
+              .map((entry) => entry.host),
+          ),
+        )
+      : Effect.succeed([]),
+    readsConfiguredHostWithoutCheckout: (host) =>
+      Option.isSome(credentialsOpt)
+        ? credentialsOpt.value.hasConfiguredHost(host)
+        : Effect.succeed(false),
 
     getViewer: (input) => cli.getViewerUsername(input).pipe(Effect.mapError(fail("getViewer"))),
+
+    ...(listAccountMergeRequests === undefined
+      ? {}
+      : {
+          listAccountChangeRequests: (input) =>
+            listAccountMergeRequests({
+              cwd: input.cwd,
+              host: input.host,
+              state: input.state,
+              involvement: input.involvement,
+              viewer: input.viewer,
+              limit: input.limit,
+              query: input.query,
+              filters: input.filters,
+            }).pipe(
+              Effect.map(({ items, truncated, listStates: states }) => ({
+                items: items.map((item) => {
+                  const st = states?.get(`${item.repository.toLowerCase()}!${item.number}`);
+                  return st === undefined ? item : { ...item, ...st };
+                }),
+                truncated,
+              })),
+              Effect.mapError(fail("listAccountChangeRequests")),
+            ),
+        }),
 
     listChangeRequests: (input) =>
       Cache.get(graphqlListSupport, JSON.stringify([input.cwd, input.host])).pipe(

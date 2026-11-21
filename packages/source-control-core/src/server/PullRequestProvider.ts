@@ -383,6 +383,10 @@ export interface PullRequestProviderApi {
    * definition's `publicHost` can be read from a project with no checkout of its repository.
    */
   readonly readsPublicHostWithoutCheckout?: boolean;
+  /** Hosts with active saved/environment credentials that can be queried without local checkouts. */
+  readonly configuredHosts?: Effect.Effect<ReadonlyArray<string>>;
+  /** Whether `host` has active credentials allowing repository-addressed reads without a checkout. */
+  readonly readsConfiguredHostWithoutCheckout?: (host: string) => Effect.Effect<boolean>;
   /** Concurrent summary reads share requests, so callers may keep many in flight. */
   readonly batchesReads?: boolean;
   /**
@@ -415,6 +419,19 @@ export interface PullRequestProviderApi {
     readonly cwd: string;
     readonly host: string;
     readonly repositories: ReadonlyArray<string>;
+    readonly state: PullRequestListState;
+    readonly involvement: PullRequestInvolvement;
+    readonly viewer: string;
+    readonly limit: number;
+    readonly query?: string | undefined;
+    readonly cursor?: ProviderAcrossListCursor | undefined;
+    readonly filters?: PullRequestListFilters | undefined;
+  }) => Effect.Effect<ProviderBatchedChangeRequestPage, PullRequestProviderError>;
+
+  /** Cloud-wide change requests for the authenticated account on `host`, including uncloned repos. */
+  readonly listAccountChangeRequests?: (input: {
+    readonly cwd: string;
+    readonly host: string;
     readonly state: PullRequestListState;
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;

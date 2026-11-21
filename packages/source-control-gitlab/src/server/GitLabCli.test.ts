@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/process";
 
 import { VcsProcessExitError } from "@t3tools/contracts";
@@ -89,6 +90,7 @@ layer("GitLabCli.layer", (it) => {
         }),
       );
       const classifyFailure = mockedRun.mock.calls.at(-1)?.[0].classifyFailure;
+      assert.strictEqual(classifyFailure?.("glab: HTTP 401"), "authentication");
       assert.strictEqual(
         classifyFailure?.(
           "x gitlab.example.test has not been authenticated with glab. Run `glab auth login`",
@@ -423,6 +425,33 @@ layer("GitLabCli.layer", (it) => {
 
       assert.strictEqual(error._tag, "GitLabCliRateLimitError");
       assert.strictEqual(error.cause, cause);
+    }),
+  );
+
+  it.effect("uses the selected host's token for the child process", () =>
+    Effect.gen(function* () {
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));
+      const glab = yield* GitLabCli.GitLabCli;
+      const host = "gitlab.example.com";
+      const args = ["api", "projects", "--hostname", host];
+      yield* glab.execute({
+        cwd: "/repo",
+        host,
+        callerNamedHost: host,
+        args,
+        token: Redacted.make("saved-token"),
+      });
+      expect(mockedRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args,
+          env: {
+            GITLAB_HOST: host,
+            GITLAB_TOKEN: "saved-token",
+            GITLAB_ACCESS_TOKEN: "",
+            OAUTH_TOKEN: "",
+          },
+        }),
+      );
     }),
   );
 });

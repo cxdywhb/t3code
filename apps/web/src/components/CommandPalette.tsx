@@ -1723,6 +1723,27 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:pr-review",
+    searchTerms: [
+      "pr",
+      "mr",
+      "review",
+      "fusion",
+      "gitlab",
+      "multi-model",
+      "审查",
+      "融合",
+      "工作站",
+    ],
+    title: gt("Open PR Multi-Model Fusion Review"),
+    icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/pr-review" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
     value: "action:repositories",
     searchTerms: ["repositories", "repos", "gitlab", "groups", "clone", "仓库"],
     title: gt("Browse GitLab repositories"),

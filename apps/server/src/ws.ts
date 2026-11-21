@@ -260,6 +260,7 @@ import * as IssueService from "./issue/IssueService.ts";
 import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as IssueAutomationService from "./issueAutomation/IssueAutomationService.ts";
+import * as PrReviewService from "./prReview/PrReviewService.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
@@ -1498,6 +1499,7 @@ export const layerWsRpc = (
       const threadIssues = yield* ThreadIssueService.ThreadIssueService;
       const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
       const issueAutomation = yield* IssueAutomationService.IssueAutomationService;
+      const prReview = yield* PrReviewService.PrReviewService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2022,6 +2024,13 @@ export const layerWsRpc = (
         [WS_METHODS.issueAutomationAnalyzeIssues]: (input) => issueAutomation.analyzeIssues(input),
         [WS_METHODS.issueAutomationCancelTask]: (input) => issueAutomation.cancelTask(input),
         [WS_METHODS.issueAutomationWriteBack]: (input) => issueAutomation.writeBack(input),
+        [WS_METHODS.prReviewGetState]: () => prReview.getState,
+        [WS_METHODS.prReviewSubscribe]: () => prReview.subscribe,
+        [WS_METHODS.prReviewSavePreset]: (input) => prReview.savePreset(input),
+        [WS_METHODS.prReviewDeletePreset]: (input) => prReview.deletePreset(input),
+        [WS_METHODS.prReviewStartReview]: (input) => prReview.startReview(input),
+        [WS_METHODS.prReviewCancelTask]: (input) => prReview.cancelTask(input),
+        [WS_METHODS.prReviewWriteBack]: (input) => prReview.writeBack(input),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -3714,6 +3723,7 @@ export const layer = Layer.unwrap(
     const threadIssues = yield* ThreadIssueService.ThreadIssueService;
     const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
     const issueAutomation = yield* IssueAutomationService.IssueAutomationService;
+    const prReview = yield* PrReviewService.PrReviewService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
@@ -3813,6 +3823,7 @@ export const layer = Layer.unwrap(
               Layer.provide(
                 Layer.succeed(IssueAutomationService.IssueAutomationService, issueAutomation),
               ),
+              Layer.provide(Layer.succeed(PrReviewService.PrReviewService, prReview)),
               Layer.provide(OtlpEndpointCheck.layer),
               Layer.provide(
                 Layer.succeed(

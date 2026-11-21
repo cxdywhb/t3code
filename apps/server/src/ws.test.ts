@@ -123,6 +123,7 @@ import * as IssueService from "./issue/IssueService.ts";
 import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as IssueAutomationService from "./issueAutomation/IssueAutomationService.ts";
+import * as PrReviewService from "./prReview/PrReviewService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -877,6 +878,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ThreadIssueService.ThreadIssueService)({}),
   Layer.mock(IssueTrackerConnections.IssueTrackerConnections)({}),
   Layer.mock(IssueAutomationService.IssueAutomationService)({}),
+  Layer.mock(PrReviewService.PrReviewService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
   Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),

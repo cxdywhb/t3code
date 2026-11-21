@@ -22,6 +22,7 @@ import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatRepositoriesRouteImport } from './routes/_chat.repositories'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
+import { Route as ChatPrReviewRouteImport } from './routes/_chat.pr-review'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatIssuesRouteImport } from './routes/_chat.issues'
 import { Route as ChatIssueAutomationRouteImport } from './routes/_chat.issue-automation'
@@ -119,6 +120,11 @@ const ChatRepositoriesRoute = ChatRepositoriesRouteImport.update({
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatPrReviewRoute = ChatPrReviewRouteImport.update({
+  id: '/pr-review',
+  path: '/pr-review',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatNewRoute = ChatNewRouteImport.update({
@@ -312,6 +318,7 @@ export interface FileRoutesByFullPath {
   '/issue-automation': typeof ChatIssueAutomationRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
+  '/pr-review': typeof ChatPrReviewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/repositories': typeof ChatRepositoriesRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -359,6 +366,7 @@ export interface FileRoutesByTo {
   '/issue-automation': typeof ChatIssueAutomationRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
+  '/pr-review': typeof ChatPrReviewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/repositories': typeof ChatRepositoriesRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -409,6 +417,7 @@ export interface FileRoutesById {
   '/_chat/issue-automation': typeof ChatIssueAutomationRoute
   '/_chat/issues': typeof ChatIssuesRoute
   '/_chat/new': typeof ChatNewRoute
+  '/_chat/pr-review': typeof ChatPrReviewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/repositories': typeof ChatRepositoriesRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
@@ -460,6 +469,7 @@ export interface FileRouteTypes {
     | '/issue-automation'
     | '/issues'
     | '/new'
+    | '/pr-review'
     | '/pull-requests'
     | '/repositories'
     | '/settings'
@@ -507,6 +517,7 @@ export interface FileRouteTypes {
     | '/issue-automation'
     | '/issues'
     | '/new'
+    | '/pr-review'
     | '/pull-requests'
     | '/repositories'
     | '/settings'
@@ -556,6 +567,7 @@ export interface FileRouteTypes {
     | '/_chat/issue-automation'
     | '/_chat/issues'
     | '/_chat/new'
+    | '/_chat/pr-review'
     | '/_chat/pull-requests'
     | '/_chat/repositories'
     | '/_chat/settings'
@@ -698,6 +710,13 @@ declare module '@tanstack/react-router' {
       path: '/pull-requests'
       fullPath: '/pull-requests'
       preLoaderRoute: typeof ChatPullRequestsRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/pr-review': {
+      id: '/_chat/pr-review'
+      path: '/pr-review'
+      fullPath: '/pr-review'
+      preLoaderRoute: typeof ChatPrReviewRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/new': {
@@ -1009,6 +1028,7 @@ interface ChatRouteChildren {
   ChatIssueAutomationRoute: typeof ChatIssueAutomationRoute
   ChatIssuesRoute: typeof ChatIssuesRoute
   ChatNewRoute: typeof ChatNewRoute
+  ChatPrReviewRoute: typeof ChatPrReviewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatRepositoriesRoute: typeof ChatRepositoriesRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
@@ -1023,6 +1043,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatIssueAutomationRoute: ChatIssueAutomationRoute,
   ChatIssuesRoute: ChatIssuesRoute,
   ChatNewRoute: ChatNewRoute,
+  ChatPrReviewRoute: ChatPrReviewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatRepositoriesRoute: ChatRepositoriesRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,
