@@ -604,17 +604,35 @@ export function PrReviewWorkstationPage() {
                             />
                             <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
                             <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                <span className="font-mono text-muted-foreground">
-                                  {entry.repository}
-                                  {sigil}
-                                  {entry.number}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                  <span className="font-mono text-muted-foreground">
+                                    {entry.repository}
+                                    {sigil}
+                                    {entry.number}
+                                  </span>
                                 </span>
                                 {isCloudUncloned ? (
                                   <Badge variant="outline" size="sm">
                                     <T>Cloud MR</T>
                                   </Badge>
+                                ) : null}
+                                {latestTask ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedTaskId(latestTask.id)}
+                                    className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
+                                  >
+                                    {isPrReviewStageActive(latestTask.stage) ? (
+                                      <PrReviewStageBadge stage={latestTask.stage} />
+                                    ) : (
+                                      <PrReviewVerdictBadge verdict={latestTask.verdict} />
+                                    )}
+                                    <span className="text-2xs text-muted-foreground">
+                                      <T>Report</T>
+                                    </span>
+                                  </button>
                                 ) : null}
                               </div>
                               <div className="mt-0.5 truncate text-sm font-medium text-foreground">
@@ -631,23 +649,7 @@ export function PrReviewWorkstationPage() {
                               </div>
                             </div>
 
-                            <div className="flex min-w-36 shrink-0 flex-col items-stretch justify-center gap-1">
-                              {latestTask ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedTaskId(latestTask.id)}
-                                  className="inline-flex h-6 w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border/80 bg-background/60 px-2 text-2xs transition-colors hover:bg-accent"
-                                >
-                                  {isPrReviewStageActive(latestTask.stage) ? (
-                                    <PrReviewStageBadge stage={latestTask.stage} />
-                                  ) : (
-                                    <PrReviewVerdictBadge verdict={latestTask.verdict} />
-                                  )}
-                                  <span className="text-2xs text-muted-foreground">
-                                    <T>Report</T>
-                                  </span>
-                                </button>
-                              ) : null}
+                            <div className="flex min-w-34 shrink-0 flex-col items-stretch justify-center gap-2">
                               <Button
                                 size="xs"
                                 variant="outline"
