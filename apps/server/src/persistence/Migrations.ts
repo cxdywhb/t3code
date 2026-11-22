@@ -113,8 +113,10 @@ import Migration0102 from "./Migrations/102_ThreadItemCounts.ts";
 import Migration0103 from "./Migrations/103_IssueTrackerAdditionalScopes.ts";
 import Migration0104 from "./Migrations/104_ProjectionProjectsTrackedFolders.ts";
 import Migration0105 from "./Migrations/105_TaskFolders.ts";
-import Migration0106 from "./Migrations/106_IssueAutomation.ts";
-import Migration0107 from "./Migrations/107_PrReviewWorkstation.ts";
+import Migration0106 from "./Migrations/106_WorktreePathKeyIndex.ts";
+import Migration0107 from "./Migrations/107_DeferredSlashCommandIndex.ts";
+import Migration0108 from "./Migrations/108_IssueAutomation.ts";
+import Migration0109 from "./Migrations/109_PrReviewWorkstation.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -223,8 +225,10 @@ const migrationEntries = [
   [103, "IssueTrackerAdditionalScopes", Migration0103],
   [104, "ProjectionProjectsTrackedFolders", Migration0104],
   [105, "TaskFolders", Migration0105],
-  [106, "IssueAutomation", Migration0106],
-  [107, "PrReviewWorkstation", Migration0107],
+  [106, "WorktreePathKeyIndex", Migration0106],
+  [107, "DeferredSlashCommandIndex", Migration0107],
+  [108, "IssueAutomation", Migration0108],
+  [109, "PrReviewWorkstation", Migration0109],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -292,14 +296,26 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
   `;
   if (tables.length === 0) return true;
-  const rows = yield* sql<{ readonly latestId: number | null; readonly previewRows: number }>`
+  const rows = yield* sql<{
+    readonly latestId: number | null;
+    readonly previewRows: number;
+    readonly legacyForkRows: number;
+  }>`
     SELECT
       MAX(migration_id) AS latestId,
-      SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows
+      SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows,
+      SUM(
+        (migration_id = 106 AND name = 'IssueAutomation') OR
+        (migration_id = 107 AND name = 'PrReviewWorkstation')
+      ) AS legacyForkRows
     FROM effect_sql_migrations
   `;
   const row = rows[0];
-  return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
+  return (
+    (row?.latestId ?? 0) < latestMigrationId ||
+    (row?.previewRows ?? 0) > 0 ||
+    (row?.legacyForkRows ?? 0) > 0
+  );
 });
 
 const run = Migrator.make({});
@@ -316,12 +332,24 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   if (hasPending) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
+  const sql = yield* SqlClient.SqlClient;
+  if (hasPending) {
+    const ledgerTables = yield* sql`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+    `;
+    if (ledgerTables.length > 0) {
+      yield* sql`
+        DELETE FROM effect_sql_migrations
+        WHERE (migration_id = 106 AND name = 'IssueAutomation')
+           OR (migration_id = 107 AND name = 'PrReviewWorkstation')
+      `;
+    }
+  }
   // The reconcile takes the write lock; CLI startup must not contend with the server for a no-op.
   const previewMigrations = includesV2 && hasPending ? yield* reconcileV2PreviewMigration() : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
-  const sql = yield* SqlClient.SqlClient;
   const ledger = yield* sql`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
   `;
