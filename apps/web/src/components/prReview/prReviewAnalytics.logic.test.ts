@@ -1,11 +1,13 @@
 import {
   PositiveInt,
+  PrReviewPresetId,
   PrReviewTaskId,
   ProjectId,
   ProviderInstanceId,
   SourceControlProviderKind,
   ThreadId,
   TrimmedNonEmptyString,
+  type PrReviewPreset,
   type PrReviewTask,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -14,6 +16,7 @@ import {
   computeParallelSpeedup,
   computePrReviewAnalytics,
   extractTaskDiffStats,
+  resolveInitialPrReviewLaunchConfig,
 } from "./prReviewAnalytics.logic";
 
 function makeTask(id: string, overrides: Partial<Omit<PrReviewTask, "id">> = {}): PrReviewTask {
@@ -197,5 +200,124 @@ describe("prReviewAnalytics.logic", () => {
     expect(summary.modelLeaderboard.length).toBe(2);
     expect(summary.repoHotspots.length).toBe(2);
     expect(summary.repoHotspots[0]?.repository).toBe("acme/platform/api-gateway");
+  });
+
+  it("restores saved launch preferences and filters unavailable models or skills", () => {
+    const preset: PrReviewPreset = {
+      id: PrReviewPresetId.make("preset-default"),
+      name: TrimmedNonEmptyString.make("Default Preset"),
+      description: "",
+      isDefault: true,
+      reviewerModels: [
+        {
+          id: TrimmedNonEmptyString.make("preset-slot-1"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex-default"),
+            model: "gpt-5",
+          },
+          role: "security",
+          enabled: true,
+        },
+      ],
+      synthesizerModel: null,
+      boundSkillNames: [TrimmedNonEmptyString.make("preset-skill")],
+      customInstructions: "Preset rules",
+      writeBackMode: "auto_comment",
+      updatedAt: "2026-11-22T00:00:00.000Z",
+    };
+
+    const resolved = resolveInitialPrReviewLaunchConfig({
+      savedPrefs: {
+        mode: "direct_agent",
+        selectedPresetId: "__custom__",
+        slots: [
+          {
+            id: TrimmedNonEmptyString.make("slot-1"),
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex-default"),
+              model: "gpt-5.4",
+              options: [{ id: "reasoningEffort", value: "high" }],
+            },
+            role: "architecture",
+            enabled: true,
+          },
+          {
+            id: TrimmedNonEmptyString.make("slot-2"),
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("removed-provider"),
+              model: "gone",
+            },
+            role: "performance",
+            enabled: true,
+          },
+        ],
+        synthesizer: {
+          instanceId: ProviderInstanceId.make("claude-default"),
+          model: "claude-sonnet-4-6",
+          options: [{ id: "effort", value: "medium" }],
+        },
+        boundSkills: ["ym-review", "deleted-skill"],
+        writeBackMode: "auto_review",
+        customInstructions: "Always check edge cases",
+      },
+      presets: [preset],
+      targetCount: 1,
+      isSelectionAvailable: (selection) =>
+        selection.instanceId !== ProviderInstanceId.make("removed-provider"),
+      availableSkillNames: new Set(["ym-review"]),
+      fallbackSelection: {
+        instanceId: ProviderInstanceId.make("codex-default"),
+        model: "gpt-5",
+      },
+    });
+
+    expect(resolved.mode).toBe("direct_agent");
+    expect(resolved.selectedPresetId).toBe("__custom__");
+    expect(resolved.slots).toEqual([
+      {
+        id: TrimmedNonEmptyString.make("slot-1"),
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex-default"),
+          model: "gpt-5.4",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+        role: "architecture",
+        enabled: true,
+      },
+    ]);
+    expect(resolved.synthesizer).toEqual({
+      instanceId: ProviderInstanceId.make("claude-default"),
+      model: "claude-sonnet-4-6",
+      options: [{ id: "effort", value: "medium" }],
+    });
+    expect(resolved.boundSkills).toEqual(["ym-review"]);
+    expect(resolved.writeBackMode).toBe("auto_review");
+    expect(resolved.customInstructions).toBe("Always check edge cases");
+
+    const multiTargetOverride = resolveInitialPrReviewLaunchConfig({
+      savedPrefs: {
+        mode: "direct_agent",
+        selectedPresetId: preset.id,
+        slots: preset.reviewerModels,
+        synthesizer: null,
+        boundSkills: [],
+        writeBackMode: "manual",
+        customInstructions: "",
+      },
+      presets: [preset],
+      targetCount: 2,
+    });
+    expect(multiTargetOverride.mode).toBe("multi_model_fusion");
+
+    const fallbackPreset = resolveInitialPrReviewLaunchConfig({
+      savedPrefs: null,
+      presets: [preset],
+      targetCount: 1,
+      defaultMode: "direct_agent",
+    });
+    expect(fallbackPreset.mode).toBe("direct_agent");
+    expect(fallbackPreset.selectedPresetId).toBe(preset.id);
+    expect(fallbackPreset.boundSkills).toEqual(["preset-skill"]);
+    expect(fallbackPreset.customInstructions).toBe("Preset rules");
   });
 });

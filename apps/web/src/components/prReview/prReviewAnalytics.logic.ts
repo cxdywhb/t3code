@@ -1,11 +1,19 @@
 import type {
   PrReviewFindingSeverity,
   PrReviewModelRun,
+  PrReviewPreset,
   PrReviewRole,
   PrReviewStage,
   PrReviewTask,
 } from "@t3tools/contracts";
-import { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  PrReviewMode,
+  PrReviewModelSlot,
+  PrReviewWriteBackMode,
+  PullRequestInvolvement,
+  PullRequestListState,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 export const PrReviewWorkstationTabSchema = Schema.Literals([
@@ -57,6 +65,132 @@ export const DEFAULT_PR_WORKSTATION_PREFS: PrReviewWorkstationPrefs = {
   roiBaseline: "standard",
   inspectorWidth: DEFAULT_PR_INSPECTOR_WIDTH,
 };
+
+export const PR_REVIEW_LAUNCH_PREFS_STORAGE_PREFIX = "t3code:pr-review:launch-prefs:v1:";
+
+export const PrReviewLaunchPrefsSchema = Schema.Struct({
+  mode: PrReviewMode,
+  selectedPresetId: Schema.String,
+  slots: Schema.Array(PrReviewModelSlot),
+  synthesizer: Schema.NullOr(ModelSelection),
+  boundSkills: Schema.Array(Schema.String),
+  writeBackMode: PrReviewWriteBackMode,
+  customInstructions: Schema.String,
+});
+export type PrReviewLaunchPrefs = typeof PrReviewLaunchPrefsSchema.Type;
+
+export interface ResolvedPrReviewLaunchConfig {
+  readonly mode: PrReviewMode;
+  readonly selectedPresetId: string;
+  readonly slots: ReadonlyArray<PrReviewModelSlot>;
+  readonly synthesizer: ModelSelection | null;
+  readonly boundSkills: ReadonlyArray<string>;
+  readonly writeBackMode: PrReviewWriteBackMode;
+  readonly customInstructions: string;
+}
+
+export function resolveInitialPrReviewLaunchConfig(input: {
+  readonly savedPrefs: PrReviewLaunchPrefs | null;
+  readonly presets: ReadonlyArray<PrReviewPreset>;
+  readonly targetCount: number;
+  readonly defaultMode?: PrReviewMode;
+  readonly isSelectionAvailable?: (selection: ModelSelection) => boolean;
+  readonly availableSkillNames?: ReadonlySet<string>;
+  readonly fallbackSelection?: ModelSelection | null;
+}): ResolvedPrReviewLaunchConfig {
+  const defaultPreset =
+    input.presets.find((preset) => preset.isDefault) ?? input.presets[0] ?? null;
+  const isAvailable = (selection: ModelSelection): boolean =>
+    input.isSelectionAvailable ? input.isSelectionAvailable(selection) : true;
+  const filterSkills = (skills: ReadonlyArray<string>): string[] =>
+    input.availableSkillNames && input.availableSkillNames.size > 0
+      ? skills.filter((skill) => input.availableSkillNames!.has(skill))
+      : [...skills];
+
+  const fallbackSlots = (): PrReviewModelSlot[] =>
+    input.fallbackSelection
+      ? [
+          {
+            id: "slot-1",
+            modelSelection: input.fallbackSelection,
+            role: "comprehensive",
+            enabled: true,
+          },
+        ]
+      : [];
+
+  const mode: PrReviewMode =
+    input.targetCount > 1
+      ? "multi_model_fusion"
+      : (input.defaultMode ?? input.savedPrefs?.mode ?? "multi_model_fusion");
+
+  if (input.savedPrefs) {
+    const validSavedSlots = input.savedPrefs.slots.filter((slot) =>
+      isAvailable(slot.modelSelection),
+    );
+    const validPresetSlots = defaultPreset
+      ? defaultPreset.reviewerModels.filter((slot) => isAvailable(slot.modelSelection))
+      : [];
+    const slots =
+      validSavedSlots.length > 0
+        ? validSavedSlots
+        : validPresetSlots.length > 0
+          ? validPresetSlots
+          : fallbackSlots();
+
+    const synthesizer =
+      input.savedPrefs.synthesizer && isAvailable(input.savedPrefs.synthesizer)
+        ? input.savedPrefs.synthesizer
+        : null;
+
+    const selectedPresetId =
+      input.savedPrefs.selectedPresetId === "__custom__" ||
+      input.presets.some((preset) => preset.id === input.savedPrefs!.selectedPresetId)
+        ? input.savedPrefs.selectedPresetId
+        : "__custom__";
+
+    return {
+      mode,
+      selectedPresetId,
+      slots,
+      synthesizer,
+      boundSkills: filterSkills(input.savedPrefs.boundSkills),
+      writeBackMode: input.savedPrefs.writeBackMode,
+      customInstructions: input.savedPrefs.customInstructions,
+    };
+  }
+
+  if (defaultPreset) {
+    const validPresetSlots = defaultPreset.reviewerModels.filter((slot) =>
+      isAvailable(slot.modelSelection),
+    );
+    const slots = validPresetSlots.length > 0 ? validPresetSlots : fallbackSlots();
+    const synthesizer =
+      defaultPreset.synthesizerModel && isAvailable(defaultPreset.synthesizerModel)
+        ? defaultPreset.synthesizerModel
+        : null;
+
+    return {
+      mode,
+      selectedPresetId: defaultPreset.id,
+      slots,
+      synthesizer,
+      boundSkills: filterSkills(defaultPreset.boundSkillNames),
+      writeBackMode: defaultPreset.writeBackMode,
+      customInstructions: defaultPreset.customInstructions ?? "",
+    };
+  }
+
+  return {
+    mode,
+    selectedPresetId: "__custom__",
+    slots: fallbackSlots(),
+    synthesizer: null,
+    boundSkills: [],
+    writeBackMode: "manual",
+    customInstructions: "",
+  };
+}
 
 export function isPrReviewTaskRunning(stage: PrReviewStage): boolean {
   return (

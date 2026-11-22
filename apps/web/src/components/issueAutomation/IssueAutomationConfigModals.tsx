@@ -13,13 +13,29 @@ import {
   type ModelSelection,
   type ProjectId,
 } from "@t3tools/contracts";
-import { T, useGT } from "gt-react";
-import { BotIcon, ChevronDownIcon, FolderGit2Icon, PlusIcon, Trash2Icon } from "lucide-react";
+import * as Schema from "effect/Schema";
+import { T, useGT, Var } from "gt-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
+  FolderGit2Icon,
+  FolderIcon,
+  FolderOpenIcon,
+  PlusIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useState, type ReactNode } from "react";
 
+import {
+  OfficialModelPicker,
+  useOfficialModelCatalog,
+} from "~/components/chat/OfficialModelPicker";
 import { SecretInput } from "~/components/settings/SecretInput";
 import { SettingsGroup } from "~/components/settings/SettingsGroup";
 import { SettingsRow } from "~/components/settings/settingsLayout";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { issueAutomationEnvironment } from "~/state/issueAutomation";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -58,9 +74,11 @@ import {
 } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { sortScopesByIdDesc } from "./issueAutomationAnalytics.logic";
 import { useActionModeLabel } from "./issueAutomationPresentation";
+import { formatCompactParentPath, groupProjectsByParentFolder } from "./projectMenuGrouping.logic";
 
 /**
  * Caps the visible height of long selector popups to 20 rows (20 * 1.75rem = 35rem)
@@ -72,32 +90,15 @@ export const SELECTOR_SCROLL_LIST_STYLE = {
 
 const MODAL_POPUP_STYLE = { maxHeight: "calc(100dvh - 2.5rem)" } as const;
 
-export interface SelectableModelOption {
-  readonly key: string;
-  readonly label: string;
-  readonly selection: ModelSelection;
-}
-
 export interface SelectableProjectOption {
   readonly id: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string;
 }
 
-const NONE_MODEL_VALUE = "__none__";
-
-export function encodeModelOptionKey(selection: ModelSelection | null): string {
-  if (!selection) return "";
-  return `${selection.instanceId}::${selection.model}`;
-}
-
-export function decodeModelOptionKey(
-  key: string,
-  options: ReadonlyArray<SelectableModelOption>,
-): ModelSelection | null {
-  if (!key || key === NONE_MODEL_VALUE) return null;
-  return options.find((opt) => opt.key === key)?.selection ?? null;
-}
+const COLLAPSED_PROJECT_FOLDERS_STORAGE_KEY =
+  "t3code:issue-automation:collapsed-project-folders:v1";
+const CollapsedProjectFoldersSchema = Schema.Array(Schema.String);
 
 export function SearchableScopeMenu({
   scopes,
@@ -176,110 +177,106 @@ export function SearchableScopeMenu({
   );
 }
 
-export function SearchableModelMenu({
-  options,
-  value,
-  onChange,
-  ariaLabel,
-  size = "sm",
-  triggerVariant = "select",
-  emptyOptionLabel,
-  leadingIcon,
-  className,
-}: {
-  readonly options: ReadonlyArray<SelectableModelOption>;
-  readonly value: string;
-  readonly onChange: (next: string) => void;
-  readonly ariaLabel: string;
-  readonly size?: "compact" | "sm" | "default";
-  readonly triggerVariant?: "select" | "outline";
-  readonly emptyOptionLabel?: string | undefined;
-  readonly leadingIcon?: ReactNode;
-  readonly className?: string;
-}) {
+function useProjectFolderGroups(projects: ReadonlyArray<SelectableProjectOption>, query: string) {
   const gt = useGT();
-  const [query, setQuery] = useState("");
-  const current = options.find((opt) => opt.key === value) ?? null;
-  const needle = query.trim().toLowerCase();
-  const filtered = options.filter(
-    (opt) =>
-      needle.length === 0 ||
-      opt.label.toLowerCase().includes(needle) ||
-      opt.key.toLowerCase().includes(needle),
+  const [collapsedKeys, setCollapsedKeys] = useLocalStorage(
+    COLLAPSED_PROJECT_FOLDERS_STORAGE_KEY,
+    [],
+    CollapsedProjectFoldersSchema,
+  );
+  const needle = query.trim();
+  const groups = groupProjectsByParentFolder(projects, {
+    search: needle,
+    ungroupedLabel: gt("Other"),
+  });
+  const collapsedSet = new Set(collapsedKeys);
+  const isSearching = needle.length > 0;
+  const hasMultipleGroups = groups.length > 1;
+  const anyExpanded = groups.some((group) => !collapsedSet.has(group.key));
+
+  const toggleGroup = (key: string) => {
+    setCollapsedKeys((prev) =>
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+    );
+  };
+
+  const toggleAllGroups = () => {
+    if (anyExpanded) {
+      setCollapsedKeys(groups.map((group) => group.key));
+      return;
+    }
+    setCollapsedKeys([]);
+  };
+
+  return {
+    groups,
+    collapsedSet,
+    isSearching,
+    hasMultipleGroups,
+    anyExpanded,
+    toggleGroup,
+    toggleAllGroups,
+  };
+}
+
+function ProjectFolderGroupHeader({
+  label,
+  parentDir,
+  count,
+  collapsed,
+  hasActiveSelection,
+  onToggle,
+}: {
+  readonly label: string;
+  readonly parentDir: string;
+  readonly count: number;
+  readonly collapsed: boolean;
+  readonly hasActiveSelection: boolean;
+  readonly onToggle: () => void;
+}) {
+  const compactPath = parentDir ? formatCompactParentPath(parentDir) : "";
+  const headerButton = (
+    <button
+      type="button"
+      aria-expanded={!collapsed}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+      className={cn(
+        "flex w-full cursor-pointer select-none items-center gap-1.5 rounded-sm px-2 py-1 text-left text-xs font-medium transition-colors hover:bg-accent/60 hover:text-foreground",
+        hasActiveSelection ? "text-foreground" : "text-muted-foreground",
+      )}
+    >
+      {collapsed ? (
+        <ChevronRightIcon className="size-3.5 shrink-0 opacity-75" />
+      ) : (
+        <ChevronDownIcon className="size-3.5 shrink-0 opacity-75" />
+      )}
+      {collapsed ? (
+        <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      ) : (
+        <FolderOpenIcon className="size-3.5 shrink-0 text-primary/80" />
+      )}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hasActiveSelection ? <span className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}
+      <span className="shrink-0 rounded bg-muted/70 px-1.5 py-px font-mono text-3xs tabular-nums text-muted-foreground">
+        {count}
+      </span>
+    </button>
   );
 
-  const triggerText =
-    value === NONE_MODEL_VALUE && emptyOptionLabel
-      ? emptyOptionLabel
-      : (current?.label ?? emptyOptionLabel ?? gt("Select model"));
+  if (!compactPath) {
+    return headerButton;
+  }
 
   return (
-    <Menu>
-      {triggerVariant === "outline" ? (
-        <MenuTrigger
-          aria-label={ariaLabel}
-          render={<Button variant="outline" className={cn("justify-between", className)} />}
-        >
-          <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            {leadingIcon}
-            <span className="truncate">{triggerText}</span>
-          </span>
-          <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 opacity-70" />
-        </MenuTrigger>
-      ) : (
-        <MenuTrigger
-          aria-label={ariaLabel}
-          render={<SelectButton size={size} className={className} />}
-        >
-          <span className="inline-flex min-w-0 items-center gap-1.5">
-            {leadingIcon}
-            <span className="truncate">{triggerText}</span>
-          </span>
-        </MenuTrigger>
-      )}
-      <MenuPopup align="start">
-        {options.length > 8 ? (
-          <MenuSearchInput
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder={gt("Search models…")}
-            aria-label={gt("Search models")}
-          />
-        ) : null}
-        <div className="overflow-y-auto overscroll-contain" style={SELECTOR_SCROLL_LIST_STYLE}>
-          <MenuRadioGroup
-            value={value}
-            onValueChange={(next) => {
-              if (next) onChange(next);
-            }}
-          >
-            {emptyOptionLabel !== undefined && needle.length === 0 ? (
-              <MenuRadioItem value={NONE_MODEL_VALUE}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate">{emptyOptionLabel}</span>
-                  <MenuRadioItemIndicator />
-                </span>
-              </MenuRadioItem>
-            ) : null}
-            {filtered.length === 0 ? (
-              <MenuItem disabled>
-                <T>No matching models</T>
-              </MenuItem>
-            ) : (
-              filtered.map((opt) => (
-                <MenuRadioItem key={opt.key} value={opt.key}>
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                    <MenuRadioItemIndicator />
-                  </span>
-                </MenuRadioItem>
-              ))
-            )}
-          </MenuRadioGroup>
-        </div>
-      </MenuPopup>
-    </Menu>
+    <Tooltip>
+      <TooltipTrigger render={headerButton} />
+      <TooltipPopup side="right">{compactPath}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -305,13 +302,15 @@ export function SearchableProjectMenu({
   const gt = useGT();
   const [query, setQuery] = useState("");
   const current = projects.find((p) => p.id === value) ?? projects[0] ?? null;
-  const needle = query.trim().toLowerCase();
-  const filtered = projects.filter(
-    (p) =>
-      needle.length === 0 ||
-      p.title.toLowerCase().includes(needle) ||
-      p.workspaceRoot.toLowerCase().includes(needle),
-  );
+  const {
+    groups,
+    collapsedSet,
+    isSearching,
+    hasMultipleGroups,
+    anyExpanded,
+    toggleGroup,
+    toggleAllGroups,
+  } = useProjectFolderGroups(projects, query);
 
   return (
     <Menu>
@@ -337,7 +336,7 @@ export function SearchableProjectMenu({
           </span>
         </MenuTrigger>
       )}
-      <MenuPopup align="start">
+      <MenuPopup align="start" className="min-w-72 max-w-96">
         {projects.length > 8 ? (
           <MenuSearchInput
             autoFocus
@@ -347,26 +346,75 @@ export function SearchableProjectMenu({
             aria-label={gt("Search repositories")}
           />
         ) : null}
-        <div className="overflow-y-auto overscroll-contain" style={SELECTOR_SCROLL_LIST_STYLE}>
+        {hasMultipleGroups && !isSearching ? (
+          <div className="flex items-center justify-between border-b border-border/60 px-2.5 py-1 text-2xs text-muted-foreground">
+            <span>
+              <Var>{groups.length}</Var> <T>folders</T>
+            </span>
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleAllGroups();
+              }}
+              className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            >
+              {anyExpanded ? (
+                <>
+                  <ChevronsDownUpIcon className="size-3" />
+                  <T>Collapse all</T>
+                </>
+              ) : (
+                <>
+                  <ChevronsUpDownIcon className="size-3" />
+                  <T>Expand all</T>
+                </>
+              )}
+            </button>
+          </div>
+        ) : null}
+        <div className="overflow-y-auto overscroll-contain p-1" style={SELECTOR_SCROLL_LIST_STYLE}>
           <MenuRadioGroup
             value={value}
             onValueChange={(next) => {
               if (next) onChange(next);
             }}
           >
-            {filtered.length === 0 ? (
+            {groups.length === 0 ? (
               <MenuItem disabled>
                 <T>No matching repositories</T>
               </MenuItem>
             ) : (
-              filtered.map((proj) => (
-                <MenuRadioItem key={proj.id} value={proj.id}>
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">{proj.title}</span>
-                    <MenuRadioItemIndicator />
-                  </span>
-                </MenuRadioItem>
-              ))
+              groups.map((group) => {
+                const isCollapsed = !isSearching && collapsedSet.has(group.key);
+                const hasActiveSelection = group.projects.some((proj) => proj.id === value);
+                return (
+                  <div key={group.key} className="not-first:mt-1">
+                    <ProjectFolderGroupHeader
+                      label={group.label}
+                      parentDir={group.parentDir}
+                      count={group.projects.length}
+                      collapsed={isCollapsed}
+                      hasActiveSelection={hasActiveSelection}
+                      onToggle={() => toggleGroup(group.key)}
+                    />
+                    {!isCollapsed ? (
+                      <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
+                        {group.projects.map((proj) => (
+                          <MenuRadioItem key={proj.id} value={proj.id}>
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="min-w-0 flex-1 truncate">{proj.title}</span>
+                              <MenuRadioItemIndicator />
+                            </span>
+                          </MenuRadioItem>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
             )}
           </MenuRadioGroup>
         </div>
@@ -390,13 +438,16 @@ function SearchableMultiProjectMenu({
 }) {
   const gt = useGT();
   const [query, setQuery] = useState("");
-  const needle = query.trim().toLowerCase();
-  const filtered = projects.filter(
-    (p) =>
-      needle.length === 0 ||
-      p.title.toLowerCase().includes(needle) ||
-      p.workspaceRoot.toLowerCase().includes(needle),
-  );
+  const {
+    groups,
+    collapsedSet,
+    isSearching,
+    hasMultipleGroups,
+    anyExpanded,
+    toggleGroup,
+    toggleAllGroups,
+  } = useProjectFolderGroups(projects, query);
+  const selectedSet = new Set(selectedIds);
   const summary =
     selectedIds.length === 0
       ? gt("None")
@@ -407,7 +458,7 @@ function SearchableMultiProjectMenu({
       <MenuTrigger aria-label={ariaLabel} render={<SelectButton size="sm" />}>
         {summary}
       </MenuTrigger>
-      <MenuPopup align="start">
+      <MenuPopup align="start" className="min-w-72 max-w-96">
         {projects.length > 8 ? (
           <MenuSearchInput
             autoFocus
@@ -417,29 +468,80 @@ function SearchableMultiProjectMenu({
             aria-label={gt("Search repositories")}
           />
         ) : null}
-        <div className="overflow-y-auto overscroll-contain" style={SELECTOR_SCROLL_LIST_STYLE}>
-          {filtered.length === 0 ? (
+        {hasMultipleGroups && !isSearching ? (
+          <div className="flex items-center justify-between border-b border-border/60 px-2.5 py-1 text-2xs text-muted-foreground">
+            <span>
+              <Var>{groups.length}</Var> <T>folders</T>
+            </span>
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleAllGroups();
+              }}
+              className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            >
+              {anyExpanded ? (
+                <>
+                  <ChevronsDownUpIcon className="size-3" />
+                  <T>Collapse all</T>
+                </>
+              ) : (
+                <>
+                  <ChevronsUpDownIcon className="size-3" />
+                  <T>Expand all</T>
+                </>
+              )}
+            </button>
+          </div>
+        ) : null}
+        <div className="overflow-y-auto overscroll-contain p-1" style={SELECTOR_SCROLL_LIST_STYLE}>
+          {groups.length === 0 ? (
             <MenuItem disabled>
               <T>No matching repositories</T>
             </MenuItem>
           ) : (
-            filtered.map((proj) => {
-              const checked = selectedIds.includes(proj.id);
+            groups.map((group) => {
+              const isCollapsed = !isSearching && collapsedSet.has(group.key);
+              const hasActiveSelection = group.projects.some(
+                (proj) => selectedSet.has(proj.id) || proj.id === primaryProjectId,
+              );
               return (
-                <MenuCheckboxItem
-                  key={proj.id}
-                  checked={checked}
-                  disabled={proj.id === primaryProjectId}
-                  onCheckedChange={(next) => {
-                    if (next) {
-                      onChange(checked ? selectedIds : [...selectedIds, proj.id]);
-                    } else {
-                      onChange(selectedIds.filter((id) => id !== proj.id));
-                    }
-                  }}
-                >
-                  <span className="truncate">{proj.title}</span>
-                </MenuCheckboxItem>
+                <div key={group.key} className="not-first:mt-1">
+                  <ProjectFolderGroupHeader
+                    label={group.label}
+                    parentDir={group.parentDir}
+                    count={group.projects.length}
+                    collapsed={isCollapsed}
+                    hasActiveSelection={hasActiveSelection}
+                    onToggle={() => toggleGroup(group.key)}
+                  />
+                  {!isCollapsed ? (
+                    <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
+                      {group.projects.map((proj) => {
+                        const checked = selectedSet.has(proj.id);
+                        return (
+                          <MenuCheckboxItem
+                            key={proj.id}
+                            checked={checked}
+                            disabled={proj.id === primaryProjectId}
+                            onCheckedChange={(next) => {
+                              if (next) {
+                                onChange(checked ? selectedIds : [...selectedIds, proj.id]);
+                              } else {
+                                onChange(selectedIds.filter((id) => id !== proj.id));
+                              }
+                            }}
+                          >
+                            <span className="truncate">{proj.title}</span>
+                          </MenuCheckboxItem>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               );
             })
           )}
@@ -653,7 +755,6 @@ export function ProfileModal({
   environmentId,
   connectors,
   projects,
-  modelOptions,
   initial,
   defaultConnectorId,
   defaultScopeId,
@@ -663,7 +764,6 @@ export function ProfileModal({
   readonly environmentId: EnvironmentId;
   readonly connectors: ReadonlyArray<IssueAutomationConnector>;
   readonly projects: ReadonlyArray<SelectableProjectOption>;
-  readonly modelOptions: ReadonlyArray<SelectableModelOption>;
   readonly initial: IssueAutomationProfile | null;
   readonly defaultConnectorId?: IssueAutomationConnectorId | undefined;
   readonly defaultScopeId?: string | undefined;
@@ -673,6 +773,7 @@ export function ProfileModal({
   const saveProfile = useAtomCommand(issueAutomationEnvironment.saveProfile, {
     reportFailure: false,
   });
+  const catalog = useOfficialModelCatalog(environmentId);
 
   const firstConnector =
     connectors.find((c) => c.id === (initial?.connectorId ?? defaultConnectorId)) ?? connectors[0];
@@ -699,20 +800,23 @@ export function ProfileModal({
   const [draftPattern, setDraftPattern] = useState("");
   const [draftRuleProjectId, setDraftRuleProjectId] = useState<string>(projects[0]?.id ?? "");
 
-  const [primaryModelKey, setPrimaryModelKey] = useState<string>(
-    encodeModelOptionKey(initial?.models.primaryModel ?? modelOptions[0]?.selection ?? null),
+  const [primaryModel, setPrimaryModel] = useState<ModelSelection | null>(
+    initial?.models.primaryModel ?? catalog.firstAvailableSelection,
   );
-  const [highSeverityModelKey, setHighSeverityModelKey] = useState<string>(
-    encodeModelOptionKey(initial?.models.highSeverityModel ?? null) || NONE_MODEL_VALUE,
+  if (primaryModel === null && catalog.firstAvailableSelection) {
+    setPrimaryModel(catalog.firstAvailableSelection);
+  }
+  const [highSeverityModel, setHighSeverityModel] = useState<ModelSelection | null>(
+    initial?.models.highSeverityModel ?? null,
   );
-  const [triageModelKey, setTriageModelKey] = useState<string>(
-    encodeModelOptionKey(initial?.models.triageModel ?? null) || NONE_MODEL_VALUE,
+  const [triageModel, setTriageModel] = useState<ModelSelection | null>(
+    initial?.models.triageModel ?? null,
   );
-  const [reviewModelKey, setReviewModelKey] = useState<string>(
-    encodeModelOptionKey(initial?.models.reviewModel ?? null) || NONE_MODEL_VALUE,
+  const [reviewModel, setReviewModel] = useState<ModelSelection | null>(
+    initial?.models.reviewModel ?? null,
   );
-  const [fallbackModelKey, setFallbackModelKey] = useState<string>(
-    encodeModelOptionKey(initial?.models.fallbackModel ?? null) || NONE_MODEL_VALUE,
+  const [fallbackModel, setFallbackModel] = useState<ModelSelection | null>(
+    initial?.models.fallbackModel ?? null,
   );
 
   const [browseType, setBrowseType] = useState<IssueAutomationBrowseFilter>(
@@ -769,7 +873,7 @@ export function ProfileModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedPrimaryModel = decodeModelOptionKey(primaryModelKey, modelOptions);
+    const resolvedPrimaryModel = primaryModel ?? catalog.firstAvailableSelection;
     if (!activeConnector || !scopeId || !primaryProjectId || !resolvedPrimaryModel) {
       setErrorText(gt("Please select a product, local repository, and primary model."));
       return;
@@ -799,10 +903,10 @@ export function ProfileModal({
         },
         models: {
           primaryModel: resolvedPrimaryModel,
-          highSeverityModel: decodeModelOptionKey(highSeverityModelKey, modelOptions),
-          triageModel: decodeModelOptionKey(triageModelKey, modelOptions),
-          reviewModel: decodeModelOptionKey(reviewModelKey, modelOptions),
-          fallbackModel: decodeModelOptionKey(fallbackModelKey, modelOptions),
+          highSeverityModel,
+          triageModel,
+          reviewModel,
+          fallbackModel,
         },
         filter: {
           browseType,
@@ -1089,12 +1193,11 @@ export function ProfileModal({
               <SettingsRow
                 title={gt("Primary diagnosis & fix model")}
                 control={
-                  <SearchableModelMenu
-                    options={modelOptions}
-                    value={primaryModelKey}
-                    onChange={setPrimaryModelKey}
+                  <OfficialModelPicker
+                    environmentId={environmentId}
+                    value={primaryModel}
+                    onChange={setPrimaryModel}
                     ariaLabel={gt("Primary model")}
-                    leadingIcon={<BotIcon className="size-3.5 shrink-0 opacity-70" />}
                   />
                 }
               />
@@ -1103,10 +1206,10 @@ export function ProfileModal({
                 title={gt("S1/S2 high-severity escalation model")}
                 description={gt("Automatically upgrade model for critical bugs.")}
                 control={
-                  <SearchableModelMenu
-                    options={modelOptions}
-                    value={highSeverityModelKey}
-                    onChange={setHighSeverityModelKey}
+                  <OfficialModelPicker
+                    environmentId={environmentId}
+                    value={highSeverityModel}
+                    onChange={setHighSeverityModel}
                     ariaLabel={gt("High-severity model")}
                     emptyOptionLabel={gt("Same as primary")}
                   />
@@ -1117,10 +1220,10 @@ export function ProfileModal({
                 title={gt("Heterogeneous cross-review model")}
                 description={gt("Run a second model to audit code changes before write-back.")}
                 control={
-                  <SearchableModelMenu
-                    options={modelOptions}
-                    value={reviewModelKey}
-                    onChange={setReviewModelKey}
+                  <OfficialModelPicker
+                    environmentId={environmentId}
+                    value={reviewModel}
+                    onChange={setReviewModel}
                     ariaLabel={gt("Cross-review model")}
                     emptyOptionLabel={gt("Disabled")}
                   />
@@ -1132,19 +1235,21 @@ export function ProfileModal({
                 description={gt("Optional fast router model and quota failover backup.")}
                 control={
                   <div className="flex flex-wrap items-center gap-2">
-                    <SearchableModelMenu
-                      options={modelOptions}
-                      value={triageModelKey}
-                      onChange={setTriageModelKey}
+                    <OfficialModelPicker
+                      environmentId={environmentId}
+                      value={triageModel}
+                      onChange={setTriageModel}
                       ariaLabel={gt("Triage model")}
                       emptyOptionLabel={gt("Heuristic routing")}
+                      triggerClassName="w-auto min-w-44"
                     />
-                    <SearchableModelMenu
-                      options={modelOptions}
-                      value={fallbackModelKey}
-                      onChange={setFallbackModelKey}
+                    <OfficialModelPicker
+                      environmentId={environmentId}
+                      value={fallbackModel}
+                      onChange={setFallbackModel}
                       ariaLabel={gt("Failover model")}
                       emptyOptionLabel={gt("No failover")}
+                      triggerClassName="w-auto min-w-44"
                     />
                   </div>
                 }

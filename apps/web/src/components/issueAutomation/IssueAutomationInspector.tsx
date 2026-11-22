@@ -6,6 +6,7 @@ import type {
   IssueAutomationRemoteIssue,
   IssueAutomationRemoteIssueDetail,
   IssueAutomationTask,
+  ModelSelection,
   ThreadId,
 } from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
@@ -30,6 +31,7 @@ import {
 import { useRef, useState } from "react";
 
 import { ComposerSurface } from "~/components/chat/ComposerSurface";
+import { OfficialModelPicker } from "~/components/chat/OfficialModelPicker";
 import { PullRequestDetailTitleRow } from "~/components/pullRequest/PullRequestDetailLayout";
 import { PullRequestMarkdown } from "~/components/pullRequest/PullRequestMarkdown";
 import { PullRequestMetaLine } from "~/components/pullRequest/pullRequestPresentation";
@@ -58,11 +60,8 @@ import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
-  encodeModelOptionKey,
-  SearchableModelMenu,
   SearchableProjectMenu,
   SELECTOR_SCROLL_LIST_STYLE,
-  type SelectableModelOption,
   type SelectableProjectOption,
 } from "./IssueAutomationConfigModals";
 import {
@@ -158,12 +157,11 @@ export function IssueAutomationInspectorContent({
   inspectorTab,
   onInspectorTabChange,
   projects,
-  modelOptions,
   matchedProfile,
   adhocProjectId,
   onAdhocProjectIdChange,
-  adhocModelKey,
-  onAdhocModelKeyChange,
+  adhocModelSelection,
+  onAdhocModelSelectionChange,
   adhocMode,
   onAdhocModeChange,
   dispatching,
@@ -185,12 +183,11 @@ export function IssueAutomationInspectorContent({
   readonly inspectorTab: InspectorSubTab;
   readonly onInspectorTabChange: (next: InspectorSubTab) => void;
   readonly projects: ReadonlyArray<SelectableProjectOption>;
-  readonly modelOptions: ReadonlyArray<SelectableModelOption>;
   readonly matchedProfile: IssueAutomationProfile | null;
   readonly adhocProjectId: string;
   readonly onAdhocProjectIdChange: (next: string) => void;
-  readonly adhocModelKey: string;
-  readonly onAdhocModelKeyChange: (next: string) => void;
+  readonly adhocModelSelection: ModelSelection | null;
+  readonly onAdhocModelSelectionChange: (next: ModelSelection) => void;
   readonly adhocMode: IssueAutomationActionMode;
   readonly onAdhocModeChange: (next: IssueAutomationActionMode) => void;
   readonly dispatching: boolean;
@@ -220,9 +217,7 @@ export function IssueAutomationInspectorContent({
   const selectedProject = projects.find((p) => p.id === resolvedProjectId) ?? projects[0] ?? null;
   const cwd = selectedProject?.workspaceRoot ?? "";
 
-  const resolvedModelKey =
-    adhocModelKey ||
-    encodeModelOptionKey(matchedProfile?.models.primaryModel ?? modelOptions[0]?.selection ?? null);
+  const resolvedModelSelection = adhocModelSelection ?? matchedProfile?.models.primaryModel ?? null;
 
   const displayKey =
     effectiveTab === "trace" && activeTask
@@ -546,12 +541,17 @@ export function IssueAutomationInspectorContent({
                         className="min-w-0"
                       />
 
-                      <SearchableModelMenu
-                        options={modelOptions}
-                        value={resolvedModelKey}
-                        onChange={onAdhocModelKeyChange}
+                      <OfficialModelPicker
+                        environmentId={environmentId}
+                        value={resolvedModelSelection}
+                        onChange={(next) => {
+                          if (next) onAdhocModelSelectionChange(next);
+                        }}
                         ariaLabel={gt("Primary AI model")}
-                        className="min-w-0"
+                        popupSide="bottom"
+                        popupAlign="end"
+                        workspaceCwd={cwd || null}
+                        triggerClassName="min-w-0"
                       />
 
                       <Select

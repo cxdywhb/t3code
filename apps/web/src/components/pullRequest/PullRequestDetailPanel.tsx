@@ -170,12 +170,6 @@ import { PullRequestGuideTab } from "./PullRequestGuideTab";
 import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
 import { useNavigate } from "@tanstack/react-router";
-import { AsyncResult } from "effect/reactivity";
-import {
-  deriveProviderInstanceEntries,
-  isProviderInstancePickerVisible,
-} from "~/providerInstances";
-import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { usePrReviewLiveState } from "~/state/prReview";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { LaunchPrReviewDialog } from "../prReview/PrReviewLaunchModal";
@@ -840,21 +834,6 @@ export function PullRequestDetailPanel({
   const navigateToRoute = useNavigate();
   const [fusionModalOpen, setFusionModalOpen] = useState(false);
   const { snapshot: prReviewSnapshot } = usePrReviewLiveState(environmentId);
-  const prReviewServerConfig = useAtomValue(
-    serverEnvironment.configProjection({ environmentId, input: {} }),
-  );
-  const prReviewModelOptions = deriveProviderInstanceEntries(
-    AsyncResult.getOrElse(prReviewServerConfig, () => null)?.config.providers ??
-      EMPTY_SERVER_PROVIDERS,
-  )
-    .filter(isProviderInstancePickerVisible)
-    .flatMap((entry) =>
-      entry.models.map((mod) => ({
-        key: `${entry.instanceId}::${mod.slug}`,
-        label: `${entry.displayName} · ${mod.name || mod.slug}`,
-        selection: { instanceId: entry.instanceId, model: mod.slug },
-      })),
-    );
   const { environments } = useEnvironments();
   const pickableEnvironments =
     context === "page"
@@ -2290,7 +2269,6 @@ export function PullRequestDetailPanel({
           ]}
           presets={prReviewSnapshot.presets}
           availableSkills={prReviewSnapshot.availableSkills}
-          modelOptions={prReviewModelOptions}
           onLaunched={({ jumpThreadId, mode }) => {
             if (mode === "direct_agent" && jumpThreadId) {
               void navigateToRoute({

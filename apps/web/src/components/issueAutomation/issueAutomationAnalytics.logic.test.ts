@@ -3,19 +3,25 @@ import {
   IssueAutomationPlatformKind,
   IssueAutomationTaskId,
   ProjectId,
+  ProviderInstanceId,
   type IssueAutomationTask,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   computeIssueAutomationAnalytics,
   DEFAULT_WORKBENCH_PREFS,
   formatCompactDuration,
+  IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
+  resolvePersistedModelSelection,
   resolvePersistedTarget,
   resolveTaskDurationMs,
   sortScopesByIdDesc,
 } from "./issueAutomationAnalytics.logic";
+
+const decodeWorkbenchPrefs = Schema.decodeSync(IssueAutomationWorkbenchPrefsSchema);
 
 function makeTask(
   overrides: Omit<Partial<IssueAutomationTask>, "id"> & { id: string },
@@ -212,5 +218,80 @@ describe("issueAutomationAnalytics.logic", () => {
     });
     const nowEpochMs = Date.parse("2026-11-21T12:54:26.000Z");
     expect(formatCompactDuration(resolveTaskDurationMs(activeTask, nowEpochMs))).toBe("2m 26s");
+  });
+
+  it("decodes legacy workbench prefs without ModelSelection fields and prioritizes structured ModelSelection with options", () => {
+    const decodedLegacy = decodeWorkbenchPrefs({
+      ...DEFAULT_WORKBENCH_PREFS,
+      modelByScope: { "conn-1::10": "codex-default::gpt-5" },
+      lastModelKey: "claude-default::claude-sonnet-4-6",
+    });
+
+    const codexId = ProviderInstanceId.make("codex-default");
+    const claudeId = ProviderInstanceId.make("claude-default");
+
+    // Migrates legacy key when structured selection is absent
+    expect(
+      resolvePersistedModelSelection({
+        prefs: decodedLegacy,
+        scopeKey: "conn-1::10",
+        profilePrimaryModel: null,
+        fallbackSelection: { instanceId: claudeId, model: "claude-sonnet-4-6" },
+      }),
+    ).toEqual({ instanceId: codexId, model: "gpt-5" });
+
+    // Structured selection with options outranks legacy string keys
+    const prefsWithOptions = {
+      ...decodedLegacy,
+      modelSelectionByScope: {
+        "conn-1::10": {
+          instanceId: codexId,
+          model: "gpt-5.4",
+          options: [{ id: "reasoningEffort", value: "xhigh" }],
+        },
+      },
+      lastModelSelection: {
+        instanceId: claudeId,
+        model: "claude-sonnet-4-6",
+        options: [{ id: "effort", value: "high" }],
+      },
+    };
+
+    expect(
+      resolvePersistedModelSelection({
+        prefs: prefsWithOptions,
+        scopeKey: "conn-1::10",
+        profilePrimaryModel: { instanceId: claudeId, model: "claude-sonnet-4-6" },
+        fallbackSelection: null,
+      }),
+    ).toEqual({
+      instanceId: codexId,
+      model: "gpt-5.4",
+      options: [{ id: "reasoningEffort", value: "xhigh" }],
+    });
+
+    // Falls back from stale scoped selection -> profile primaryModel -> lastModelSelection
+    expect(
+      resolvePersistedModelSelection({
+        prefs: prefsWithOptions,
+        scopeKey: "conn-1::10",
+        profilePrimaryModel: { instanceId: claudeId, model: "claude-sonnet-4-6" },
+        isSelectionAvailable: (sel) => sel.model !== "gpt-5.4" && sel.model !== "gpt-5",
+        fallbackSelection: null,
+      }),
+    ).toEqual({ instanceId: claudeId, model: "claude-sonnet-4-6" });
+
+    expect(
+      resolvePersistedModelSelection({
+        prefs: prefsWithOptions,
+        scopeKey: "conn-1::other",
+        profilePrimaryModel: null,
+        fallbackSelection: null,
+      }),
+    ).toEqual({
+      instanceId: claudeId,
+      model: "claude-sonnet-4-6",
+      options: [{ id: "effort", value: "high" }],
+    });
   });
 });

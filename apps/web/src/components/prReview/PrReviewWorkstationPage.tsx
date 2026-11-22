@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -13,7 +12,6 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { AsyncResult } from "effect/reactivity";
 import { T, useGT, Var } from "gt-react";
 import {
   ArrowUpRightIcon,
@@ -37,7 +35,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
-import type { SelectableModelOption } from "~/components/issueAutomation/IssueAutomationConfigModals";
 import { PullRequestSearchInput } from "~/components/pullRequest/PullRequestListFilters";
 import type { EnvironmentPullRequestEntry } from "~/components/pullRequest/pullRequestList.logic";
 import type { PullRequestHostAvailability } from "~/components/pullRequest/pullRequestProjectAssignment.logic";
@@ -52,16 +49,11 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
-import {
-  deriveProviderInstanceEntries,
-  isProviderInstancePickerVisible,
-} from "~/providerInstances";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { useProjects } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { prReviewEnvironment, usePrReviewLiveState } from "~/state/prReview";
 import { pullRequestEnvironment, usePullRequestHostList } from "~/state/pullRequests";
-import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Badge } from "../ui/badge";
@@ -184,32 +176,6 @@ export function PrReviewWorkstationPage() {
     open: boolean;
     preset: PrReviewPreset | null;
   }>({ open: false, preset: null });
-
-  const serverConfigResult = useAtomValue(
-    environmentId !== null
-      ? serverEnvironment.configProjection({ environmentId, input: {} })
-      : serverEnvironment.configProjection({ environmentId: "none" as EnvironmentId, input: {} }),
-  );
-  const providers =
-    environmentId !== null
-      ? (AsyncResult.getOrElse(serverConfigResult, () => null)?.config.providers ??
-        EMPTY_SERVER_PROVIDERS)
-      : EMPTY_SERVER_PROVIDERS;
-
-  const modelOptions: ReadonlyArray<SelectableModelOption> = deriveProviderInstanceEntries(
-    providers,
-  )
-    .filter(isProviderInstancePickerVisible)
-    .flatMap((entry) =>
-      entry.models.map((m) => ({
-        key: `${entry.instanceId}::${m.slug}`,
-        label: `${entry.displayName} · ${m.name || m.slug}`,
-        selection: {
-          instanceId: entry.instanceId,
-          model: m.slug,
-        },
-      })),
-    );
 
   const scope = usePullRequestScope(
     {
@@ -628,7 +594,7 @@ export function PrReviewWorkstationPage() {
                           <div
                             key={key}
                             className={cn(
-                              "flex flex-wrap items-center gap-3 rounded-md px-2 py-2.5 text-xs transition-colors hover:bg-accent/30",
+                              "flex items-center gap-3 rounded-md px-2.5 py-2.5 text-xs transition-colors hover:bg-accent/30",
                               latestTask && latestTask.id === selectedTaskId ? "bg-accent/40" : "",
                             )}
                           >
@@ -637,7 +603,7 @@ export function PrReviewWorkstationPage() {
                               onCheckedChange={() => toggleChecked(key)}
                             />
                             <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
-                            <div className="min-w-48 flex-1">
+                            <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
                                 <span className="font-mono text-muted-foreground">
@@ -650,11 +616,11 @@ export function PrReviewWorkstationPage() {
                                     <T>Cloud MR</T>
                                   </Badge>
                                 ) : null}
-                                <span className="min-w-0 truncate text-sm font-medium text-foreground">
-                                  {entry.title}
-                                </span>
                               </div>
-                              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
+                              <div className="mt-0.5 truncate text-sm font-medium text-foreground">
+                                {entry.title}
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
                                 <span>@{entry.author?.login ?? "unknown"}</span>
                                 <span>·</span>
                                 <span className="font-mono">
@@ -665,27 +631,27 @@ export function PrReviewWorkstationPage() {
                               </div>
                             </div>
 
-                            {latestTask ? (
-                              <button
-                                type="button"
-                                onClick={() => setSelectedTaskId(latestTask.id)}
-                                className="flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 hover:bg-accent"
-                              >
-                                {isPrReviewStageActive(latestTask.stage) ? (
-                                  <PrReviewStageBadge stage={latestTask.stage} />
-                                ) : (
-                                  <PrReviewVerdictBadge verdict={latestTask.verdict} />
-                                )}
-                                <span className="text-2xs text-muted-foreground">
-                                  <T>Report</T>
-                                </span>
-                              </button>
-                            ) : null}
-
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex min-w-36 shrink-0 flex-col items-stretch justify-center gap-1">
+                              {latestTask ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedTaskId(latestTask.id)}
+                                  className="inline-flex h-6 w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border/80 bg-background/60 px-2 text-2xs transition-colors hover:bg-accent"
+                                >
+                                  {isPrReviewStageActive(latestTask.stage) ? (
+                                    <PrReviewStageBadge stage={latestTask.stage} />
+                                  ) : (
+                                    <PrReviewVerdictBadge verdict={latestTask.verdict} />
+                                  )}
+                                  <span className="text-2xs text-muted-foreground">
+                                    <T>Report</T>
+                                  </span>
+                                </button>
+                              ) : null}
                               <Button
                                 size="xs"
                                 variant="outline"
+                                className="w-full justify-center"
                                 onClick={() =>
                                   setLaunchModalState({
                                     targets: [toTargetItem(entry)],
@@ -698,6 +664,7 @@ export function PrReviewWorkstationPage() {
                               </Button>
                               <Button
                                 size="xs"
+                                className="w-full justify-center"
                                 onClick={() =>
                                   setLaunchModalState({
                                     targets: [toTargetItem(entry)],
@@ -1224,7 +1191,6 @@ export function PrReviewWorkstationPage() {
           targets={launchModalState.targets}
           presets={snapshot.presets}
           availableSkills={snapshot.availableSkills}
-          modelOptions={modelOptions}
           defaultMode={launchModalState.defaultMode}
           onLaunched={({ tasks, jumpThreadId, mode }) => {
             setLaunchModalState(null);
@@ -1249,7 +1215,6 @@ export function PrReviewWorkstationPage() {
           environmentId={environmentId}
           editingPreset={presetModalState.preset}
           availableSkills={snapshot.availableSkills}
-          modelOptions={modelOptions}
         />
       ) : null}
     </SidebarInset>

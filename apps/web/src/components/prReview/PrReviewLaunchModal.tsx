@@ -24,12 +24,18 @@ import {
 import { useState } from "react";
 
 import {
-  decodeModelOptionKey,
-  encodeModelOptionKey,
-  SearchableModelMenu,
-  type SelectableModelOption,
-} from "~/components/issueAutomation/IssueAutomationConfigModals";
+  OfficialModelPicker,
+  useOfficialModelCatalog,
+} from "~/components/chat/OfficialModelPicker";
+import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
+import type { ProviderInstanceEntry } from "~/providerInstances";
+import {
+  PR_REVIEW_LAUNCH_PREFS_STORAGE_PREFIX,
+  PrReviewLaunchPrefsSchema,
+  resolveInitialPrReviewLaunchConfig,
+  type PrReviewLaunchPrefs,
+} from "./prReviewAnalytics.logic";
 import { prReviewEnvironment } from "~/state/prReview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Badge } from "../ui/badge";
@@ -97,32 +103,53 @@ const WRITE_BACK_OPTIONS: ReadonlyArray<PrReviewWriteBackMode> = [
   "auto_review",
 ];
 
-function makeInitialSlots(modelOptions: ReadonlyArray<SelectableModelOption>): PrReviewModelSlot[] {
-  if (modelOptions.length === 0) return [];
-  if (modelOptions.length === 1) {
+function pickNextReviewerSelection(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  existingSlots: ReadonlyArray<PrReviewModelSlot>,
+): ModelSelection | null {
+  const candidates: ModelSelection[] = [];
+  for (const entry of entries) {
+    for (const model of entry.models) {
+      candidates.push({ instanceId: entry.instanceId, model: model.slug });
+    }
+  }
+  if (candidates.length === 0) return null;
+  const usedInstances = new Set(existingSlots.map((slot) => slot.modelSelection.instanceId));
+  const diffInstanceCandidate = candidates.find((c) => !usedInstances.has(c.instanceId));
+  if (diffInstanceCandidate) return diffInstanceCandidate;
+  const usedKeys = new Set(
+    existingSlots.map((slot) => `${slot.modelSelection.instanceId}::${slot.modelSelection.model}`),
+  );
+  const unusedCandidate = candidates.find((c) => !usedKeys.has(`${c.instanceId}::${c.model}`));
+  if (unusedCandidate) return unusedCandidate;
+  return candidates[existingSlots.length % candidates.length] ?? null;
+}
+
+function makeInitialSlotsFromEntries(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+): PrReviewModelSlot[] {
+  const first = pickNextReviewerSelection(entries, []);
+  if (!first) return [];
+  const slot1: PrReviewModelSlot = {
+    id: "slot-1",
+    modelSelection: first,
+    role: "correctness",
+    enabled: true,
+  };
+  const second = pickNextReviewerSelection(entries, [slot1]);
+  if (!second || (second.instanceId === first.instanceId && second.model === first.model)) {
     return [
       {
-        id: "slot-1",
-        modelSelection: modelOptions[0]!.selection,
+        ...slot1,
         role: "comprehensive",
-        enabled: true,
       },
     ];
   }
-  const first = modelOptions[0]!;
-  const diffInstance =
-    modelOptions.find((m) => m.selection.instanceId !== first.selection.instanceId) ??
-    modelOptions[1]!;
   return [
-    {
-      id: "slot-1",
-      modelSelection: first.selection,
-      role: "correctness",
-      enabled: true,
-    },
+    slot1,
     {
       id: "slot-2",
-      modelSelection: diffInstance.selection,
+      modelSelection: second,
       role: "security",
       enabled: true,
     },
@@ -175,7 +202,17 @@ function SkillMultiPicker({
           placeholder={gt("Filter skills by name or description…")}
         />
       ) : null}
-      <div className="grid max-h-44 grid-cols-1 gap-1.5 overflow-y-auto rounded-lg border p-2 sm:grid-cols-2">
+      <div
+        className={cn(
+          "grid grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-lg border p-2 sm:grid-cols-2",
+          availableSkills.length > 5 ? "h-44" : "max-h-44",
+        )}
+      >
+        {filtered.length === 0 ? (
+          <p className="col-span-full py-4 text-center text-xs text-muted-foreground">
+            <T>No matching skills</T>
+          </p>
+        ) : null}
         {filtered.map((skill) => {
           const checked = selectedSet.has(skill.name);
           return (
@@ -215,13 +252,15 @@ function SkillMultiPicker({
 }
 
 function ModelSlotsEditor({
+  environmentId,
+  pickableEntries,
   slots,
-  modelOptions,
   onChange,
   singleSlotOnly = false,
 }: {
+  readonly environmentId: EnvironmentId;
+  readonly pickableEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly slots: ReadonlyArray<PrReviewModelSlot>;
-  readonly modelOptions: ReadonlyArray<SelectableModelOption>;
   readonly onChange: (next: ReadonlyArray<PrReviewModelSlot>) => void;
   readonly singleSlotOnly?: boolean;
 }) {
@@ -229,14 +268,14 @@ function ModelSlotsEditor({
   const roleLabel = usePrReviewRoleLabel();
 
   const addSlot = () => {
-    const fallback = modelOptions[slots.length % Math.max(1, modelOptions.length)];
+    const fallback = pickNextReviewerSelection(pickableEntries, slots);
     if (!fallback) return;
     const role = ROLE_OPTIONS[(slots.length + 1) % ROLE_OPTIONS.length] ?? "comprehensive";
     onChange([
       ...slots,
       {
-        id: `slot-${slots.length + 1}-${fallback.selection.model}`,
-        modelSelection: fallback.selection,
+        id: `slot-${slots.length + 1}-${fallback.model}`,
+        modelSelection: fallback,
         role,
         enabled: true,
       },
@@ -265,14 +304,14 @@ function ModelSlotsEditor({
             #{index + 1}
           </span>
           <div className="min-w-48 flex-1">
-            <SearchableModelMenu
-              options={modelOptions}
-              value={encodeModelOptionKey(slot.modelSelection)}
-              onChange={(key) => {
-                const decoded = decodeModelOptionKey(key, modelOptions);
-                if (decoded) updateSlot(index, { modelSelection: decoded });
+            <OfficialModelPicker
+              environmentId={environmentId}
+              value={slot.modelSelection}
+              onChange={(next) => {
+                if (next) updateSlot(index, { modelSelection: next });
               }}
               ariaLabel={gt("Select reviewer model")}
+              popupSide="bottom"
             />
           </div>
           <div className="w-44 shrink-0">
@@ -313,7 +352,7 @@ function ModelSlotsEditor({
             size="xs"
             variant="outline"
             onClick={addSlot}
-            disabled={modelOptions.length === 0}
+            disabled={pickableEntries.length === 0}
           >
             <PlusIcon className="size-3.5" />
             <T>Add parallel reviewer model</T>
@@ -331,8 +370,7 @@ export function LaunchPrReviewDialog({
   targets,
   presets,
   availableSkills,
-  modelOptions,
-  defaultMode = "multi_model_fusion",
+  defaultMode,
   onLaunched,
 }: {
   readonly open: boolean;
@@ -341,8 +379,7 @@ export function LaunchPrReviewDialog({
   readonly targets: ReadonlyArray<PrReviewTargetItem>;
   readonly presets: ReadonlyArray<PrReviewPreset>;
   readonly availableSkills: ReadonlyArray<PrReviewSkillDescriptor>;
-  readonly modelOptions: ReadonlyArray<SelectableModelOption>;
-  readonly defaultMode?: PrReviewMode;
+  readonly defaultMode?: PrReviewMode | undefined;
   readonly onLaunched?: (result: {
     readonly tasks: ReadonlyArray<PrReviewTask>;
     readonly jumpThreadId: string | null;
@@ -352,34 +389,56 @@ export function LaunchPrReviewDialog({
   const gt = useGT();
   const writeBackLabel = usePrReviewWriteBackLabel();
   const startReview = useAtomCommand(prReviewEnvironment.startReview, { reportFailure: false });
+  const catalog = useOfficialModelCatalog(environmentId);
+  const storageKey = `${PR_REVIEW_LAUNCH_PREFS_STORAGE_PREFIX}${environmentId}`;
 
-  const defaultPreset = presets.find((p) => p.isDefault) ?? presets[0] ?? null;
-  const [mode, setMode] = useState<PrReviewMode>(
-    targets.length > 1 ? "multi_model_fusion" : defaultMode,
+  const [initialConfig] = useState(() =>
+    resolveInitialPrReviewLaunchConfig({
+      savedPrefs: getLocalStorageItem(storageKey, PrReviewLaunchPrefsSchema),
+      presets,
+      targetCount: targets.length,
+      ...(defaultMode !== undefined ? { defaultMode } : {}),
+      ...(catalog.pickableEntries.length > 0
+        ? { isSelectionAvailable: catalog.isSelectionAvailable }
+        : {}),
+      availableSkillNames: new Set(availableSkills.map((skill) => skill.name)),
+      fallbackSelection: catalog.firstAvailableSelection,
+    }),
   );
-  const [selectedPresetId, setSelectedPresetId] = useState<string>(
-    defaultPreset?.id ?? "__custom__",
-  );
-  const [slots, setSlots] = useState<ReadonlyArray<PrReviewModelSlot>>(() =>
-    defaultPreset ? defaultPreset.reviewerModels : makeInitialSlots(modelOptions),
-  );
-  const [synthesizer, setSynthesizer] = useState<ModelSelection | null>(
-    defaultPreset?.synthesizerModel ?? null,
-  );
-  const [boundSkills, setBoundSkills] = useState<ReadonlyArray<string>>(
-    defaultPreset?.boundSkillNames ?? [],
-  );
+
+  const [mode, setMode] = useState<PrReviewMode>(initialConfig.mode);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(initialConfig.selectedPresetId);
+  const [slots, setSlots] = useState<ReadonlyArray<PrReviewModelSlot>>(initialConfig.slots);
+  const [synthesizer, setSynthesizer] = useState<ModelSelection | null>(initialConfig.synthesizer);
+  const [boundSkills, setBoundSkills] = useState<ReadonlyArray<string>>(initialConfig.boundSkills);
   const [writeBackMode, setWriteBackMode] = useState<PrReviewWriteBackMode>(
-    defaultPreset?.writeBackMode ?? "manual",
+    initialConfig.writeBackMode,
   );
   const [customInstructions, setCustomInstructions] = useState<string>(
-    defaultPreset?.customInstructions ?? "",
+    initialConfig.customInstructions,
   );
   const [submitting, setSubmitting] = useState(false);
 
-  if (slots.length === 0 && modelOptions.length > 0) {
-    setSlots(makeInitialSlots(modelOptions));
+  if (slots.length === 0 && catalog.pickableEntries.length > 0) {
+    setSlots(makeInitialSlotsFromEntries(catalog.pickableEntries));
   }
+
+  const savePrefs = (next: PrReviewLaunchPrefs) => {
+    setLocalStorageItem(storageKey, next, PrReviewLaunchPrefsSchema);
+  };
+
+  const handleModeChange = (nextMode: PrReviewMode) => {
+    setMode(nextMode);
+    savePrefs({
+      mode: nextMode,
+      selectedPresetId,
+      slots: [...slots],
+      synthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode,
+      customInstructions,
+    });
+  };
 
   const applyPreset = (presetId: string) => {
     setSelectedPresetId(presetId);
@@ -390,13 +449,110 @@ export function LaunchPrReviewDialog({
       setBoundSkills(found.boundSkillNames);
       setWriteBackMode(found.writeBackMode);
       setCustomInstructions(found.customInstructions ?? "");
+      savePrefs({
+        mode,
+        selectedPresetId: presetId,
+        slots: [...found.reviewerModels],
+        synthesizer: found.synthesizerModel,
+        boundSkills: [...found.boundSkillNames],
+        writeBackMode: found.writeBackMode,
+        customInstructions: found.customInstructions ?? "",
+      });
+      return;
     }
+    savePrefs({
+      mode,
+      selectedPresetId: presetId,
+      slots: [...slots],
+      synthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode,
+      customInstructions,
+    });
+  };
+
+  const handleSlotsChange = (nextSlots: ReadonlyArray<PrReviewModelSlot>) => {
+    setSelectedPresetId("__custom__");
+    setSlots(nextSlots);
+    savePrefs({
+      mode,
+      selectedPresetId: "__custom__",
+      slots: [...nextSlots],
+      synthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode,
+      customInstructions,
+    });
+  };
+
+  const handleSynthesizerChange = (nextSynthesizer: ModelSelection | null) => {
+    setSelectedPresetId("__custom__");
+    setSynthesizer(nextSynthesizer);
+    savePrefs({
+      mode,
+      selectedPresetId: "__custom__",
+      slots: [...slots],
+      synthesizer: nextSynthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode,
+      customInstructions,
+    });
+  };
+
+  const handleSkillsChange = (nextSkills: ReadonlyArray<string>) => {
+    setSelectedPresetId("__custom__");
+    setBoundSkills(nextSkills);
+    savePrefs({
+      mode,
+      selectedPresetId: "__custom__",
+      slots: [...slots],
+      synthesizer,
+      boundSkills: [...nextSkills],
+      writeBackMode,
+      customInstructions,
+    });
+  };
+
+  const handleWriteBackChange = (nextWriteBack: PrReviewWriteBackMode) => {
+    setSelectedPresetId("__custom__");
+    setWriteBackMode(nextWriteBack);
+    savePrefs({
+      mode,
+      selectedPresetId: "__custom__",
+      slots: [...slots],
+      synthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode: nextWriteBack,
+      customInstructions,
+    });
+  };
+
+  const handleCustomInstructionsChange = (nextInstructions: string) => {
+    setCustomInstructions(nextInstructions);
+    savePrefs({
+      mode,
+      selectedPresetId,
+      slots: [...slots],
+      synthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode,
+      customInstructions: nextInstructions,
+    });
   };
 
   const effectiveMode: PrReviewMode = targets.length > 1 ? "multi_model_fusion" : mode;
 
   const submit = async () => {
     if (slots.length === 0 || targets.length === 0 || submitting) return;
+    savePrefs({
+      mode: effectiveMode,
+      selectedPresetId,
+      slots: [...slots],
+      synthesizer,
+      boundSkills: [...boundSkills],
+      writeBackMode,
+      customInstructions,
+    });
     setSubmitting(true);
     const activeSlots = effectiveMode === "direct_agent" ? slots.slice(0, 1) : slots;
     const outcome = await startReview({
@@ -471,7 +627,7 @@ export function LaunchPrReviewDialog({
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button
                   type="button"
-                  onClick={() => setMode("multi_model_fusion")}
+                  onClick={() => handleModeChange("multi_model_fusion")}
                   className={cn(
                     "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors",
                     effectiveMode === "multi_model_fusion"
@@ -493,7 +649,7 @@ export function LaunchPrReviewDialog({
 
                 <button
                   type="button"
-                  onClick={() => setMode("direct_agent")}
+                  onClick={() => handleModeChange("direct_agent")}
                   className={cn(
                     "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors",
                     effectiveMode === "direct_agent"
@@ -552,12 +708,10 @@ export function LaunchPrReviewDialog({
                 )}
               </Label>
               <ModelSlotsEditor
+                environmentId={environmentId}
+                pickableEntries={catalog.pickableEntries}
                 slots={slots}
-                modelOptions={modelOptions}
-                onChange={(next) => {
-                  setSelectedPresetId("__custom__");
-                  setSlots(next);
-                }}
+                onChange={handleSlotsChange}
                 singleSlotOnly={effectiveMode === "direct_agent"}
               />
             </div>
@@ -567,14 +721,11 @@ export function LaunchPrReviewDialog({
                 <Label>
                   <T>Consensus Synthesizer / Judge Model</T>
                 </Label>
-                <SearchableModelMenu
-                  options={modelOptions}
-                  value={encodeModelOptionKey(synthesizer)}
-                  emptyOptionLabel={gt("Auto (useReviewer #1 as synthesizer)")}
-                  onChange={(key) => {
-                    setSelectedPresetId("__custom__");
-                    setSynthesizer(decodeModelOptionKey(key, modelOptions));
-                  }}
+                <OfficialModelPicker
+                  environmentId={environmentId}
+                  value={synthesizer}
+                  emptyOptionLabel={gt("Auto (use Reviewer #1 as synthesizer)")}
+                  onChange={handleSynthesizerChange}
                   ariaLabel={gt("Select synthesizer model")}
                 />
               </div>
@@ -594,10 +745,7 @@ export function LaunchPrReviewDialog({
               <SkillMultiPicker
                 availableSkills={availableSkills}
                 selectedNames={boundSkills}
-                onChange={(next) => {
-                  setSelectedPresetId("__custom__");
-                  setBoundSkills(next);
-                }}
+                onChange={handleSkillsChange}
               />
             </div>
 
@@ -610,8 +758,7 @@ export function LaunchPrReviewDialog({
                   value={writeBackMode}
                   onValueChange={(val) => {
                     if (val) {
-                      setSelectedPresetId("__custom__");
-                      setWriteBackMode(val as PrReviewWriteBackMode);
+                      handleWriteBackChange(val as PrReviewWriteBackMode);
                     }
                   }}
                 >
@@ -636,7 +783,7 @@ export function LaunchPrReviewDialog({
               <Textarea
                 rows={2}
                 value={customInstructions}
-                onChange={(e) => setCustomInstructions(e.currentTarget.value)}
+                onChange={(e) => handleCustomInstructionsChange(e.currentTarget.value)}
                 placeholder={gt(
                   "e.g. Focus on backward compatibility, SQL performance, and mobile surface parity…",
                 )}
@@ -651,7 +798,7 @@ export function LaunchPrReviewDialog({
           </Button>
           <Button
             onClick={() => void submit()}
-            disabled={submitting || slots.length === 0 || modelOptions.length === 0}
+            disabled={submitting || slots.length === 0 || catalog.pickableEntries.length === 0}
           >
             {effectiveMode === "direct_agent" ? (
               <>
@@ -677,24 +824,25 @@ export function PresetEditorDialog({
   environmentId,
   editingPreset,
   availableSkills,
-  modelOptions,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly editingPreset: PrReviewPreset | null;
   readonly availableSkills: ReadonlyArray<PrReviewSkillDescriptor>;
-  readonly modelOptions: ReadonlyArray<SelectableModelOption>;
 }) {
   const gt = useGT();
   const writeBackLabel = usePrReviewWriteBackLabel();
   const savePreset = useAtomCommand(prReviewEnvironment.savePreset, { reportFailure: false });
+  const catalog = useOfficialModelCatalog(environmentId);
 
   const [name, setName] = useState(editingPreset?.name ?? "");
   const [description, setDescription] = useState(editingPreset?.description ?? "");
   const [isDefault, setIsDefault] = useState(editingPreset?.isDefault ?? true);
   const [slots, setSlots] = useState<ReadonlyArray<PrReviewModelSlot>>(() =>
-    editingPreset ? editingPreset.reviewerModels : makeInitialSlots(modelOptions),
+    editingPreset
+      ? editingPreset.reviewerModels
+      : makeInitialSlotsFromEntries(catalog.pickableEntries),
   );
   const [synthesizer, setSynthesizer] = useState<ModelSelection | null>(
     editingPreset?.synthesizerModel ?? null,
@@ -709,6 +857,10 @@ export function PresetEditorDialog({
     editingPreset?.customInstructions ?? "",
   );
   const [saving, setSaving] = useState(false);
+
+  if (!editingPreset && slots.length === 0 && catalog.pickableEntries.length > 0) {
+    setSlots(makeInitialSlotsFromEntries(catalog.pickableEntries));
+  }
 
   const submit = async () => {
     if (!name.trim() || slots.length === 0 || saving) return;
@@ -800,18 +952,23 @@ export function PresetEditorDialog({
               <Label>
                 <T>Parallel Reviewer Models</T>
               </Label>
-              <ModelSlotsEditor slots={slots} modelOptions={modelOptions} onChange={setSlots} />
+              <ModelSlotsEditor
+                environmentId={environmentId}
+                pickableEntries={catalog.pickableEntries}
+                slots={slots}
+                onChange={setSlots}
+              />
             </div>
 
             <div className="flex flex-col gap-1.5">
               <Label>
                 <T>Synthesizer / Judge Model</T>
               </Label>
-              <SearchableModelMenu
-                options={modelOptions}
-                value={encodeModelOptionKey(synthesizer)}
+              <OfficialModelPicker
+                environmentId={environmentId}
+                value={synthesizer}
                 emptyOptionLabel={gt("Auto (use Reviewer #1 as synthesizer)")}
-                onChange={(key) => setSynthesizer(decodeModelOptionKey(key, modelOptions))}
+                onChange={setSynthesizer}
                 ariaLabel={gt("Select synthesizer model")}
               />
             </div>

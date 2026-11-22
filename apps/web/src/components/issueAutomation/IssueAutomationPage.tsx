@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -9,11 +8,11 @@ import type {
   IssueAutomationConnector,
   IssueAutomationProfile,
   IssueAutomationTask,
+  ModelSelection,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { AsyncResult } from "effect/reactivity";
 import { T, useGT } from "gt-react";
 import {
   BarChart3Icon,
@@ -37,6 +36,10 @@ import {
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { ComposerSurface } from "~/components/chat/ComposerSurface";
+import {
+  OfficialModelPicker,
+  useOfficialModelCatalog,
+} from "~/components/chat/OfficialModelPicker";
 import { PullRequestSearchInput } from "~/components/pullRequest/PullRequestListFilters";
 import {
   PULL_REQUEST_ROW_CLASS,
@@ -53,15 +56,10 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
-import {
-  deriveProviderInstanceEntries,
-  isProviderInstancePickerVisible,
-} from "~/providerInstances";
 import { useProjects } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { issueAutomationEnvironment, useIssueAutomationLiveState } from "~/state/issueAutomation";
 import { useEnvironmentQuery } from "~/state/query";
-import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -99,6 +97,7 @@ import {
   isStageRunning,
   IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
+  resolvePersistedModelSelection,
   resolvePersistedTarget,
   resolveTaskDurationMs,
   sortScopesByIdDesc,
@@ -110,14 +109,10 @@ import {
 import { IssueAutomationAnalyticsView } from "./IssueAutomationAnalyticsView";
 import {
   ConnectorModal,
-  decodeModelOptionKey,
-  encodeModelOptionKey,
   ProfileModal,
-  SearchableModelMenu,
   SearchableProjectMenu,
   SearchableScopeMenu,
   SELECTOR_SCROLL_LIST_STYLE,
-  type SelectableModelOption,
   type SelectableProjectOption,
 } from "./IssueAutomationConfigModals";
 import {
@@ -203,35 +198,7 @@ export function IssueAutomationPage() {
     }));
 
   const projectTitleById = new Map(envProjects.map((p) => [p.id as string, p.title]));
-
-  const serverConfigResult = useAtomValue(
-    environmentId !== null
-      ? serverEnvironment.configProjection({ environmentId, input: {} })
-      : serverEnvironment.configProjection({
-          environmentId: "none" as EnvironmentId,
-          input: {},
-        }),
-  );
-  const providers =
-    environmentId !== null
-      ? (AsyncResult.getOrElse(serverConfigResult, () => null)?.config.providers ??
-        EMPTY_SERVER_PROVIDERS)
-      : EMPTY_SERVER_PROVIDERS;
-
-  const modelOptions: ReadonlyArray<SelectableModelOption> = deriveProviderInstanceEntries(
-    providers,
-  )
-    .filter(isProviderInstancePickerVisible)
-    .flatMap((entry) =>
-      entry.models.map((m) => ({
-        key: `${entry.instanceId}::${m.slug}`,
-        label: `${entry.displayName} · ${m.name || m.slug}`,
-        selection: {
-          instanceId: entry.instanceId,
-          model: m.slug,
-        },
-      })),
-    );
+  const catalog = useOfficialModelCatalog(environmentId);
 
   const activeTab = prefs.activeTab;
   const setActiveTab = (next: WorkbenchTab) => {
@@ -290,20 +257,27 @@ export function IssueAutomationPage() {
       : null;
 
   const validProjectIds = envProjects.map((p) => p.id);
-  const validModelKeys = modelOptions.map((m) => m.key);
 
   const resolvedTargets = resolvePersistedTarget({
     prefs,
     scopeKey: scopePrefKey,
     profilePrimaryProjectId: matchedScopeProfile?.repositories.primaryProjectId,
-    profilePrimaryModelKey: encodeModelOptionKey(matchedScopeProfile?.models.primaryModel ?? null),
+    profilePrimaryModelKey: "",
     profileActionMode: matchedScopeProfile?.policy.actionMode,
     validProjectIds,
-    validModelKeys,
+    validModelKeys: [],
   });
 
   const resolvedProjectId = resolvedTargets.projectId;
-  const resolvedModelKey = resolvedTargets.modelKey;
+  const resolvedModelSelection = resolvePersistedModelSelection({
+    prefs,
+    scopeKey: scopePrefKey,
+    profilePrimaryModel: matchedScopeProfile?.models.primaryModel,
+    ...(catalog.pickableEntries.length > 0
+      ? { isSelectionAvailable: catalog.isSelectionAvailable }
+      : {}),
+    fallbackSelection: catalog.firstAvailableSelection,
+  });
   const resolvedActionMode = resolvedTargets.actionMode;
 
   const handleSelectConnector = (nextConnectorId: string) => {
@@ -351,15 +325,21 @@ export function IssueAutomationPage() {
     }));
   };
 
-  const handleSelectModel = (nextModelKey: string) => {
+  const handleSelectModel = (nextModelSelection: ModelSelection) => {
+    const nextModelKey = `${nextModelSelection.instanceId}::${nextModelSelection.model}`;
     setPrefs((prev) => ({
       ...prev,
       lastModelKey: nextModelKey,
+      lastModelSelection: nextModelSelection,
       ...(scopePrefKey
         ? {
             modelByScope: {
               ...prev.modelByScope,
               [scopePrefKey]: nextModelKey,
+            },
+            modelSelectionByScope: {
+              ...prev.modelSelectionByScope,
+              [scopePrefKey]: nextModelSelection,
             },
           }
         : {}),
@@ -542,9 +522,9 @@ export function IssueAutomationPage() {
     if (!environmentId || !activeConnector || !effectiveScopeId || keysToRun.length === 0) return;
     const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
-      decodeModelOptionKey(resolvedModelKey, modelOptions) ??
+      resolvedModelSelection ??
       matchedScopeProfile?.models.primaryModel ??
-      modelOptions[0]?.selection ??
+      catalog.firstAvailableSelection ??
       null;
 
     if (!chosenProjectId || !chosenModel) {
@@ -690,12 +670,11 @@ export function IssueAutomationPage() {
         inspectorTab={inspectorTab}
         onInspectorTabChange={setInspectorTab}
         projects={envProjects}
-        modelOptions={modelOptions}
         matchedProfile={matchedScopeProfile}
         adhocProjectId={resolvedProjectId}
         onAdhocProjectIdChange={handleSelectProject}
-        adhocModelKey={resolvedModelKey}
-        onAdhocModelKeyChange={handleSelectModel}
+        adhocModelSelection={resolvedModelSelection}
+        onAdhocModelSelectionChange={handleSelectModel}
         adhocMode={resolvedActionMode}
         onAdhocModeChange={handleSelectActionMode}
         dispatching={dispatching}
@@ -1010,17 +989,19 @@ export function IssueAutomationPage() {
                     />
                   ) : null}
 
-                  {modelOptions.length > 0 ? (
-                    <SearchableModelMenu
-                      options={modelOptions}
-                      value={resolvedModelKey}
-                      onChange={handleSelectModel}
+                  {environmentId && catalog.pickableEntries.length > 0 ? (
+                    <OfficialModelPicker
+                      environmentId={environmentId}
+                      value={resolvedModelSelection}
+                      onChange={(next) => {
+                        if (next) handleSelectModel(next);
+                      }}
                       ariaLabel={gt("Default AI model")}
-                      size="default"
-                      triggerVariant="outline"
-                      leadingIcon={<BotIcon className="size-3.5 shrink-0 text-muted-foreground" />}
-                      className={cn(
-                        "min-w-0",
+                      size="sm"
+                      popupSide="bottom"
+                      popupAlign="end"
+                      triggerClassName={cn(
+                        "h-8 min-w-0",
                         desktopInspectorVisible
                           ? "hidden w-44 2xl:inline-flex"
                           : "hidden w-52 xl:inline-flex",
@@ -1622,14 +1603,19 @@ export function IssueAutomationPage() {
                         className="w-36 min-w-0"
                       />
 
-                      <SearchableModelMenu
-                        options={modelOptions}
-                        value={resolvedModelKey}
-                        onChange={handleSelectModel}
-                        ariaLabel={gt("Batch AI model")}
-                        size="compact"
-                        className="w-40 min-w-0"
-                      />
+                      {environmentId ? (
+                        <OfficialModelPicker
+                          environmentId={environmentId}
+                          value={resolvedModelSelection}
+                          onChange={(next) => {
+                            if (next) handleSelectModel(next);
+                          }}
+                          ariaLabel={gt("Batch AI model")}
+                          size="xs"
+                          popupSide="top"
+                          triggerClassName="w-40 min-w-0"
+                        />
+                      ) : null}
 
                       <Select
                         value={resolvedActionMode}
@@ -1724,7 +1710,6 @@ export function IssueAutomationPage() {
           environmentId={environmentId}
           connectors={snapshot.connectors}
           projects={envProjects}
-          modelOptions={modelOptions}
           initial={editingProfile}
           defaultConnectorId={activeConnector?.id}
           defaultScopeId={effectiveScopeId}

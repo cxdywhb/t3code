@@ -43,13 +43,16 @@ import {
   UserIcon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
 import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { RESIZABLE_WIDTH_PROPERTY, useResizableWidth } from "~/hooks/useResizableWidth";
 import { m } from "~/i18n/messages";
+import { observeResize } from "~/lib/observeResize";
 import { cn, newProjectId } from "~/lib/utils";
 import { useProjects, waitForProject } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
@@ -593,6 +596,19 @@ export function RepositoriesPage() {
   const [selectedNamespace, setSelectedNamespace] = useState<SelectedNamespace>({ mode: "all" });
   const [groupFilter, setGroupFilter] = useState("");
   const [expandedGroupIds, setExpandedGroupIds] = useState<ReadonlySet<string>>(() => new Set());
+  const desktopGroupsResizable = useMediaQuery("(min-width: 768px)");
+  const [maxGroupsWidth, setMaxGroupsWidth] = useState(560);
+  const {
+    width: groupsWidth,
+    setWidth: setGroupsWidth,
+    handlers: groupsResizeHandlers,
+  } = useResizableWidth({
+    storageKey: "t3code:repositories:groups-width:v1",
+    defaultWidth: 304,
+    minWidth: 220,
+    maxWidth: maxGroupsWidth,
+    edge: "right",
+  });
   const [searchInput, setSearchInput] = useState("");
   const debouncedSearch = useDebouncedValue(searchInput.trim(), 250);
   const [includeSubgroups, setIncludeSubgroups] = useState(true);
@@ -1119,7 +1135,31 @@ export function RepositoriesPage() {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           {/* Left pane: Namespace / Group tree */}
-          <aside className="flex w-full shrink-0 flex-col border-b border-border bg-muted/15 md:w-76 lg:w-80 md:border-r md:border-b-0">
+          <aside
+            ref={(node) => {
+              if (!desktopGroupsResizable || !node) return;
+              const row = node.parentElement;
+              if (!row) return;
+              const measure = () => {
+                const available = Math.max(220, row.clientWidth - 360);
+                setMaxGroupsWidth(Math.min(560, available));
+              };
+              measure();
+              return observeResize(row, measure);
+            }}
+            className={cn(
+              "relative flex w-full shrink-0 flex-col border-b border-border bg-muted/15 md:border-r md:border-b-0",
+              !desktopGroupsResizable && "md:w-76 lg:w-80",
+            )}
+            style={
+              desktopGroupsResizable
+                ? ({
+                    [RESIZABLE_WIDTH_PROPERTY]: `${groupsWidth}px`,
+                    width: `var(${RESIZABLE_WIDTH_PROPERTY})`,
+                  } as CSSProperties)
+                : undefined
+            }
+          >
             <div className="border-b border-border p-3">
               <InputGroup>
                 <InputGroupAddon>
@@ -1289,6 +1329,48 @@ export function RepositoriesPage() {
                 />
               )}
             </div>
+            {desktopGroupsResizable ? (
+              <div
+                role="separator"
+                aria-label={gt("Resize group list")}
+                aria-orientation="vertical"
+                aria-valuenow={groupsWidth}
+                aria-valuemin={220}
+                aria-valuemax={maxGroupsWidth}
+                tabIndex={0}
+                onDoubleClick={() => setGroupsWidth(304)}
+                onKeyDown={(event) => {
+                  if (event.altKey || event.ctrlKey || event.metaKey) return;
+                  const step = event.shiftKey ? 48 : 16;
+                  let nextWidth: number;
+                  switch (event.key) {
+                    case "ArrowLeft":
+                      nextWidth = groupsWidth - step;
+                      break;
+                    case "ArrowRight":
+                      nextWidth = groupsWidth + step;
+                      break;
+                    case "Home":
+                      nextWidth = 220;
+                      break;
+                    case "End":
+                      nextWidth = maxGroupsWidth;
+                      break;
+                    default:
+                      return;
+                  }
+                  event.preventDefault();
+                  setGroupsWidth(Math.max(220, Math.min(maxGroupsWidth, nextWidth)));
+                }}
+                className="group absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize touch-none select-none focus-visible:outline-none"
+                {...groupsResizeHandlers}
+              >
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors duration-150 group-hover:bg-primary/50 group-focus-visible:bg-primary group-active:bg-primary"
+                />
+              </div>
+            ) : null}
           </aside>
 
           {/* Right pane: Repository list & batch clone bar */}

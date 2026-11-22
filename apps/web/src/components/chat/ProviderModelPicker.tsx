@@ -128,6 +128,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    */
   effortColumn?: ReactNode;
   footer?: ReactNode;
+  popupSide?: "top" | "bottom";
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -462,9 +463,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         align={props.popupAlign ?? "start"}
         // Docked, the popup opens above the composer and slides over it when that space is short,
         // so a short window gets its full height (Floating UI sizes to the viewport) instead of a sliver.
-        {...(docked
-          ? { side: "top" as const, collisionAvoidance: { side: "shift", align: "shift" } as const }
-          : {})}
+        {...(props.popupSide !== undefined
+          ? {
+              side: props.popupSide,
+              collisionAvoidance: { side: "flip", align: "shift" } as const,
+            }
+          : docked
+            ? {
+                side: "top" as const,
+                collisionAvoidance: { side: "shift", align: "shift" } as const,
+              }
+            : {})}
         className="before:hidden"
         padding="none"
         touchBackdrop

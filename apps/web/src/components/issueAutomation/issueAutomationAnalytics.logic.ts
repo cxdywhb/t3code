@@ -1,6 +1,8 @@
 import {
   IssueAutomationActionMode,
   IssueAutomationBrowseFilter,
+  ModelSelection,
+  ProviderInstanceId,
   type IssueAutomationStage,
   type IssueAutomationTask,
 } from "@t3tools/contracts";
@@ -33,6 +35,8 @@ export const IssueAutomationWorkbenchPrefsSchema = Schema.Struct({
   lastProjectId: Schema.String,
   modelByScope: Schema.Record(Schema.String, Schema.String),
   lastModelKey: Schema.String,
+  modelSelectionByScope: Schema.optional(Schema.Record(Schema.String, ModelSelection)),
+  lastModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   modeByScope: Schema.Record(Schema.String, IssueAutomationActionMode),
   lastMode: IssueAutomationActionMode,
   runFilter: RunStatusFilterSchema,
@@ -122,6 +126,60 @@ export function resolvePersistedTarget(input: {
     scopedMode ?? input.profileActionMode ?? input.prefs.lastMode;
 
   return { projectId, modelKey, actionMode };
+}
+
+function decodeLegacyModelOptionKey(key: string | null | undefined): ModelSelection | null {
+  if (!key) return null;
+  const sep = key.indexOf("::");
+  if (sep <= 0) return null;
+  const instanceId = key.slice(0, sep).trim();
+  const model = key.slice(sep + 2).trim();
+  if (!instanceId || !model) return null;
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    model,
+  };
+}
+
+export function resolvePersistedModelSelection(input: {
+  readonly prefs: IssueAutomationWorkbenchPrefs;
+  readonly scopeKey: string;
+  readonly profilePrimaryModel: ModelSelection | null | undefined;
+  readonly isSelectionAvailable?: (selection: ModelSelection) => boolean;
+  readonly fallbackSelection: ModelSelection | null;
+}): ModelSelection | null {
+  const isAvailable = (selection: ModelSelection | null | undefined): selection is ModelSelection =>
+    Boolean(
+      selection && (input.isSelectionAvailable ? input.isSelectionAvailable(selection) : true),
+    );
+
+  const scopedSelection = input.scopeKey
+    ? input.prefs.modelSelectionByScope?.[input.scopeKey]
+    : undefined;
+  if (isAvailable(scopedSelection)) {
+    return scopedSelection;
+  }
+
+  const scopedLegacyKey = input.scopeKey ? input.prefs.modelByScope[input.scopeKey] : undefined;
+  const decodedScopedLegacy = decodeLegacyModelOptionKey(scopedLegacyKey);
+  if (isAvailable(decodedScopedLegacy)) {
+    return decodedScopedLegacy;
+  }
+
+  if (isAvailable(input.profilePrimaryModel)) {
+    return input.profilePrimaryModel;
+  }
+
+  if (isAvailable(input.prefs.lastModelSelection)) {
+    return input.prefs.lastModelSelection;
+  }
+
+  const decodedLastLegacy = decodeLegacyModelOptionKey(input.prefs.lastModelKey);
+  if (isAvailable(decodedLastLegacy)) {
+    return decodedLastLegacy;
+  }
+
+  return isAvailable(input.fallbackSelection) ? input.fallbackSelection : input.fallbackSelection;
 }
 
 export function isStageRunning(stage: IssueAutomationStage): boolean {

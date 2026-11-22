@@ -1,13 +1,23 @@
 import {
+  COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS,
+  PositiveInt,
   PrReviewFinding,
   PrReviewFindingSeverity,
   PrReviewVerdict,
+  type OrchestrationMessageContext,
   type PrReviewModelRun,
   type PrReviewRole,
   type PrReviewSkillDescriptor,
   type PullRequestActivity,
   type PullRequestDetail,
+  type ReviewCommentContextRecord,
+  type SkillContextRecord,
 } from "@t3tools/contracts";
+import {
+  formatComposerContextReference,
+  sanitizeComposerContextLabel,
+  toKindScopedComposerContextId,
+} from "@t3tools/shared/composerContextReferences";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -32,8 +42,10 @@ const ROLE_INSTRUCTIONS: Record<PrReviewRole, string> = {
     "重点审查模块职责边界、跨端/前后端契约兼容性、向后兼容风险、代码复用度及关键逻辑的可测试性。",
 };
 
-const INLINE_DIFF_MAX_CHARS = 55_000;
 export const FUSION_BOT_SIGNATURE = "[T3-Multi-Model-Fusion-Review]";
+
+const NOISE_OR_GENERATED_FILE_PATTERN =
+  /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|Podfile\.lock|Cargo\.lock|composer\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|flake\.lock|go\.sum)$|(^|\/)(dist|build|coverage|vendor|node_modules|\.next|\.nuxt|__snapshots__|generated)\/|\.(min\.(js|css)|map|snap|pbxproj|lock|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|eot|pdf|zip|gz|tar)$/iu;
 
 type PrReviewPromptDetail = Pick<
   PullRequestDetail,
@@ -43,6 +55,8 @@ type PrReviewPromptDetail = Pick<
   | "title"
   | "body"
   | "url"
+  | "state"
+  | "isDraft"
   | "author"
   | "headBranch"
   | "baseBranch"
@@ -52,165 +66,416 @@ type PrReviewPromptDetail = Pick<
   | "changedFiles"
 >;
 
-export function buildReviewerPrompt(input: {
+export interface DiffManifestFile {
+  readonly path: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly isBinary: boolean;
+  readonly isLikelyGenerated: boolean;
+}
+
+export interface DiffFileManifest {
+  readonly files: ReadonlyArray<DiffManifestFile>;
+  readonly formattedManifest: string;
+}
+
+function clampField(value: string, maxChars: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  let end = Math.max(0, maxChars - 1);
+  const last = trimmed.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${trimmed.slice(0, end)}…`;
+}
+
+function parseDiffHeaderPath(headerLine: string): string | null {
+  // Format: diff --git a/path/to/file b/path/to/file
+  const bMarkerIndex = headerLine.lastIndexOf(" b/");
+  if (bMarkerIndex !== -1) {
+    const candidate = headerLine.slice(bMarkerIndex + 3).trim();
+    return candidate.replace(/^"|"$/gu, "") || null;
+  }
+  const rest = headerLine.slice("diff --git ".length).trim();
+  const parts = rest.split(/\s+/u);
+  const last = parts.at(-1)?.replace(/^[ab]\//u, "") ?? "";
+  return last || null;
+}
+
+export function parseDiffFileManifest(patch: string): DiffFileManifest {
+  if (!patch.trim()) {
+    return { files: [], formattedManifest: "（空 Diff）" };
+  }
+
+  const files: DiffManifestFile[] = [];
+  let currentPath: string | null = null;
+  let additions = 0;
+  let deletions = 0;
+  let isBinary = false;
+
+  const flush = () => {
+    if (!currentPath) return;
+    files.push({
+      path: currentPath,
+      additions,
+      deletions,
+      isBinary,
+      isLikelyGenerated: NOISE_OR_GENERATED_FILE_PATTERN.test(currentPath),
+    });
+  };
+
+  for (const line of patch.split(/\r?\n/u)) {
+    if (line.startsWith("diff --git ")) {
+      flush();
+      currentPath = parseDiffHeaderPath(line);
+      additions = 0;
+      deletions = 0;
+      isBinary = false;
+      continue;
+    }
+    if (!currentPath) continue;
+    if (line.startsWith("+++ b/")) {
+      const nextPath = line.slice(6).trim();
+      if (nextPath && nextPath !== "/dev/null") {
+        currentPath = nextPath;
+      }
+      continue;
+    }
+    if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
+      isBinary = true;
+      continue;
+    }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      additions += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      deletions += 1;
+    }
+  }
+  flush();
+
+  if (files.length === 0) {
+    return {
+      files: [],
+      formattedManifest: "（未能解析出具体变更文件条目，请直接查看 diff.patch）",
+    };
+  }
+
+  const formattedManifest = files
+    .map((file) => {
+      const stats = file.isBinary ? "[binary]" : `+${file.additions}/-${file.deletions}`;
+      const noise = file.isLikelyGenerated ? " [generated/lock]" : "";
+      return `- \`${file.path}\` (${stats})${noise}`;
+    })
+    .join("\n");
+
+  return { files, formattedManifest };
+}
+
+export function buildPrContextDocument(input: {
   readonly detail: PrReviewPromptDetail;
   readonly activity: PullRequestActivity | null;
-  readonly patch: string;
+  readonly manifestText: string;
+}): string {
+  const sigil = input.detail.provider === "gitlab" ? "!" : "#";
+  const displayRef = `${input.detail.repository}${sigil}${input.detail.number}`;
+
+  const commitLines =
+    !input.activity || input.activity.commits.length === 0
+      ? "（无提交记录摘要）"
+      : input.activity.commits
+          .slice(0, 30)
+          .map((c) => `- \`${c.oid.slice(0, 8)}\` ${c.messageHeadline}`)
+          .join("\n");
+
+  const commentLines =
+    !input.activity || input.activity.comments.length === 0
+      ? "（暂无历史评审评论）"
+      : input.activity.comments
+          .slice(-20)
+          .map(
+            (c) =>
+              `- **@${c.author?.login ?? "unknown"}** (${c.createdAt}):\n  ${c.body.slice(0, 1000).replace(/\n+/g, "\n  ")}`,
+          )
+          .join("\n");
+
+  return [
+    `# PR / Merge Request 上下文归档：${displayRef} - ${input.detail.title}`,
+    "",
+    "## 元数据",
+    `- **仓库与编号**: \`${displayRef}\``,
+    `- **链接**: ${input.detail.url}`,
+    `- **作者**: @${input.detail.author?.login ?? "unknown"}`,
+    `- **分支**: \`${input.detail.headBranch}\` → \`${input.detail.baseBranch}\`${input.detail.headSha ? ` (Head SHA: \`${input.detail.headSha}\`)` : ""}`,
+    `- **规模**: +${input.detail.additions} / -${input.detail.deletions}（${input.detail.changedFiles} files）`,
+    "",
+    "## 变更说明 (Description)",
+    input.detail.body.trim() || "（作者未填写描述）",
+    "",
+    "## 变更文件清单",
+    input.manifestText,
+    "",
+    "## 提交记录",
+    commitLines,
+    "",
+    "## 近期讨论评论",
+    commentLines,
+  ].join("\n");
+}
+
+function buildCompactManifestPreview(
+  manifest: DiffFileManifest,
+  contextFilePath: string,
+): ReadonlyArray<string> {
+  if (manifest.files.length === 0) {
+    return ["- （未解析出文件清单，请按需查阅补丁与上下文文件）"];
+  }
+  if (manifest.files.length <= 20) {
+    return manifest.files.map((file) => {
+      const stats = file.isBinary ? "binary" : `+${file.additions}/-${file.deletions}`;
+      return `- \`${file.path}\` (${stats})${file.isLikelyGenerated ? " [generated/lock]" : ""}`;
+    });
+  }
+  const sourceFiles = manifest.files.filter((f) => !f.isLikelyGenerated);
+  const generatedCount = manifest.files.length - sourceFiles.length;
+  const shown = (sourceFiles.length > 0 ? sourceFiles : manifest.files).slice(0, 15);
+  const omittedCount = manifest.files.length - shown.length;
+  return [
+    ...shown.map((file) => {
+      const stats = file.isBinary ? "binary" : `+${file.additions}/-${file.deletions}`;
+      return `- \`${file.path}\` (${stats})${file.isLikelyGenerated ? " [generated/lock]" : ""}`;
+    }),
+    `- ... 另有 ${omittedCount} 个文件未内联展示${generatedCount > 0 ? `（含 ${generatedCount} 个锁文件/产物/静态资源）` : ""}，完整清单请查看 \`${contextFilePath}\``,
+  ];
+}
+
+function buildPullRequestContextBundle(input: {
+  readonly detail: PrReviewPromptDetail;
+  readonly instructionsText: string;
+}): {
+  readonly record: ReviewCommentContextRecord;
+  readonly reference: string;
+} {
+  const contextId = toKindScopedComposerContextId(
+    "review-comment",
+    `pull-request-context:${input.detail.url}`,
+  );
+  const label = sanitizeComposerContextLabel(`#${input.detail.number}`, "review-comment");
+  const record: ReviewCommentContextRecord = {
+    version: 1,
+    contextId,
+    kind: "review-comment",
+    label,
+    sectionId: `pull-request:${input.detail.number}`,
+    sectionTitle: `PR #${input.detail.number}`,
+    filePath: `PR #${input.detail.number}`,
+    startIndex: 0,
+    endIndex: 0,
+    rangeLabel: clampField(input.detail.title, 500),
+    text: clampField(input.instructionsText, COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS),
+    diff: "",
+    pullRequest: {
+      number: PositiveInt.make(input.detail.number),
+      title: clampField(input.detail.title, 500),
+      url: clampField(input.detail.url, 2_000),
+      headBranch: clampField(input.detail.headBranch, 500),
+      baseBranch: clampField(input.detail.baseBranch, 500),
+      state: input.detail.state,
+      isDraft: input.detail.isDraft,
+    },
+  };
+  return {
+    record,
+    reference: formatComposerContextReference({
+      kind: "review-comment",
+      contextId,
+      label,
+    }),
+  };
+}
+
+function buildSkillContextBundle(skills: ReadonlyArray<PrReviewSkillDescriptor>): {
+  readonly records: ReadonlyArray<SkillContextRecord>;
+  readonly references: ReadonlyArray<string>;
+} {
+  const records: SkillContextRecord[] = [];
+  const references: string[] = [];
+  for (const skill of skills) {
+    const contextId = toKindScopedComposerContextId("skill", skill.name);
+    const label = sanitizeComposerContextLabel(skill.displayName || skill.name, "skill");
+    records.push({
+      version: 1,
+      contextId,
+      kind: "skill",
+      label,
+      name: skill.name,
+    });
+    references.push(
+      formatComposerContextReference({
+        kind: "skill",
+        contextId,
+        label,
+      }),
+    );
+  }
+  return { records, references };
+}
+
+export interface BuiltReviewMessage {
+  readonly text: string;
+  readonly context: OrchestrationMessageContext;
+}
+
+export function buildReviewerMessage(input: {
+  readonly detail: PrReviewPromptDetail;
+  readonly manifest: DiffFileManifest;
   readonly diffFilePath: string;
+  readonly contextFilePath: string;
   readonly role: PrReviewRole;
   readonly isLocalCheckout: boolean;
   readonly workspaceRoot: string;
   readonly skills: ReadonlyArray<PrReviewSkillDescriptor>;
   readonly customInstructions: string | null;
   readonly interactiveDirectMode: boolean;
+}): BuiltReviewMessage {
+  const sigil = input.detail.provider === "gitlab" ? "!" : "#";
+  const displayRef = `${input.detail.repository}${sigil}${input.detail.number}`;
+  const skillBundle = buildSkillContextBundle(input.skills);
+
+  const hiddenLines = [
+    `审查任务：${displayRef} - ${input.detail.title}`,
+    `- 链接: ${input.detail.url}`,
+    `- 作者: @${input.detail.author?.login ?? "unknown"} | 分支: ${input.detail.headBranch} -> ${input.detail.baseBranch}${input.detail.headSha ? ` (${input.detail.headSha.slice(0, 12)})` : ""}`,
+    `- 变更规模: +${input.detail.additions} / -${input.detail.deletions}（共 ${input.detail.changedFiles} 个文件）`,
+    `- 审查视角: ${ROLE_LABELS_ZH[input.role]}：${ROLE_INSTRUCTIONS[input.role]}`,
+    "",
+    "本地按需检索资料（首轮未内联全量 Diff 与评论，请按需读取以节省上下文 Token）：",
+    `- 完整 Unified Diff 文件: ${input.diffFilePath}`,
+    `- PR 描述、提交历史与评论归档: ${input.contextFilePath}`,
+    input.isLocalCheckout
+      ? `- 本地仓库源码目录: ${input.workspaceRoot}（可只读检索上下文类型与调用链，也可用 pull_request_read 工具按需查询）`
+      : "- 运行模式: 云端远端仓库审查（本地无完整源码检出，请按需从 diff.patch 与 context.md 分段读取）",
+    "",
+    "节省 Token 审查策略：",
+    "- 严禁修改、新建或删除任何项目源码文件，仅做只读代码分析。",
+    "- 请先扫视下方变更文件清单；若 diff.patch 体积较大，切勿一次性全量读入，应跳过 lockfile / 构建产物 / 压缩文件 / 二进制资源，仅用 grep 或分段行号按需读取关键业务逻辑与高风险文件的变更 hunk。",
+    "",
+    "变更文件摘要：",
+    ...buildCompactManifestPreview(input.manifest, input.contextFilePath),
+    ...(input.skills.length > 0
+      ? [
+          "",
+          "绑定的专业审查 Skills（请按需先读取以下 SKILL.md 规范后执行审查）：",
+          ...input.skills.map(
+            (s) =>
+              `- ${s.displayName || s.name} (${s.name}): ${s.path}${s.description ? `：${s.description}` : ""}`,
+          ),
+        ]
+      : []),
+    ...(input.customInstructions?.trim()
+      ? ["", `团队附加审查规范：${input.customInstructions.trim()}`]
+      : []),
+    "",
+    "输出格式要求（请使用中文，每个问题给出准确文件路径、行号与触发机理）：",
+    "1. `## 审查结论`：明确给出建议（Approve / Request Changes / Comment）与一句话总结；",
+    "2. `## 发现的问题清单`：按严重度（[BLOCKER]、[MAJOR]、[MINOR]、[NIT]）列出 `文件路径:行号`、触发条件与修复建议；",
+    "3. `## 风险点与验证建议`：简述潜在回归面与验证方式。",
+    ...(input.interactiveDirectMode
+      ? ["完成后开发者可能会在当前会话继续与你讨论该 PR/MR 的细节或让你协助回写评审意见。"]
+      : []),
+  ];
+
+  const prBundle = buildPullRequestContextBundle({
+    detail: input.detail,
+    instructionsText: hiddenLines.join("\n"),
+  });
+
+  const visibleParts = [
+    `请以「${ROLE_LABELS_ZH[input.role]}」视角审查 ${prBundle.reference}${skillBundle.references.length > 0 ? `，遵循 ${skillBundle.references.join(" ")}` : ""}。`,
+    ...(input.customInstructions?.trim() ? [`附加要求：${input.customInstructions.trim()}`] : []),
+  ];
+
+  return {
+    text: visibleParts.join("\n"),
+    context: {
+      version: 1,
+      records: [prBundle.record, ...skillBundle.records],
+    },
+  };
+}
+
+export function buildReviewerReportsDocument(input: {
+  readonly detail: PrReviewPromptDetail;
+  readonly reviewerRuns: ReadonlyArray<PrReviewModelRun>;
 }): string {
   const sigil = input.detail.provider === "gitlab" ? "!" : "#";
   const displayRef = `${input.detail.repository}${sigil}${input.detail.number}`;
-  const inlinePatch =
-    input.patch.length <= INLINE_DIFF_MAX_CHARS
-      ? input.patch
-      : `${input.patch.slice(0, INLINE_DIFF_MAX_CHARS)}\n\n... [Diff 超长已截断，完整 Patch 已保存至本地文件: ${input.diffFilePath}，请使用读文件工具查阅剩余变更]`;
-
-  const commitLines =
-    !input.activity || input.activity.commits.length === 0
-      ? "（无提交记录摘要）"
-      : input.activity.commits
-          .slice(0, 20)
-          .map((c) => `- \`${c.oid.slice(0, 8)}\` ${c.messageHeadline}`)
-          .join("\n");
-
-  const recentComments =
-    !input.activity || input.activity.comments.length === 0
-      ? "（暂无历史评审评论）"
-      : input.activity.comments
-          .slice(-6)
-          .map(
-            (c) =>
-              `- **@${c.author?.login ?? "unknown"}** (${c.createdAt}): ${c.body.slice(0, 300).replace(/\n+/g, " ")}`,
-          )
-          .join("\n");
-
-  const skillSection =
-    input.skills.length === 0
-      ? []
-      : [
-          "",
-          "## 绑定的专业审查 Skills（请先读取并严格遵循以下 Skill 规范）",
-          ...input.skills.map(
-            (s) =>
-              `- **${s.displayName || s.name}** (\`${s.name}\`): 请读取 \`${s.path}\`${s.description ? `: ${s.description}` : ""}`,
-          ),
-        ];
-
-  return [
-    `# 代码变更深度审查任务：${displayRef} - ${input.detail.title}`,
-    "",
-    "## 1. PR / Merge Request 元数据",
-    `- **仓库与编号**: \`${displayRef}\``,
-    `- **链接**: ${input.detail.url}`,
-    `- **作者**: @${input.detail.author?.login ?? "unknown"}`,
-    `- **分支流向**: \`${input.detail.headBranch}\` → \`${input.detail.baseBranch}\`${input.detail.headSha ? ` (Head SHA: \`${input.detail.headSha.slice(0, 12)}\`)` : ""}`,
-    `- **变更规模**: +${input.detail.additions} / -${input.detail.deletions}（共 ${input.detail.changedFiles} 个文件）`,
-    `- **完整 Diff 补丁文件**: \`${input.diffFilePath}\``,
-    input.isLocalCheckout
-      ? `- **本地仓库源码目录**: \`${input.workspaceRoot}\`（你可以只读检索仓库上下文、类型定义与上下游调用链以验证判断）`
-      : `- **运行模式**: 云端远端仓库直接审查（本地未克隆完整仓库，请基于完整 Diff 补丁文件与描述进行深入审查）`,
-    "",
-    "## 2. 审查角色与侧重点",
-    `- **当前审查视角**: **${ROLE_LABELS_ZH[input.role]}**`,
-    `- **职责要求**: ${ROLE_INSTRUCTIONS[input.role]}`,
-    "- **安全约束**: **严禁修改、新建或删除项目源码文件**，仅做只读代码分析与验证。",
-    ...skillSection,
-    ...(input.customInstructions?.trim()
-      ? ["", "## 3. 团队附加审查规范", input.customInstructions.trim()]
-      : []),
-    "",
-    "## 4. 变更说明 (Description)",
-    input.detail.body.trim() || "（作者未填写描述）",
-    "",
-    "## 5. 提交记录与近期讨论",
-    "### Commits",
-    commitLines,
-    "### 近期评论",
-    recentComments,
-    "",
-    "## 6. Unified Diff 变更内容",
-    "```diff",
-    inlinePatch || "（空 Diff）",
-    "```",
-    "",
-    "## 7. 输出格式要求",
-    "请使用中文输出严谨、言之有物的代码审查报告（拒绝空泛套话，每个问题必须指出准确文件路径、行号与触发机理）：",
-    "1. `## 审查结论`：明确给出建议（`Approve / 建议通过`、`Request Changes / 建议修改后合并` 或 `Comment / 仅留评建议`）及一句话总结；",
-    "2. `## 发现的问题清单`：按严重度（`[BLOCKER]`、`[MAJOR]`、`[MINOR]`、`[NIT]`）逐条列出：",
-    "   - 准确位置：`文件路径:行号`（对应新文件行号）",
-    "   - 问题描述与触发条件",
-    "   - 具体修复建议或代码片段；",
-    "3. `## 风险点与验证建议`：简述潜在回归面或需要补充的测试。",
-    ...(input.interactiveDirectMode
-      ? ["", "完成后开发者可能会在当前会话继续与你讨论该 PR/MR 的细节或让你协助回写评审意见。"]
-      : []),
-  ].join("\n");
+  const sections = input.reviewerRuns.map((run, idx) =>
+    [
+      `## 模型 #${idx + 1}：\`${run.modelLabel}\`（视角：${ROLE_LABELS_ZH[run.role]}）`,
+      `- 状态: ${run.status}`,
+      "",
+      run.status === "completed" && run.reportMarkdown
+        ? run.reportMarkdown.trim()
+        : `（该模型执行未产出报告：${run.error ?? run.status}）`,
+    ].join("\n"),
+  );
+  return [`# 并行模型独立审查报告汇总：${displayRef}`, "", ...sections].join("\n\n---\n\n");
 }
 
-export function buildSynthesizerPrompt(input: {
+export function buildSynthesizerMessage(input: {
   readonly detail: PrReviewPromptDetail;
   readonly diffFilePath: string;
+  readonly contextFilePath: string;
+  readonly reportsFilePath: string;
   readonly isLocalCheckout: boolean;
   readonly workspaceRoot: string;
   readonly reviewerRuns: ReadonlyArray<PrReviewModelRun>;
   readonly skills: ReadonlyArray<PrReviewSkillDescriptor>;
   readonly customInstructions: string | null;
-}): string {
+}): BuiltReviewMessage {
   const sigil = input.detail.provider === "gitlab" ? "!" : "#";
   const displayRef = `${input.detail.repository}${sigil}${input.detail.number}`;
-  const reportsBlock = input.reviewerRuns
-    .map((run, idx) =>
-      [
-        `### 模型 #${idx + 1}：\`${run.modelLabel}\`（视角：${ROLE_LABELS_ZH[run.role]}）`,
-        run.status === "completed" && run.reportMarkdown
-          ? run.reportMarkdown.trim()
-          : `（该模型执行未产出报告：${run.error ?? run.status}）`,
-      ].join("\n\n"),
-    )
-    .join("\n\n---\n\n");
+  const skillBundle = buildSkillContextBundle(input.skills);
 
-  const skillSection =
-    input.skills.length === 0
-      ? []
-      : [
+  const runSummaryLines = input.reviewerRuns.map((run, idx) => {
+    const statusText =
+      run.status === "completed"
+        ? "completed"
+        : `${run.status}${run.error ? ` (${run.error})` : ""}`;
+    return `- #${idx + 1} \`${run.modelLabel}\`（${ROLE_LABELS_ZH[run.role]}）：${statusText}`;
+  });
+
+  const hiddenLines = [
+    `多模型代码审查融合裁决任务：${displayRef} - ${input.detail.title}`,
+    `- 链接: ${input.detail.url}`,
+    `- 分支: ${input.detail.headBranch} -> ${input.detail.baseBranch} (+${input.detail.additions}/-${input.detail.deletions})`,
+    "- 你担任首席架构师 / 多模型融合裁决官（Synthesizer & Judge），严禁修改任何项目源码文件。",
+    "",
+    "各并行模型审查报告与参考文件（已落盘以节省上下文 Token，请先读取汇总报告文件）：",
+    `- 各模型完整审查报告汇总: ${input.reportsFilePath}`,
+    `- 完整 Diff 补丁文件: ${input.diffFilePath}（仅在各模型结论存在分歧或行号存疑时按需定位核实）`,
+    `- PR 描述与历史评论归档: ${input.contextFilePath}`,
+    ...(input.isLocalCheckout ? [`- 本地仓库目录: ${input.workspaceRoot}`] : []),
+    "",
+    "参与审查模型：",
+    ...runSummaryLines,
+    ...(input.skills.length > 0
+      ? [
           "",
-          "## 绑定的专业审查 Skills",
-          ...input.skills.map((s) => `- **${s.displayName || s.name}**: \`${s.path}\``),
-        ];
-
-  return [
-    `# 多模型代码审查融合裁决任务：${displayRef} - ${input.detail.title}`,
-    "",
-    "你现在担任 **首席架构师 / 多模型融合裁决官（Synthesizer & Judge）**。",
-    "多位异构大模型已经并行完成了对该 PR / Merge Request 的独立审查。请你综合各方报告，结合真实 Diff 与代码上下文完成去重、交叉核实、剔除误报，并输出最终权威的【多模型融合审查报告】。",
-    "",
-    "## 1. PR 基本信息与参考上下文",
-    `- **仓库与编号**: \`${displayRef}\` (${input.detail.url})`,
-    `- **分支**: \`${input.detail.headBranch}\` → \`${input.detail.baseBranch}\` (+${input.detail.additions} / -${input.detail.deletions})`,
-    `- **完整 Diff 补丁文件**: \`${input.diffFilePath}\`（如各模型存在分歧或行号存疑，请直接读取此补丁文件${input.isLocalCheckout ? `或本地源码 \`${input.workspaceRoot}\` ` : ""}核实）`,
-    "- **严禁修改任何项目源码文件**。",
-    ...skillSection,
+          "绑定的专业审查 Skills：",
+          ...input.skills.map((s) => `- ${s.displayName || s.name}: ${s.path}`),
+        ]
+      : []),
     ...(input.customInstructions?.trim()
-      ? ["", "## 2. 团队附加审查规范", input.customInstructions.trim()]
+      ? ["", `团队附加审查规范：${input.customInstructions.trim()}`]
       : []),
     "",
-    "## 3. 各并行模型独立审查报告",
-    reportsBlock,
-    "",
-    "## 4. 融合裁决输出要求（必须同时包含可读 Markdown 报告与末尾 JSON 结构块）",
-    "请先输出一份结构清晰、可直接发布到 GitLab/GitHub 评论区的中文 Markdown 报告，包含：",
+    "融合裁决输出要求（必须同时包含可读 Markdown 报告与末尾 JSON 结构块）：",
     "1. `## 总体裁决结论`：给出总体判定与核心理由；",
-    "2. `## 多模型共识对比`：简述哪些关键问题是多模型共同命中的高置信问题，哪些经核实属于误报已剔除；",
-    "3. `## 核心问题汇总`：按严重级别清晰列出真实有效的问题、位置（`file:line`）与修改建议；",
+    "2. `## 多模型共识对比`：简述多模型共同命中的高置信问题与被剔除的误报；",
+    "3. `## 核心问题汇总`：按严重级别列出真实有效问题、`file:line` 与修改建议；",
     "4. `## 合并前检查建议`。",
     "",
-    "紧接着在回复的最末尾，**必须附带一个标准 JSON 代码块**（标记为 ```json:t3-pr-fusion ），供工作站解析结构化结论与行级回写评论：",
+    "紧接着在回复最末尾附带标准 JSON 代码块（标记为 ```json:t3-pr-fusion ）：",
     "```json:t3-pr-fusion",
     "{",
     '  "verdict": "approve | request-changes | comment",',
@@ -227,7 +492,25 @@ export function buildSynthesizerPrompt(input: {
     "  ]",
     "}",
     "```",
-  ].join("\n");
+  ];
+
+  const prBundle = buildPullRequestContextBundle({
+    detail: input.detail,
+    instructionsText: hiddenLines.join("\n"),
+  });
+
+  const visibleParts = [
+    `请作为多模型融合裁决官，综合各并行模型对 ${prBundle.reference} 的审查报告并输出最终融合裁决结论${skillBundle.references.length > 0 ? `，遵循 ${skillBundle.references.join(" ")}` : ""}。`,
+    ...(input.customInstructions?.trim() ? [`附加要求：${input.customInstructions.trim()}`] : []),
+  ];
+
+  return {
+    text: visibleParts.join("\n"),
+    context: {
+      version: 1,
+      records: [prBundle.record, ...skillBundle.records],
+    },
+  };
 }
 
 const RawSynthesisPayload = Schema.Struct({

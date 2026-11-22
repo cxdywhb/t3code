@@ -6,14 +6,12 @@ import * as NodePath from "node:path";
 
 import {
   CommandId,
-  ComposerContextId,
   MessageId,
   PositiveInt,
   PrReviewError,
   PrReviewPresetId,
   PrReviewTaskId,
   type ModelSelection,
-  type OrchestrationMessageContext,
   type OrchestrationProjectShell,
   type PrReviewCancelTaskInput,
   type PrReviewDeletePresetInput,
@@ -59,9 +57,12 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
-  buildReviewerPrompt,
-  buildSynthesizerPrompt,
+  buildPrContextDocument,
+  buildReviewerMessage,
+  buildReviewerReportsDocument,
+  buildSynthesizerMessage,
   formatFusionWriteBackMarkdown,
+  parseDiffFileManifest,
   parseSynthesizerOutput,
   ROLE_LABELS_ZH,
 } from "./PrReviewPrompts.ts";
@@ -373,22 +374,6 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.ignore);
 
-  const buildSkillMessageContext = (
-    skills: ReadonlyArray<PrReviewSkillDescriptor>,
-  ): OrchestrationMessageContext | undefined =>
-    skills.length === 0
-      ? undefined
-      : {
-          version: 1 as const,
-          records: skills.map((s, idx) => ({
-            version: 1 as const,
-            contextId: ComposerContextId.make(`skill_${idx + 1}`),
-            kind: "skill" as const,
-            label: (s.displayName || s.name).slice(0, 200),
-            name: s.name,
-          })),
-        };
-
   const waitAndReadAssistantText = Effect.fn("PrReviewService.waitAndReadAssistantText")(function* (
     projectId: ProjectId,
     threadId: ThreadId,
@@ -555,9 +540,17 @@ const make = Effect.gen(function* () {
 
           const assetDir = NodePath.join(config.stateDir, "pr-review-assets", current.id);
           const diffFilePath = NodePath.join(assetDir, "diff.patch");
+          const contextFilePath = NodePath.join(assetDir, "context.md");
+          const manifest = parseDiffFileManifest(patch);
+          const contextDoc = buildPrContextDocument({
+            detail,
+            activity,
+            manifestText: manifest.formattedManifest,
+          });
           yield* Effect.sync(() => {
             NodeFS.mkdirSync(assetDir, { recursive: true });
             NodeFS.writeFileSync(diffFilePath, patch, "utf8");
+            NodeFS.writeFileSync(contextFilePath, contextDoc, "utf8");
           });
 
           const sigil = detail.provider === "gitlab" ? "!" : "#";
@@ -601,19 +594,17 @@ const make = Effect.gen(function* () {
               Effect.tap((saved) => Ref.set(taskRef, saved)),
             );
 
-          const skillContext = buildSkillMessageContext(skills);
-
           yield* Effect.forEach(
             slots,
             (slot) =>
               Effect.gen(function* () {
                 const modelLabel = formatModelLabel(slot.modelSelection);
                 const startedAt = yield* nowIso;
-                const prompt = buildReviewerPrompt({
+                const reviewerMsg = buildReviewerMessage({
                   detail,
-                  activity,
-                  patch,
+                  manifest,
                   diffFilePath,
+                  contextFilePath,
                   role: slot.role,
                   isLocalCheckout: execProject.isLocalCheckout,
                   workspaceRoot: execProject.workspaceRoot,
@@ -633,9 +624,9 @@ const make = Effect.gen(function* () {
                     workspaceStrategy: { type: "root" },
                     initialMessage: {
                       messageId: MessageId.make(NodeCrypto.randomUUID()),
-                      text: prompt,
+                      text: reviewerMsg.text,
                       attachments: [],
-                      ...(skillContext ? { context: skillContext } : {}),
+                      context: reviewerMsg.context,
                     },
                     createdBy: "user",
                     creationSource: "web",
@@ -750,9 +741,20 @@ const make = Effect.gen(function* () {
               },
             );
 
-            const synthPrompt = buildSynthesizerPrompt({
+            const reportsFilePath = NodePath.join(assetDir, "reviewer-reports.md");
+            const reportsDoc = buildReviewerReportsDocument({
+              detail,
+              reviewerRuns: current.reviewerRuns,
+            });
+            yield* Effect.sync(() => {
+              NodeFS.writeFileSync(reportsFilePath, reportsDoc, "utf8");
+            });
+
+            const synthMsg = buildSynthesizerMessage({
               detail,
               diffFilePath,
+              contextFilePath,
+              reportsFilePath,
               isLocalCheckout: execProject.isLocalCheckout,
               workspaceRoot: execProject.workspaceRoot,
               reviewerRuns: current.reviewerRuns,
@@ -771,9 +773,9 @@ const make = Effect.gen(function* () {
                 workspaceStrategy: { type: "root" },
                 initialMessage: {
                   messageId: MessageId.make(NodeCrypto.randomUUID()),
-                  text: synthPrompt,
+                  text: synthMsg.text,
                   attachments: [],
-                  ...(skillContext ? { context: skillContext } : {}),
+                  context: synthMsg.context,
                 },
                 createdBy: "user",
                 creationSource: "web",
@@ -979,18 +981,26 @@ const make = Effect.gen(function* () {
 
       const assetDir = NodePath.join(config.stateDir, "pr-review-assets", taskId);
       const diffFilePath = NodePath.join(assetDir, "diff.patch");
+      const contextFilePath = NodePath.join(assetDir, "context.md");
+      const manifest = parseDiffFileManifest(patch);
+      const contextDoc = buildPrContextDocument({
+        detail,
+        activity,
+        manifestText: manifest.formattedManifest,
+      });
       yield* Effect.sync(() => {
         NodeFS.mkdirSync(assetDir, { recursive: true });
         NodeFS.writeFileSync(diffFilePath, patch, "utf8");
+        NodeFS.writeFileSync(contextFilePath, contextDoc, "utf8");
       });
 
       const sigil = detail.provider === "gitlab" ? "!" : "#";
       const displayRef = `${detail.repository}${sigil}${detail.number}`;
-      const prompt = buildReviewerPrompt({
+      const reviewerMsg = buildReviewerMessage({
         detail,
-        activity,
-        patch,
+        manifest,
         diffFilePath,
+        contextFilePath,
         role: slot.role,
         isLocalCheckout: execProject.isLocalCheckout,
         workspaceRoot: execProject.workspaceRoot,
@@ -999,7 +1009,6 @@ const make = Effect.gen(function* () {
         interactiveDirectMode: true,
       });
 
-      const skillContext = buildSkillMessageContext(resolvedSkills);
       const launched = yield* threadLaunch
         .launch({
           commandId: CommandId.make(`pr-review-direct:${NodeCrypto.randomUUID()}`),
@@ -1011,9 +1020,9 @@ const make = Effect.gen(function* () {
           workspaceStrategy: { type: "root" },
           initialMessage: {
             messageId: MessageId.make(NodeCrypto.randomUUID()),
-            text: prompt,
+            text: reviewerMsg.text,
             attachments: [],
-            ...(skillContext ? { context: skillContext } : {}),
+            context: reviewerMsg.context,
           },
           createdBy: "user",
           creationSource: "web",
