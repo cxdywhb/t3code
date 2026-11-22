@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Observe raw CONNECT requests at the test proxy.
+import * as NodeHttp from "node:http";
+
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -74,6 +77,8 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     keyringSecret?: string;
     /** Reads the OS keyring instead of `keyringSecret`. */
     nativeKeyring?: boolean;
+    environment?: NodeJS.ProcessEnv;
+    httpClient?: HttpClient.HttpClient;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -140,12 +145,64 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
   const usage = yield* makeAntigravityUsageProbe({
     profileDirectory,
     authMethod: options.authMethod ?? "oauth-personal",
+    environment: options.environment ?? {},
     ...(options.nativeKeyring ? {} : { readKeyringSecret: Effect.succeed(options.keyringSecret) }),
-  }).pipe(Effect.provideService(HttpClient.HttpClient, http));
+  }).pipe(Effect.provideService(HttpClient.HttpClient, options.httpClient ?? http));
   return { ...usage, requests, writeToken, tokenPath };
 });
 
 describe("Antigravity subscription limits", () => {
+  it.live("routes Antigravity quota requests through the instance's HTTPS proxy", () =>
+    Effect.gen(function* () {
+      const targets: string[] = [];
+      const proxy = yield* Effect.acquireRelease(
+        Effect.promise(
+          () =>
+            new Promise<NodeHttp.Server>((resolve, reject) => {
+              const server = NodeHttp.createServer();
+              server.on("connect", (request, socket) => {
+                targets.push(request.url ?? "");
+                socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+              });
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", () => resolve(server));
+            }),
+        ),
+        (server) =>
+          Effect.promise(() => new Promise<void>((resolve) => server.close(() => resolve()))),
+      );
+      const address = proxy.address();
+      if (!address || typeof address === "string") return yield* Effect.die("Missing proxy port");
+
+      const nativeFetch = yield* FetchHttpClient.Fetch;
+      const { probe } = yield* fixture({
+        authMethod: "oauth-business",
+        missingToken: true,
+        keyringSecret: JSON.stringify({
+          token: { access_token: "access-token", expiry: "2100-01-01T00:00:00.000Z" },
+        }),
+        environment: { HTTPS_PROXY: `http://127.0.0.1:${address.port}` },
+        httpClient: yield* HttpClient.HttpClient,
+      });
+      yield* probe.pipe(
+        Effect.provideService(FetchHttpClient.Fetch, (url, init) => {
+          if (!init || !("dispatcher" in init)) throw new Error("Missing proxy dispatcher");
+          return nativeFetch(url, init);
+        }),
+      );
+      expect(targets.toSorted()).toEqual([
+        "cloudcode-pa.googleapis.com:443",
+        "cloudcode-pa.googleapis.com:443",
+        "daily-cloudcode-pa.googleapis.com:443",
+        "daily-cloudcode-pa.googleapis.com:443",
+        "www.googleapis.com:443",
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer)),
+    ),
+  );
+
   // Oracle: the 10:16 UTC payload and its narrow Workaround rule.
   it.effect("omits rolling resets for untouched summary buckets and keeps used Gemini resets", () =>
     Effect.gen(function* () {

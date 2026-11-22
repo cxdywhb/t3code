@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import type * as Undici from "undici";
 
 import {
   makeUnavailableUsageLimits,
@@ -33,7 +34,6 @@ const SUMMARY_WINDOW_MINS = new Map([
   ["5h", 5 * 60],
   ["weekly", 7 * 24 * 60],
 ]);
-const MANUAL_REDIRECT: RequestInit = { redirect: "manual" };
 const TokenFile = Schema.Struct({
   client_id: Schema.NonEmptyString,
   client_secret: Schema.NonEmptyString,
@@ -163,6 +163,15 @@ class AntigravityKeyringError extends Schema.TaggedError<AntigravityKeyringError
 ) {
   override get message(): string {
     return "Could not read the Antigravity sign-in from the system keyring.";
+  }
+}
+
+class AntigravityUsageProxyError extends Schema.TaggedError<AntigravityUsageProxyError>()(
+  "AntigravityUsageProxyError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not configure the proxy for Antigravity limits.";
   }
 }
 
@@ -320,6 +329,7 @@ function modelWindows(models: typeof Models.Type) {
 export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(function* (input: {
   readonly profileDirectory: string;
   readonly authMethod: AntigravitySettings["authMethod"];
+  readonly environment: NodeJS.ProcessEnv;
   readonly readKeyringSecret?: Effect.Effect<string | undefined, AntigravityKeyringError>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -335,24 +345,52 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     "antigravity-oauth-token",
   );
   const readKeyringSecret = input.readKeyringSecret ?? readCliKeyringSecret(platform, architecture);
+  const environment = input.environment;
+  const httpProxy = environment.HTTP_PROXY || environment.http_proxy || "";
+  const httpsProxy = environment.HTTPS_PROXY || environment.https_proxy || "";
+  const noProxy = environment.NO_PROXY || environment.no_proxy || "";
   let cached:
     | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
     | undefined;
   let generation = 0;
 
-  const request = (request: HttpClientRequest.HttpClientRequest) =>
-    client.execute(request).pipe(
-      Effect.provideService(FetchHttpClient.RequestInit, MANUAL_REDIRECT),
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.flatMap((response) => response.json),
-      Effect.timeout("10 seconds"),
-    );
   const read = Effect.gen(function* () {
     const startedGeneration = generation;
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     if (input.authMethod !== "oauth-personal" && input.authMethod !== "oauth-business") {
       return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     }
+    const dispatcher =
+      httpProxy || httpsProxy
+        ? yield* Effect.acquireRelease(
+            Effect.try({
+              try: () => {
+                const { Dispatcher1Wrapper, EnvHttpProxyAgent } = requireExternal(
+                  "undici",
+                ) as typeof Undici;
+                // Electron and older Node fetch still use Undici's v1 dispatcher callbacks.
+                return new Dispatcher1Wrapper(
+                  new EnvHttpProxyAgent({ httpProxy, httpsProxy, noProxy }),
+                );
+              },
+              catch: (cause) => new AntigravityUsageProxyError({ cause }),
+            }),
+            (agent) => Effect.promise(() => agent.destroy().catch(() => undefined)),
+          )
+        : undefined;
+    const requestInit: RequestInit = {
+      redirect: "manual",
+      ...(dispatcher
+        ? { dispatcher: dispatcher as unknown as NonNullable<RequestInit["dispatcher"]> }
+        : {}),
+    };
+    const request = (request: HttpClientRequest.HttpClientRequest) =>
+      client.execute(request).pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, requestInit),
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.json),
+        Effect.timeout("10 seconds"),
+      );
     const now = yield* Clock.currentTimeMillis;
     let accessToken: string;
     let account: string;
@@ -484,6 +522,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   });
   const probe = read.pipe(
     Effect.provideService(Digest.Digest, crypto),
+    Effect.scoped,
     Effect.timeout("30 seconds"),
     Effect.catch(() =>
       Effect.gen(function* () {
