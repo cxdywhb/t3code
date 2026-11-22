@@ -1841,6 +1841,7 @@ const buildDesktopBundlesUnlocked = Effect.fn("buildDesktopBundlesUnlocked")(fun
   repoRoot: string,
   appVersion: string,
   verbose: boolean,
+  desktopOutDir?: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1866,7 +1867,12 @@ const buildDesktopBundlesUnlocked = Effect.fn("buildDesktopBundlesUnlocked")(fun
           ChildProcess.make(spawnCommand.command, spawnCommand.args, {
             cwd: repoRoot,
             shell: spawnCommand.shell,
-            env: { APP_VERSION: appVersion },
+            env: {
+              APP_VERSION: appVersion,
+              ...(desktopOutDir === undefined
+                ? {}
+                : { T3CODE_DESKTOP_BUNDLE_OUT_DIR: desktopOutDir }),
+            },
             extendEnv: true,
           }),
           { label: "vp run build:desktop", verbose },
@@ -3596,6 +3602,8 @@ export class MacPackagedAppMissingError extends Schema.TaggedError<MacPackagedAp
   }
 }
 
+const desktopBootFiles = ["boot.cjs", "compileCache.cjs", "main.cjs"] as const;
+
 export const validateMacPackagedPayload = Effect.fn("desktopArtifact.validateMacPackagedPayload")(
   function* (input: { readonly stageDistDir: string; readonly verbose?: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -3615,6 +3623,19 @@ export const validateMacPackagedPayload = Effect.fn("desktopArtifact.validateMac
       return yield* new MacPackagedAppMissingError({ stageDistDir: input.stageDistDir });
     }
     for (const asarPath of asarPaths) {
+      for (const file of desktopBootFiles) {
+        const entry = path.join("apps/desktop/dist-electron", file);
+        yield* Effect.try({
+          try: () => {
+            if (!("size" in statFile(asarPath, entry))) throw new Error("Expected a file");
+          },
+          catch: (cause) =>
+            new BundleNotSelfContainedError({
+              exitCode: -1,
+              output: `Could not read ${entry} in ${asarPath}: ${String(cause)}`,
+            }),
+        });
+      }
       yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: input.verbose ?? false });
     }
     yield* Effect.log(
@@ -3738,8 +3759,11 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
+  const stageDesktopDist = path.join(stageAppDir, "apps/desktop/dist-electron");
   const distDirs = {
-    desktopDist: path.join(repoRoot, "apps/desktop/dist-electron"),
+    desktopDist: options.skipBuild
+      ? path.join(repoRoot, "apps/desktop/dist-electron")
+      : stageDesktopDist,
     desktopResources: path.join(repoRoot, "apps/desktop/resources"),
     serverDist: path.join(repoRoot, "apps/server/dist"),
   };
@@ -3747,7 +3771,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
-    yield* buildDesktopBundlesUnlocked(repoRoot, appVersion, options.verbose);
+    // The desktop dev watcher can clean its output while a release is being staged.
+    yield* buildDesktopBundlesUnlocked(repoRoot, appVersion, options.verbose, stageDesktopDist);
   }
 
   const requiredBuildInputs = [
@@ -3827,7 +3852,20 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   }
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
-  yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
+  if (options.skipBuild) {
+    yield* fs.copy(distDirs.desktopDist, stageDesktopDist);
+  }
+  for (const file of desktopBootFiles) {
+    const artifactPath = path.join(stageDesktopDist, file);
+    const info = yield* fs.stat(artifactPath).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "File") {
+      return yield* new MissingDesktopBuildInputError({
+        artifact: "desktop-dist",
+        artifactPath,
+        buildCommand: "vp run build:desktop",
+      });
+    }
+  }
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   if (options.platform === "linux") {
     const extensionDir = path.join(stageAppDir, "apps/desktop/gnome-extension");

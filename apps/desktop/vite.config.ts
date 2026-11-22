@@ -13,6 +13,7 @@ const domTests = ["src/preview/PickPreload.test.ts"];
 const isMainProcessExternal = (id: string) =>
   id === "electron" || id.startsWith("electron/") || isDesktopRuntimeExternalDependency(id);
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
+const desktopOutDir = process.env.T3CODE_DESKTOP_BUNDLE_OUT_DIR ?? "dist-electron";
 // tsdown runs onSuccess through a shell. dash forks instead of exec'ing the last command, which
 // would leave an `sh` between `vp pack` and the supervisor and hide `vp pack` dying from it.
 const devElectronCommand =
@@ -67,7 +68,7 @@ export default defineConfig({
   pack: [
     {
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
@@ -84,7 +85,7 @@ export default defineConfig({
     },
     {
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
@@ -105,7 +106,7 @@ export default defineConfig({
     {
       // boot.cjs requires the other two at runtime, so all three stay separate files.
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
@@ -117,7 +118,7 @@ export default defineConfig({
     },
     {
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
@@ -130,7 +131,7 @@ export default defineConfig({
     },
     {
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
@@ -144,7 +145,7 @@ export default defineConfig({
     },
     {
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
@@ -153,7 +154,7 @@ export default defineConfig({
     {
       // Sandboxed preloads must be self-contained, without shared runtime chunks.
       format: "cjs",
-      outDir: "dist-electron",
+      outDir: desktopOutDir,
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),

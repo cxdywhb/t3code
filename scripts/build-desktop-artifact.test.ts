@@ -221,6 +221,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 const makePackagedAppFixture = Effect.fn("test.makePackagedAppFixture")(function* (input: {
   readonly serverEntrySource?: string;
   readonly resourcesPath?: string;
+  readonly omitDesktopMain?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -229,6 +230,13 @@ const makePackagedAppFixture = Effect.fn("test.makePackagedAppFixture")(function
   const serverEntryPath = path.join(sourceDir, "apps/server/dist/bin.mjs");
   yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
+  const desktopDir = path.join(sourceDir, "apps/desktop/dist-electron");
+  yield* fs.makeDirectory(desktopDir, { recursive: true });
+  yield* fs.writeFileString(path.join(desktopDir, "boot.cjs"), 'require("./main.cjs");\n');
+  yield* fs.writeFileString(path.join(desktopDir, "compileCache.cjs"), "");
+  if (!input.omitDesktopMain) {
+    yield* fs.writeFileString(path.join(desktopDir, "main.cjs"), "");
+  }
 
   const stageDistDir = path.join(tempDir, "dist");
   const resourcesDir = path.join(
@@ -1427,6 +1435,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.gen(function* () {
         const fixture = yield* makePackagedAppFixture({});
         yield* validateMacPackagedPayload({ stageDistDir: fixture.stageDistDir });
+      }),
+    ),
+  );
+
+  it.effect("rejects a macOS app missing the desktop main bundle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makePackagedAppFixture({ omitDesktopMain: true });
+        const error = yield* validateMacPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        }).pipe(Effect.flip);
+        assert.instanceOf(error, BundleNotSelfContainedError);
+        assert.include(error.output, "main.cjs");
       }),
     ),
   );
