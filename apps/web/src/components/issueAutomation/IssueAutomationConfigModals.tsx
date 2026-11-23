@@ -1,5 +1,8 @@
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationOperateScope,
   IssueAutomationPlatformKind,
   type EnvironmentId,
   type IssueAutomationActionMode,
@@ -32,11 +35,20 @@ import {
   OfficialModelPicker,
   useOfficialModelCatalog,
 } from "~/components/chat/OfficialModelPicker";
+import {
+  FolderPickerDialog,
+  useEnvironmentFolderPicker,
+} from "~/components/repositories/FolderPickerDialog";
 import { SecretInput } from "~/components/settings/SecretInput";
 import { SettingsGroup } from "~/components/settings/SettingsGroup";
 import { SettingsRow } from "~/components/settings/settingsLayout";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { cn, newProjectId } from "~/lib/utils";
+import { waitForProject } from "~/state/entities";
+import { useEnvironment } from "~/state/environments";
 import { issueAutomationEnvironment } from "~/state/issueAutomation";
+import { projectEnvironment } from "~/state/projects";
+import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
@@ -75,7 +87,6 @@ import {
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { cn } from "~/lib/utils";
 import { sortScopesByIdDesc } from "./issueAutomationAnalytics.logic";
 import { useActionModeLabel } from "./issueAutomationPresentation";
 import { formatCompactParentPath, groupProjectsByParentFolder } from "./projectMenuGrouping.logic";
@@ -425,13 +436,11 @@ export function SearchableProjectMenu({
 
 function SearchableMultiProjectMenu({
   projects,
-  primaryProjectId,
   selectedIds,
   onChange,
   ariaLabel,
 }: {
   readonly projects: ReadonlyArray<SelectableProjectOption>;
-  readonly primaryProjectId: string;
   readonly selectedIds: ReadonlyArray<ProjectId>;
   readonly onChange: (next: ReadonlyArray<ProjectId>) => void;
   readonly ariaLabel: string;
@@ -449,13 +458,17 @@ function SearchableMultiProjectMenu({
   } = useProjectFolderGroups(projects, query);
   const selectedSet = new Set(selectedIds);
   const summary =
-    selectedIds.length === 0
-      ? gt("None")
+    projects.length === 0 || selectedIds.length === 0
+      ? gt("Not linked")
       : selectedIds.map((id) => projects.find((p) => p.id === id)?.title ?? id).join(", ");
 
   return (
     <Menu>
-      <MenuTrigger aria-label={ariaLabel} render={<SelectButton size="sm" />}>
+      <MenuTrigger
+        aria-label={ariaLabel}
+        disabled={projects.length === 0}
+        render={<SelectButton size="sm" />}
+      >
         {summary}
       </MenuTrigger>
       <MenuPopup align="start" className="min-w-72 max-w-96">
@@ -505,9 +518,7 @@ function SearchableMultiProjectMenu({
           ) : (
             groups.map((group) => {
               const isCollapsed = !isSearching && collapsedSet.has(group.key);
-              const hasActiveSelection = group.projects.some(
-                (proj) => selectedSet.has(proj.id) || proj.id === primaryProjectId,
-              );
+              const hasActiveSelection = group.projects.some((proj) => selectedSet.has(proj.id));
               return (
                 <div key={group.key} className="not-first:mt-1">
                   <ProjectFolderGroupHeader
@@ -526,7 +537,6 @@ function SearchableMultiProjectMenu({
                           <MenuCheckboxItem
                             key={proj.id}
                             checked={checked}
-                            disabled={proj.id === primaryProjectId}
                             onCheckedChange={(next) => {
                               if (next) {
                                 onChange(checked ? selectedIds : [...selectedIds, proj.id]);
@@ -773,6 +783,11 @@ export function ProfileModal({
   const saveProfile = useAtomCommand(issueAutomationEnvironment.saveProfile, {
     reportFailure: false,
   });
+  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const canCreateProject = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const projectBaseDirectory =
+    useEnvironment(environmentId)?.serverConfig?.settings.addProjectBaseDirectory;
+  const folderPicker = useEnvironmentFolderPicker(environmentId);
   const catalog = useOfficialModelCatalog(environmentId);
 
   const firstConnector =
@@ -791,8 +806,12 @@ export function ProfileModal({
   const [primaryProjectId, setPrimaryProjectId] = useState<string>(
     initial?.repositories.primaryProjectId ?? projects[0]?.id ?? "",
   );
+  const primaryProject = projects.find((project) => project.id === primaryProjectId);
   const [linkedProjectIds, setLinkedProjectIds] = useState<ReadonlyArray<ProjectId>>(
-    initial?.repositories.linkedProjectIds ?? (projects[0] ? [projects[0].id] : []),
+    () =>
+      initial?.repositories.linkedProjectIds.filter(
+        (id) => id !== initial.repositories.primaryProjectId,
+      ) ?? [],
   );
   const [moduleMappings, setModuleMappings] = useState<
     ReadonlyArray<IssueAutomationModuleRepoMapping>
@@ -846,6 +865,34 @@ export function ProfileModal({
 
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [addingProject, setAddingProject] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+
+  const addProject = async (workspaceRoot: string) => {
+    setAddingProject(true);
+    setProjectError(null);
+    try {
+      const projectId = newProjectId();
+      const result = await createProject({
+        environmentId,
+        input: {
+          projectId,
+          title: inferProjectTitleFromPath(workspaceRoot),
+          workspaceRoot,
+          createWorkspaceRootIfMissing: false,
+          defaultModelSelection: null,
+        },
+      });
+      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      setPrimaryProjectId(projectId);
+      setDraftRuleProjectId((current) => current || projectId);
+      await waitForProject(scopeProjectRef(environmentId, projectId));
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : gt("Failed to add project"));
+    } finally {
+      setAddingProject(false);
+    }
+  };
 
   const browseFilterLabel = (val: IssueAutomationBrowseFilter): string => {
     switch (val) {
@@ -874,17 +921,13 @@ export function ProfileModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const resolvedPrimaryModel = primaryModel ?? catalog.firstAvailableSelection;
-    if (!activeConnector || !scopeId || !primaryProjectId || !resolvedPrimaryModel) {
+    if (!activeConnector || !scopeId || !primaryProject || !resolvedPrimaryModel) {
       setErrorText(gt("Please select a product, local repository, and primary model."));
       return;
     }
 
     const scopeObj = activeConnector.scopes.find((s) => s.id === scopeId);
     const scopeName = scopeObj?.name ?? scopeId;
-    const allLinked = linkedProjectIds.includes(primaryProjectId as ProjectId)
-      ? linkedProjectIds
-      : [primaryProjectId as ProjectId, ...linkedProjectIds];
-
     setBusy(true);
     setErrorText(null);
     const res = await saveProfile({
@@ -897,8 +940,8 @@ export function ProfileModal({
         scopeId,
         scopeName,
         repositories: {
-          primaryProjectId: primaryProjectId as ProjectId,
-          linkedProjectIds: [...allLinked],
+          primaryProjectId: primaryProject.id,
+          linkedProjectIds: [primaryProject.id, ...linkedProjectIds],
           moduleMappings: [...moduleMappings],
         },
         models: {
@@ -933,12 +976,6 @@ export function ProfileModal({
     }
     onOpenChange(false);
   };
-
-  const effectiveLinkedIds = linkedProjectIds.includes(primaryProjectId as ProjectId)
-    ? linkedProjectIds
-    : primaryProjectId
-      ? [primaryProjectId as ProjectId, ...linkedProjectIds]
-      : linkedProjectIds;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1107,17 +1144,48 @@ export function ProfileModal({
             <SettingsGroup>
               <SettingsRow
                 title={gt("Primary local codebase")}
-                description={gt("Default repository where isolated Worktrees launch.")}
-                control={
-                  <SearchableProjectMenu
-                    projects={projects}
-                    value={primaryProjectId}
-                    onChange={setPrimaryProjectId}
-                    ariaLabel={gt("Primary local codebase")}
-                    leadingIcon={<FolderGit2Icon className="size-3.5 shrink-0 opacity-70" />}
-                  />
+                description={
+                  projects.length === 0
+                    ? gt("Add a project before saving this rule.")
+                    : gt("Default repository where isolated Worktrees launch.")
                 }
-              />
+                control={
+                  projects.length === 0 || addingProject ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={addingProject || !canCreateProject || !folderPicker.canPickFolder}
+                      onClick={() =>
+                        void folderPicker.openFolderPicker({
+                          ...(projectBaseDirectory ? { initialPath: projectBaseDirectory } : {}),
+                          onSelect: (workspaceRoot) => void addProject(workspaceRoot),
+                        })
+                      }
+                    >
+                      <PlusIcon />
+                      {addingProject ? gt("Adding…") : gt("Add project")}
+                    </Button>
+                  ) : (
+                    <SearchableProjectMenu
+                      projects={projects}
+                      value={primaryProjectId}
+                      onChange={(next) => {
+                        setPrimaryProjectId(next);
+                        setLinkedProjectIds((ids) => ids.filter((id) => id !== next));
+                      }}
+                      ariaLabel={gt("Primary local codebase")}
+                      leadingIcon={<FolderGit2Icon className="size-3.5 shrink-0 opacity-70" />}
+                    />
+                  )
+                }
+              >
+                {projectError ? (
+                  <p role="alert" className="pt-2 text-xs text-destructive">
+                    {projectError}
+                  </p>
+                ) : null}
+              </SettingsRow>
 
               <SettingsRow
                 title={gt("Linked sibling codebases")}
@@ -1126,9 +1194,8 @@ export function ProfileModal({
                 )}
                 control={
                   <SearchableMultiProjectMenu
-                    projects={projects}
-                    primaryProjectId={primaryProjectId}
-                    selectedIds={effectiveLinkedIds}
+                    projects={projects.filter((project) => project.id !== primaryProjectId)}
+                    selectedIds={linkedProjectIds}
                     onChange={setLinkedProjectIds}
                     ariaLabel={gt("Linked sibling codebases")}
                   />
@@ -1341,11 +1408,16 @@ export function ProfileModal({
           >
             <T>Cancel</T>
           </Button>
-          <DialogAction form="issue-automation-profile-form" type="submit" disabled={busy}>
+          <DialogAction
+            form="issue-automation-profile-form"
+            type="submit"
+            disabled={busy || addingProject || !primaryProject}
+          >
             {busy ? <T>Saving…</T> : <T>Save rule</T>}
           </DialogAction>
         </DialogFooter>
       </DialogPopup>
+      {folderPicker.dialogProps ? <FolderPickerDialog {...folderPicker.dialogProps} /> : null}
     </Dialog>
   );
 }

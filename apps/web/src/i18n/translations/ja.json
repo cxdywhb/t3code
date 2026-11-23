@@ -6038,6 +6038,7 @@
   "12748083bbb6e803": "Any assignee",
   "8495ed49aa62e6e5": "Unconfirmed bugs only",
   "405db0d3094857c9": "Primary local codebase",
+  "cc8bf3a7b4d3884a": "このルールを保存する前にプロジェクトを追加してください。",
   "0dca8e5addceb85e": "Default repository where isolated Worktrees launch.",
   "dab02fd0f09dd6e5": "Linked sibling codebases",
   "b23d4651f9c512b8": "Associate multiple local repos so cross-service context is mounted together.",
