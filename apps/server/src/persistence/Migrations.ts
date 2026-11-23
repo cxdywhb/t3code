@@ -115,8 +115,11 @@ import Migration0104 from "./Migrations/104_ProjectionProjectsTrackedFolders.ts"
 import Migration0105 from "./Migrations/105_TaskFolders.ts";
 import Migration0106 from "./Migrations/106_WorktreePathKeyIndex.ts";
 import Migration0107 from "./Migrations/107_DeferredSlashCommandIndex.ts";
-import Migration0108 from "./Migrations/108_IssueAutomation.ts";
-import Migration0109 from "./Migrations/109_PrReviewWorkstation.ts";
+import Migration0108 from "./Migrations/108_AgentFeedback.ts";
+import Migration0109 from "./Migrations/109_IssueTrackerAccounts.ts";
+import Migration0110 from "./Migrations/110_Workflows.ts";
+import Migration0111 from "./Migrations/111_IssueAutomation.ts";
+import Migration0112 from "./Migrations/112_PrReviewWorkstation.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -227,8 +230,11 @@ const migrationEntries = [
   [105, "TaskFolders", Migration0105],
   [106, "WorktreePathKeyIndex", Migration0106],
   [107, "DeferredSlashCommandIndex", Migration0107],
-  [108, "IssueAutomation", Migration0108],
-  [109, "PrReviewWorkstation", Migration0109],
+  [108, "AgentFeedback", Migration0108],
+  [109, "IssueTrackerAccounts", Migration0109],
+  [110, "Workflows", Migration0110],
+  [111, "IssueAutomation", Migration0111],
+  [112, "PrReviewWorkstation", Migration0112],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -305,8 +311,8 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
       MAX(migration_id) AS latestId,
       SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows,
       SUM(
-        (migration_id = 106 AND name = 'IssueAutomation') OR
-        (migration_id = 107 AND name = 'PrReviewWorkstation')
+        (migration_id IN (106, 108) AND name = 'IssueAutomation') OR
+        (migration_id IN (107, 109) AND name = 'PrReviewWorkstation')
       ) AS legacyForkRows
     FROM effect_sql_migrations
   `;
@@ -340,8 +346,8 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     if (ledgerTables.length > 0) {
       yield* sql`
         DELETE FROM effect_sql_migrations
-        WHERE (migration_id = 106 AND name = 'IssueAutomation')
-           OR (migration_id = 107 AND name = 'PrReviewWorkstation')
+        WHERE (migration_id IN (106, 108) AND name = 'IssueAutomation')
+           OR (migration_id IN (107, 109) AND name = 'PrReviewWorkstation')
       `;
     }
   }

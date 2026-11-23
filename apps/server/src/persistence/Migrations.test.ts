@@ -7,6 +7,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import IssueAutomation from "./Migrations/111_IssueAutomation.ts";
+import PrReviewWorkstation from "./Migrations/112_PrReviewWorkstation.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
@@ -29,6 +31,32 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
+  it.effect.each([106, 108])("upgrades fork tables originally registered at %i", (firstId) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: firstId - 1 });
+      yield* IssueAutomation;
+      yield* PrReviewWorkstation;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (${firstId}, 'IssueAutomation'), (${firstId + 1}, 'PrReviewWorkstation')`;
+      yield* sql`INSERT INTO issue_automation_connectors
+        (connector_id, platform, name, base_url, account, status, updated_at)
+        VALUES ('existing', 'zentao', 'team', 'https://example.test/team', 'user', 'connected', '2026-01-01')`;
+      yield* sql`INSERT INTO pr_review_presets (preset_id, name, reviewer_models_json, updated_at)
+        VALUES ('existing', 'team review', '[]', '2026-01-01')`;
+
+      yield* runMigrations();
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* sql`SELECT base_url FROM issue_automation_connectors`, [
+        { base_url: "https://example.test/team" },
+      ]);
+      assert.deepStrictEqual(yield* sql`SELECT name FROM pr_review_presets`, [
+        { name: "team review" },
+      ]);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("refuses to start when another migration took a V2 id", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
