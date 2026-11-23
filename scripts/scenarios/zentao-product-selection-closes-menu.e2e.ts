@@ -53,14 +53,32 @@ test(
         yield* Effect.promise(async () => {
           await t3.open("/issue-automation");
           await screen.getByRole("button", "Unattended rule", { exact: true }).tap();
+          const ruleName = screen.getByPlaceholder("Auto-diagnosis rule");
+          await ruleName.fill("Custom rule");
           const trigger = screen.getByRole("button", "Select ZenTao product", { exact: true });
+          await trigger.tap();
+          const outsideRule = { x: 8, y: 200 };
+          await expect(trigger).toHaveAttribute("aria-expanded", "true");
+          await screen.tapAt(outsideRule);
+          await expect(ruleName).toHaveValue("Custom rule");
+          await expect(trigger).toHaveAttribute("aria-expanded", "false");
           await trigger.tap();
           await screen.getByRole("textbox", "Search products").fill("Test product 2");
           await screen.getByRole("menuitemradio", /Test product 2/).tap();
 
           await expect.soft(trigger).toContainText("#2 · Test product 2");
           await expect.soft(trigger).toHaveAttribute("aria-expanded", "false");
+          await expect(ruleName).toHaveValue("Test product 2");
           await app.screenshot("zentao-product-selected");
+          await ruleName.fill("Custom product 2 rule");
+          const scope = screen.getByRole("combobox", "Scope", { exact: true });
+          await scope.tap();
+          await expect(scope).toHaveAttribute("aria-expanded", "true");
+          await screen.tapAt(outsideRule);
+          await expect(scope).toHaveAttribute("aria-expanded", "false");
+          await expect(ruleName).toHaveValue("Custom product 2 rule");
+          await screen.tapAt(outsideRule);
+          await expect(ruleName).not.toBeVisible();
         });
       }).pipe(Effect.scoped),
     );

@@ -29,7 +29,7 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import {
   OfficialModelPicker,
@@ -780,6 +780,7 @@ export function ProfileModal({
 }) {
   const gt = useGT();
   const actionModeLabel = useActionModeLabel();
+  const pressedWithPickerOpen = useRef(false);
   const saveProfile = useAtomCommand(issueAutomationEnvironment.saveProfile, {
     reportFailure: false,
   });
@@ -909,6 +910,11 @@ export function ProfileModal({
     }
   };
 
+  const selectProduct = (product: IssueAutomationRemoteScope | undefined) => {
+    setScopeId(product?.id ?? "");
+    setName(product?.name ?? "");
+  };
+
   const addMappingRule = () => {
     if (!draftPattern.trim() || !draftRuleProjectId) return;
     setModuleMappings((prev) => [
@@ -978,8 +984,26 @@ export function ProfileModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-2xl" style={MODAL_POPUP_STYLE}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (details.reason === "outside-press" && pressedWithPickerOpen.current) {
+          details.cancel();
+          return;
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogPopup
+        className="max-w-2xl"
+        style={MODAL_POPUP_STYLE}
+        onViewportPointerDownCapture={(event) => {
+          // Pickers can dismiss on pointerdown before the dialog handles the same click.
+          pressedWithPickerOpen.current = !!event.currentTarget.querySelector(
+            '[aria-haspopup][aria-expanded="true"]',
+          );
+        }}
+      >
         <DialogHeader className="shrink-0">
           <DialogTitle>
             {initial ? <T>Edit unattended rule</T> : <T>New unattended automation rule</T>}
@@ -1005,11 +1029,11 @@ export function ProfileModal({
                   <Select
                     value={connectorId}
                     onValueChange={(next) => {
-                      if (!next) return;
+                      if (!next || next === connectorId) return;
                       setConnectorId(next);
                       const nextConn = connectors.find((c) => c.id === next);
                       const nextSorted = nextConn ? sortScopesByIdDesc(nextConn.scopes) : [];
-                      if (nextSorted[0]) setScopeId(nextSorted[0].id);
+                      selectProduct(nextSorted[0]);
                     }}
                   >
                     <SelectTrigger size="sm" aria-label={gt("Platform connection")}>
@@ -1033,7 +1057,10 @@ export function ProfileModal({
                   <SearchableScopeMenu
                     scopes={activeConnector?.scopes ?? []}
                     value={scopeId}
-                    onChange={setScopeId}
+                    onChange={(next) => {
+                      if (next !== scopeId)
+                        selectProduct(activeSortedScopes.find((s) => s.id === next));
+                    }}
                     ariaLabel={gt("Select ZenTao product")}
                     className="max-w-60"
                   />
