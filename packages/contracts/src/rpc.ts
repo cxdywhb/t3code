@@ -251,6 +251,7 @@ import {
   PrReviewSavePresetInput,
   PrReviewStartInput,
   PrReviewStartResult,
+  PrReviewSkillDescriptor,
   PrReviewStateSnapshot,
   PrReviewWriteBackInput,
   PrReviewWriteBackResult,
@@ -766,6 +767,7 @@ export const WS_METHODS = {
   issueAutomationWriteBack: "issueAutomation.writeBack",
 
   // Multi-model PR fusion review workstation methods
+  prReviewListSkills: "prReview.listSkills",
   prReviewGetState: "prReview.getState",
   prReviewSubscribe: "prReview.subscribe",
   prReviewSavePreset: "prReview.savePreset",
@@ -1694,6 +1696,12 @@ const WsIssueAutomationWriteBackRpc = Rpc.make(WS_METHODS.issueAutomationWriteBa
 });
 
 const PrReviewRpcError = Schema.Union([PrReviewError, EnvironmentAuthorizationError]);
+
+const WsPrReviewListSkillsRpc = Rpc.make(WS_METHODS.prReviewListSkills, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(PrReviewSkillDescriptor),
+  error: PrReviewRpcError,
+});
 
 const WsPrReviewGetStateRpc = Rpc.make(WS_METHODS.prReviewGetState, {
   payload: Schema.Struct({}),
@@ -2948,6 +2956,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssueAutomationAnalyzeIssuesRpc,
   WsIssueAutomationCancelTaskRpc,
   WsIssueAutomationWriteBackRpc,
+  WsPrReviewListSkillsRpc,
   WsPrReviewGetStateRpc,
   WsPrReviewSubscribeRpc,
   WsPrReviewSavePresetRpc,

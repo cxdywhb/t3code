@@ -135,6 +135,7 @@ function scanSkillDirectory(
 export class PrReviewService extends Context.Service<
   PrReviewService,
   {
+    readonly listSkills: Effect.Effect<ReadonlyArray<PrReviewSkillDescriptor>>;
     readonly getState: Effect.Effect<PrReviewStateSnapshot, PrReviewError>;
     readonly subscribe: Stream.Stream<PrReviewStateSnapshot, PrReviewError>;
     readonly savePreset: (
@@ -226,16 +227,15 @@ const make = Effect.gen(function* () {
 
   const buildSnapshot: Effect.Effect<PrReviewStateSnapshot, PrReviewError> = Effect.gen(
     function* () {
-      const [presets, tasks, availableSkills, runningMap] = yield* Effect.all([
+      const [presets, tasks, runningMap] = yield* Effect.all([
         repo.listPresets.pipe(Effect.mapError(mapErr("listPresets"))),
         repo.listTasks(200).pipe(Effect.mapError(mapErr("listTasks"))),
-        discoverSkills,
         Ref.get(activeTaskFibers),
       ]);
       return {
         presets,
         tasks,
-        availableSkills,
+        availableSkills: [],
         activeRunCount: runningMap.size,
       };
     },
@@ -922,10 +922,7 @@ const make = Effect.gen(function* () {
   const startReview: PrReviewService["Service"]["startReview"] = Effect.fn(
     "PrReviewService.startReview",
   )(function* (input) {
-    const [presets, allSkills] = yield* Effect.all([
-      repo.listPresets.pipe(Effect.mapError(mapErr("listPresets"))),
-      discoverSkills,
-    ]);
+    const presets = yield* repo.listPresets.pipe(Effect.mapError(mapErr("listPresets")));
     const matchedPreset = input.presetId
       ? (presets.find((p) => p.id === input.presetId) ?? null)
       : (presets.find((p) => p.isDefault) ?? presets[0] ?? null);
@@ -950,6 +947,7 @@ const make = Effect.gen(function* () {
         : (matchedPreset?.customInstructions ?? null);
     const writeBackMode = input.writeBackMode ?? matchedPreset?.writeBackMode ?? "manual";
 
+    const allSkills = boundSkillNames.length ? yield* discoverSkills : [];
     const skillByName = new Map(allSkills.map((s) => [s.name, s]));
     const resolvedSkills = boundSkillNames.flatMap((name) => {
       const found = skillByName.get(name);
@@ -1279,6 +1277,7 @@ const make = Effect.gen(function* () {
   );
 
   return PrReviewService.of({
+    listSkills: discoverSkills,
     getState: buildSnapshot,
     subscribe,
     savePreset,

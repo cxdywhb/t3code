@@ -16,6 +16,7 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleAlertIcon,
+  CircleDotIcon,
   ExternalLinkIcon,
   FolderGit2Icon,
   GitBranchIcon,
@@ -41,6 +42,7 @@ import {
   PullRequestSection,
 } from "~/components/pullRequest/PullRequestSummaryTab";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { WORKSPACE_TAB_PANEL_CLASS } from "~/components/WorkspacePageHeader";
 import { cn } from "~/lib/utils";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
@@ -275,7 +277,7 @@ export function IssueAutomationInspectorContent({
     <div className="relative flex h-full min-h-0 flex-1 flex-col bg-background">
       <div
         data-chat-header
-        className="flex h-13 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4"
+        className="flex h-[var(--workspace-topbar-height)] shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4"
       >
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
           {scopeLabel}
@@ -425,7 +427,10 @@ export function IssueAutomationInspectorContent({
             }}
           >
             <Toggle value="detail">
-              <T>Issue detail</T>
+              <span className="inline-flex items-center gap-1.5">
+                <CircleDotIcon className="size-3.5" />
+                <T>Issue detail</T>
+              </span>
             </Toggle>
             <Toggle value="trace">
               <span className="inline-flex items-center gap-1.5">
@@ -441,228 +446,233 @@ export function IssueAutomationInspectorContent({
 
       {effectiveTab === "detail" ? (
         <>
-          <div className="min-h-0 flex-1 overflow-y-auto pb-36" data-pull-request-summary-scroll>
-            {detailLoading && issueDetail === null ? (
-              <div className="space-y-4 px-5 py-5">
-                <Skeleton className="h-6 w-3/4" />
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-24 w-full" />
-                <Skeleton className="h-36 w-full" />
-              </div>
-            ) : detailError !== null && issueDetail === null ? (
-              <div className="px-5 py-5">
-                <Alert variant="error">
-                  <AlertTitle>{gt("Could not load issue details")}</AlertTitle>
-                  <AlertDescription>{detailError}</AlertDescription>
-                  {onEditConnector ? (
-                    <AlertAction>
-                      <Button size="xs" variant="outline" onClick={onEditConnector}>
-                        <PencilIcon className="size-3.5" />
-                        <T>Edit connection</T>
-                      </Button>
-                    </AlertAction>
-                  ) : null}
-                </Alert>
-              </div>
-            ) : issueDetail !== null ? (
-              <>
-                <div className="px-5 pt-4 pb-2">
-                  <PullRequestDetailTitleRow className="gap-2">
-                    <h2 className="min-w-0 flex-1 text-base font-semibold leading-snug text-foreground">
-                      {cleanIssueText(issueDetail.title)}
-                    </h2>
-                  </PullRequestDetailTitleRow>
-
-                  <PullRequestMetaLine className="mt-2 min-h-5 flex-wrap gap-y-1 text-xs text-muted-foreground">
-                    {bugLinkElement}
-                    {issueDetail.author ? (
-                      <span>
-                        <T>Opened by</T> {issueDetail.author}
-                      </span>
+          <div
+            className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto pb-36"
+            data-pull-request-summary-scroll
+          >
+            <div key="detail" className={WORKSPACE_TAB_PANEL_CLASS}>
+              {detailLoading && issueDetail === null ? (
+                <div className="space-y-4 px-5 py-5">
+                  <Skeleton className="h-6 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-36 w-full" />
+                </div>
+              ) : detailError !== null && issueDetail === null ? (
+                <div className="px-5 py-5">
+                  <Alert variant="error">
+                    <AlertTitle>{gt("Could not load issue details")}</AlertTitle>
+                    <AlertDescription>{detailError}</AlertDescription>
+                    {onEditConnector ? (
+                      <AlertAction>
+                        <Button size="xs" variant="outline" onClick={onEditConnector}>
+                          <PencilIcon className="size-3.5" />
+                          <T>Edit connection</T>
+                        </Button>
+                      </AlertAction>
                     ) : null}
-                    <span className="tabular-nums">{issueDetail.createdAt}</span>
-                    <span>{issueDetail.confirmed ? <T>Confirmed</T> : <T>Unconfirmed</T>}</span>
-                    {issueDetail.openedBuild ? (
-                      <span>
-                        <T>Build</T>: {issueDetail.openedBuild}
-                      </span>
-                    ) : null}
-                  </PullRequestMetaLine>
+                  </Alert>
+                </div>
+              ) : issueDetail !== null ? (
+                <>
+                  <div className="px-5 pt-4 pb-2">
+                    <PullRequestDetailTitleRow className="gap-2">
+                      <h2 className="min-w-0 flex-1 text-base font-semibold leading-snug text-foreground">
+                        {cleanIssueText(issueDetail.title)}
+                      </h2>
+                    </PullRequestDetailTitleRow>
 
-                  <div className="mt-4 space-y-1.5">
-                    <PullRequestMetaRow
-                      icon={<UsersIcon className="size-3.5" />}
-                      label={gt("Assignee")}
-                    >
-                      <span>{issueDetail.assignee ?? gt("Unassigned")}</span>
-                    </PullRequestMetaRow>
-
-                    <PullRequestMetaRow
-                      icon={<LayersIcon className="size-3.5" />}
-                      label={gt("Module")}
-                    >
-                      <span>{issueDetail.moduleName ?? gt("Root module")}</span>
-                    </PullRequestMetaRow>
-
-                    <PullRequestMetaRow
-                      icon={<ShieldAlertIcon className="size-3.5" />}
-                      label={gt("Severity")}
-                    >
-                      <span className="inline-flex items-center gap-2">
-                        <SeverityIndicator severity={issueDetail.severity} />
-                        {issueDetail.priority !== null ? (
-                          <span className="font-mono text-xs text-muted-foreground">
-                            P{issueDetail.priority}
-                          </span>
-                        ) : null}
-                      </span>
-                    </PullRequestMetaRow>
-                  </div>
-
-                  <div className="mt-4 rounded-xl border border-border/60 bg-card/40 p-3.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 text-xs font-medium text-foreground">
-                        <BotIcon className="size-3.5 text-muted-foreground" />
+                    <PullRequestMetaLine className="mt-2 min-h-5 flex-wrap gap-y-1 text-xs text-muted-foreground">
+                      {bugLinkElement}
+                      {issueDetail.author ? (
                         <span>
-                          <T>Automated diagnosis & Worktree fix</T>
+                          <T>Opened by</T> {issueDetail.author}
                         </span>
-                        {matchedProfile ? (
-                          <Badge variant="secondary" size="sm">
-                            {matchedProfile.name}
-                          </Badge>
-                        ) : null}
+                      ) : null}
+                      <span className="tabular-nums">{issueDetail.createdAt}</span>
+                      <span>{issueDetail.confirmed ? <T>Confirmed</T> : <T>Unconfirmed</T>}</span>
+                      {issueDetail.openedBuild ? (
+                        <span>
+                          <T>Build</T>: {issueDetail.openedBuild}
+                        </span>
+                      ) : null}
+                    </PullRequestMetaLine>
+
+                    <div className="mt-4 space-y-1.5">
+                      <PullRequestMetaRow
+                        icon={<UsersIcon className="size-3.5" />}
+                        label={gt("Assignee")}
+                      >
+                        <span>{issueDetail.assignee ?? gt("Unassigned")}</span>
+                      </PullRequestMetaRow>
+
+                      <PullRequestMetaRow
+                        icon={<LayersIcon className="size-3.5" />}
+                        label={gt("Module")}
+                      >
+                        <span>{issueDetail.moduleName ?? gt("Root module")}</span>
+                      </PullRequestMetaRow>
+
+                      <PullRequestMetaRow
+                        icon={<ShieldAlertIcon className="size-3.5" />}
+                        label={gt("Severity")}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <SeverityIndicator severity={issueDetail.severity} />
+                          {issueDetail.priority !== null ? (
+                            <span className="font-mono text-xs text-muted-foreground">
+                              P{issueDetail.priority}
+                            </span>
+                          ) : null}
+                        </span>
+                      </PullRequestMetaRow>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-border/60 bg-card/40 p-3.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                          <BotIcon className="size-3.5 text-muted-foreground" />
+                          <span>
+                            <T>Automated diagnosis & Worktree fix</T>
+                          </span>
+                          {matchedProfile ? (
+                            <Badge variant="secondary" size="sm">
+                              {matchedProfile.name}
+                            </Badge>
+                          ) : null}
+                        </div>
+
+                        <Button
+                          size="xs"
+                          disabled={dispatching}
+                          onClick={() => onDispatchIssue(issueDetail.key)}
+                        >
+                          {dispatching ? <Spinner size="xs" /> : <PlayIcon className="size-3" />}
+                          <T>Run diagnosis</T>
+                        </Button>
                       </div>
 
-                      <Button
-                        size="xs"
-                        disabled={dispatching}
-                        onClick={() => onDispatchIssue(issueDetail.key)}
-                      >
-                        {dispatching ? <Spinner size="xs" /> : <PlayIcon className="size-3" />}
-                        <T>Run diagnosis</T>
-                      </Button>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <SearchableProjectMenu
-                        projects={projects}
-                        value={resolvedProjectId}
-                        onChange={onAdhocProjectIdChange}
-                        ariaLabel={gt("Target local repository")}
-                        className="min-w-0"
-                      />
-
-                      <OfficialModelPicker
-                        environmentId={environmentId}
-                        value={resolvedModelSelection}
-                        onChange={(next) => {
-                          if (next) onAdhocModelSelectionChange(next);
-                        }}
-                        ariaLabel={gt("Primary AI model")}
-                        popupSide="bottom"
-                        popupAlign="end"
-                        workspaceCwd={cwd || null}
-                        triggerClassName="min-w-0"
-                      />
-
-                      <Select
-                        value={adhocMode}
-                        onValueChange={(next) => {
-                          if (next) onAdhocModeChange(next as IssueAutomationActionMode);
-                        }}
-                      >
-                        <SelectTrigger
-                          size="sm"
+                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <SearchableProjectMenu
+                          projects={projects}
+                          value={resolvedProjectId}
+                          onChange={onAdhocProjectIdChange}
+                          ariaLabel={gt("Target local repository")}
                           className="min-w-0"
-                          aria-label={gt("Execution mode")}
+                        />
+
+                        <OfficialModelPicker
+                          environmentId={environmentId}
+                          value={resolvedModelSelection}
+                          onChange={(next) => {
+                            if (next) onAdhocModelSelectionChange(next);
+                          }}
+                          ariaLabel={gt("Primary AI model")}
+                          popupSide="bottom"
+                          popupAlign="end"
+                          workspaceCwd={cwd || null}
+                          triggerClassName="min-w-0"
+                        />
+
+                        <Select
+                          value={adhocMode}
+                          onValueChange={(next) => {
+                            if (next) onAdhocModeChange(next as IssueAutomationActionMode);
+                          }}
                         >
-                          <SelectValue>{actionModeLabel(adhocMode)}</SelectValue>
-                        </SelectTrigger>
-                        <SelectPopup>
-                          <SelectItem value="fix_worktree_review">
-                            {actionModeLabel("fix_worktree_review")}
-                          </SelectItem>
-                          <SelectItem value="diagnose_only">
-                            {actionModeLabel("diagnose_only")}
-                          </SelectItem>
-                          <SelectItem value="auto_resolve">
-                            {actionModeLabel("auto_resolve")}
-                          </SelectItem>
-                        </SelectPopup>
-                      </Select>
+                          <SelectTrigger
+                            size="sm"
+                            className="min-w-0"
+                            aria-label={gt("Execution mode")}
+                          >
+                            <SelectValue>{actionModeLabel(adhocMode)}</SelectValue>
+                          </SelectTrigger>
+                          <SelectPopup>
+                            <SelectItem value="fix_worktree_review">
+                              {actionModeLabel("fix_worktree_review")}
+                            </SelectItem>
+                            <SelectItem value="diagnose_only">
+                              {actionModeLabel("diagnose_only")}
+                            </SelectItem>
+                            <SelectItem value="auto_resolve">
+                              {actionModeLabel("auto_resolve")}
+                            </SelectItem>
+                          </SelectPopup>
+                        </Select>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <PullRequestSection
-                  key={`steps:${issueDetail.key}`}
-                  title={gt("Reproduction steps & description")}
-                  keepMounted
-                  actions={
-                    issueDetail.imageUrls.length > 0 ? (
-                      <Badge variant="secondary" size="sm">
-                        <T>Attachments</T>: {issueDetail.imageUrls.length}
-                      </Badge>
-                    ) : null
-                  }
-                >
-                  <PullRequestMarkdown
-                    text={
-                      issueDetail.stepsMarkdown.trim().length > 0
-                        ? issueDetail.stepsMarkdown
-                        : gt("_No reproduction steps provided._")
+                  <PullRequestSection
+                    key={`steps:${issueDetail.key}`}
+                    title={gt("Reproduction steps & description")}
+                    keepMounted
+                    actions={
+                      issueDetail.imageUrls.length > 0 ? (
+                        <Badge variant="secondary" size="sm">
+                          <T>Attachments</T>: {issueDetail.imageUrls.length}
+                        </Badge>
+                      ) : null
                     }
-                    cwd={cwd}
-                    environmentId={environmentId}
-                    lineBreaks
-                  />
-                </PullRequestSection>
+                  >
+                    <PullRequestMarkdown
+                      text={
+                        issueDetail.stepsMarkdown.trim().length > 0
+                          ? issueDetail.stepsMarkdown
+                          : gt("_No reproduction steps provided._")
+                      }
+                      cwd={cwd}
+                      environmentId={environmentId}
+                      lineBreaks
+                    />
+                  </PullRequestSection>
 
-                <PullRequestSection
-                  key={`comments:${issueDetail.key}`}
-                  title={`${gt("ZenTao history & comments")} (${String(issueDetail.comments.length)})`}
-                  keepMounted
-                >
-                  {issueDetail.comments.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      <T>No history or comments yet.</T>
-                    </p>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {issueDetail.comments.map((comment) => (
-                        <article
-                          key={comment.id}
-                          className="rounded-lg border border-border/60 bg-card/20 p-3"
-                        >
-                          <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
-                            <span className="font-medium text-foreground">
-                              {comment.actor}
-                              <span className="font-normal text-muted-foreground">
-                                {" "}
-                                · {comment.action}
+                  <PullRequestSection
+                    key={`comments:${issueDetail.key}`}
+                    title={`${gt("ZenTao history & comments")} (${String(issueDetail.comments.length)})`}
+                    keepMounted
+                  >
+                    {issueDetail.comments.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        <T>No history or comments yet.</T>
+                      </p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {issueDetail.comments.map((comment) => (
+                          <article
+                            key={comment.id}
+                            className="rounded-lg border border-border/60 bg-card/20 p-3"
+                          >
+                            <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                              <span className="font-medium text-foreground">
+                                {comment.actor}
+                                <span className="font-normal text-muted-foreground">
+                                  {" "}
+                                  · {comment.action}
+                                </span>
                               </span>
-                            </span>
-                            <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                              {comment.createdAt}
-                            </span>
-                          </div>
-                          {comment.body.trim().length > 0 ? (
-                            <div className="mt-2">
-                              <PullRequestMarkdown
-                                text={comment.body}
-                                cwd={cwd}
-                                environmentId={environmentId}
-                                lineBreaks
-                              />
+                              <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                                {comment.createdAt}
+                              </span>
                             </div>
-                          ) : null}
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </PullRequestSection>
-              </>
-            ) : null}
+                            {comment.body.trim().length > 0 ? (
+                              <div className="mt-2">
+                                <PullRequestMarkdown
+                                  text={comment.body}
+                                  cwd={cwd}
+                                  environmentId={environmentId}
+                                  lineBreaks
+                                />
+                              </div>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </PullRequestSection>
+                </>
+              ) : null}
+            </div>
           </div>
 
           {targetIssueKey ? (
@@ -723,222 +733,229 @@ export function IssueAutomationInspectorContent({
           ) : null}
         </>
       ) : activeTask ? (
-        <div className="min-h-0 flex-1 overflow-y-auto pb-12" data-pull-request-summary-scroll>
-          <div className="px-5 pt-4 pb-2">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <h2 className="text-base font-semibold leading-snug text-foreground">
-                  {cleanIssueText(activeTask.issueTitle)}
-                </h2>
-                <PullRequestMetaLine className="flex-wrap gap-y-1 text-xs text-muted-foreground">
-                  {bugLinkElement}
-                  <span className="font-mono">{activeTask.assignedModelLabel}</span>
-                  {activeTask.targetProjectId ? (
-                    <span className="inline-flex items-center gap-1">
-                      <FolderGit2Icon className="size-3 shrink-0" />
-                      {projects.find((p) => p.id === activeTask.targetProjectId)?.title ??
-                        activeTask.targetProjectId}
-                    </span>
-                  ) : null}
-                  {activeTask.worktreeBranch ? (
-                    <span className="inline-flex items-center gap-1 font-mono">
-                      <GitBranchIcon className="size-3 shrink-0" />
-                      {activeTask.worktreeBranch}
-                    </span>
-                  ) : null}
-                </PullRequestMetaLine>
-              </div>
-
-              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-                {activeTask.primaryThreadId ? (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => onOpenThread(activeTask.primaryThreadId!)}
-                  >
-                    <MessageSquareIcon className="size-3.5" />
-                    <T>Thread & Diff</T>
-                  </Button>
-                ) : null}
-                {activeTask.reviewThreadId ? (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => onOpenThread(activeTask.reviewThreadId!)}
-                  >
-                    <MessageSquareIcon className="size-3.5" />
-                    <T>Cross-review Thread</T>
-                  </Button>
-                ) : null}
-                {isStageActive(activeTask.stage) ? (
-                  <Button
-                    size="xs"
-                    variant="ghost-destructive"
-                    onClick={() => onCancelTask(activeTask.id)}
-                  >
-                    <XCircleIcon className="size-3.5" />
-                    <T>Cancel</T>
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-2.5 rounded-xl border border-border/60 bg-card/40 px-3.5 py-3 sm:grid-cols-6">
-              {[
-                { idx: 1, label: gt("Fetch") },
-                { idx: 2, label: gt("Route") },
-                { idx: 3, label: gt("Diagnose & fix") },
-                { idx: 4, label: gt("Cross-review") },
-                { idx: 5, label: gt("Write-back") },
-                { idx: 6, label: gt("Done") },
-              ].map((step) => {
-                const currentIdx = stageStepIndex(activeTask.stage);
-                const done =
-                  currentIdx > step.idx ||
-                  activeTask.stage === "completed" ||
-                  activeTask.stage === "needs_human";
-                const current = currentIdx === step.idx && isStageActive(activeTask.stage);
-                return (
-                  <div key={step.idx} className="flex min-w-0 items-center gap-1.5">
-                    {done ? (
-                      <CheckCircle2Icon className="size-3.5 shrink-0 text-success" />
-                    ) : current ? (
-                      <span className="inline-flex shrink-0 text-info">
-                        <Spinner size="xs" className="shrink-0" />
+        <div
+          className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto pb-12"
+          data-pull-request-summary-scroll
+        >
+          <div key="trace" className={WORKSPACE_TAB_PANEL_CLASS}>
+            <div className="px-5 pt-4 pb-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <h2 className="text-base font-semibold leading-snug text-foreground">
+                    {cleanIssueText(activeTask.issueTitle)}
+                  </h2>
+                  <PullRequestMetaLine className="flex-wrap gap-y-1 text-xs text-muted-foreground">
+                    {bugLinkElement}
+                    <span className="font-mono">{activeTask.assignedModelLabel}</span>
+                    {activeTask.targetProjectId ? (
+                      <span className="inline-flex items-center gap-1">
+                        <FolderGit2Icon className="size-3 shrink-0" />
+                        {projects.find((p) => p.id === activeTask.targetProjectId)?.title ??
+                          activeTask.targetProjectId}
                       </span>
-                    ) : (
-                      <span className="size-2 shrink-0 rounded-full bg-muted-foreground/35" />
-                    )}
-                    <span
-                      className={cn(
-                        "truncate text-xs",
-                        done
-                          ? "font-medium text-foreground"
-                          : current
-                            ? "font-medium text-info"
-                            : "text-muted-foreground",
-                      )}
+                    ) : null}
+                    {activeTask.worktreeBranch ? (
+                      <span className="inline-flex items-center gap-1 font-mono">
+                        <GitBranchIcon className="size-3 shrink-0" />
+                        {activeTask.worktreeBranch}
+                      </span>
+                    ) : null}
+                  </PullRequestMetaLine>
+                </div>
+
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                  {activeTask.primaryThreadId ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => onOpenThread(activeTask.primaryThreadId!)}
                     >
-                      {step.label}
-                    </span>
-                  </div>
-                );
-              })}
+                      <MessageSquareIcon className="size-3.5" />
+                      <T>Thread & Diff</T>
+                    </Button>
+                  ) : null}
+                  {activeTask.reviewThreadId ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => onOpenThread(activeTask.reviewThreadId!)}
+                    >
+                      <MessageSquareIcon className="size-3.5" />
+                      <T>Cross-review Thread</T>
+                    </Button>
+                  ) : null}
+                  {isStageActive(activeTask.stage) ? (
+                    <Button
+                      size="xs"
+                      variant="ghost-destructive"
+                      onClick={() => onCancelTask(activeTask.id)}
+                    >
+                      <XCircleIcon className="size-3.5" />
+                      <T>Cancel</T>
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-2.5 rounded-xl border border-border/60 bg-card/40 px-3.5 py-3 sm:grid-cols-6">
+                {[
+                  { idx: 1, label: gt("Fetch") },
+                  { idx: 2, label: gt("Route") },
+                  { idx: 3, label: gt("Diagnose & fix") },
+                  { idx: 4, label: gt("Cross-review") },
+                  { idx: 5, label: gt("Write-back") },
+                  { idx: 6, label: gt("Done") },
+                ].map((step) => {
+                  const currentIdx = stageStepIndex(activeTask.stage);
+                  const done =
+                    currentIdx > step.idx ||
+                    activeTask.stage === "completed" ||
+                    activeTask.stage === "needs_human";
+                  const current = currentIdx === step.idx && isStageActive(activeTask.stage);
+                  return (
+                    <div key={step.idx} className="flex min-w-0 items-center gap-1.5">
+                      {done ? (
+                        <CheckCircle2Icon className="size-3.5 shrink-0 text-success" />
+                      ) : current ? (
+                        <span className="inline-flex shrink-0 text-info">
+                          <Spinner size="xs" className="shrink-0" />
+                        </span>
+                      ) : (
+                        <span className="size-2 shrink-0 rounded-full bg-muted-foreground/35" />
+                      )}
+                      <span
+                        className={cn(
+                          "truncate text-xs transition-colors duration-200",
+                          done
+                            ? "font-medium text-foreground"
+                            : current
+                              ? "font-medium text-info"
+                              : "text-muted-foreground",
+                        )}
+                      >
+                        {step.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {activeTask.lastError ? (
+                <div className="mt-3">
+                  <Alert variant="error">
+                    <CircleAlertIcon className="size-4" />
+                    <AlertTitle>{gt("Execution error")}</AlertTitle>
+                    <AlertDescription>{activeTask.lastError}</AlertDescription>
+                  </Alert>
+                </div>
+              ) : null}
             </div>
 
-            {activeTask.lastError ? (
-              <div className="mt-3">
-                <Alert variant="error">
-                  <CircleAlertIcon className="size-4" />
-                  <AlertTitle>{gt("Execution error")}</AlertTitle>
-                  <AlertDescription>{activeTask.lastError}</AlertDescription>
-                </Alert>
+            <PullRequestSection
+              key={`timeline:${activeTask.id}`}
+              title={gt("Execution timeline")}
+              keepMounted
+            >
+              <div className="relative ml-2 space-y-3 border-l border-border/70 pl-4">
+                {activeTask.steps.map((step, idx) => (
+                  <div
+                    key={`${step.at}-${String(idx)}`}
+                    className="relative flex flex-col gap-0.5 text-xs motion-safe:animate-step-in"
+                  >
+                    <span
+                      aria-hidden
+                      className="absolute -left-5 top-1.5 size-2 rounded-full bg-primary/70 ring-4 ring-background"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                        {new Date(step.at).toLocaleTimeString()}
+                      </span>
+                      {step.modelLabel ? (
+                        <Badge variant="secondary" size="sm">
+                          {step.modelLabel}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <p className="leading-relaxed text-foreground">{step.message}</p>
+                  </div>
+                ))}
               </div>
+            </PullRequestSection>
+
+            {activeTask.diagnosisReport ? (
+              <PullRequestSection
+                key={`report:${activeTask.id}`}
+                title={gt("Root-cause analysis & solution report")}
+                keepMounted
+                actions={
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={writingBack}
+                      onClick={() =>
+                        void onManualWriteBack({
+                          kind: "comment",
+                          issueKey: activeTask.issueKey,
+                          comment: activeTask.diagnosisReport!,
+                          taskId: activeTask.id,
+                        })
+                      }
+                    >
+                      <SendIcon className="size-3" />
+                      {activeTask.commentSyncedAt ? <T>Re-sync comment</T> : <T>Sync to ZenTao</T>}
+                    </Button>
+                    <Button
+                      size="xs"
+                      disabled={writingBack}
+                      onClick={() =>
+                        void onManualWriteBack({
+                          kind: "resolve",
+                          issueKey: activeTask.issueKey,
+                          resolution: "fixed",
+                          resolvedBuild: "trunk",
+                          comment: activeTask.diagnosisReport!,
+                          taskId: activeTask.id,
+                        })
+                      }
+                    >
+                      <CheckCircle2Icon className="size-3" />
+                      <T>Sync & mark Resolved</T>
+                    </Button>
+                  </div>
+                }
+              >
+                <div className="rounded-xl border border-border/60 bg-card/30 p-4">
+                  <PullRequestMarkdown
+                    text={activeTask.diagnosisReport}
+                    cwd={
+                      projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ??
+                      cwd
+                    }
+                    environmentId={environmentId}
+                  />
+                </div>
+              </PullRequestSection>
+            ) : null}
+
+            {activeTask.reviewReport ? (
+              <PullRequestSection
+                key={`review:${activeTask.id}`}
+                title={gt("Heterogeneous model cross-review")}
+              >
+                <div className="rounded-xl border border-border/60 bg-card/30 p-4">
+                  <PullRequestMarkdown
+                    text={activeTask.reviewReport}
+                    cwd={
+                      projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ??
+                      cwd
+                    }
+                    environmentId={environmentId}
+                  />
+                </div>
+              </PullRequestSection>
             ) : null}
           </div>
-
-          <PullRequestSection
-            key={`timeline:${activeTask.id}`}
-            title={gt("Execution timeline")}
-            keepMounted
-          >
-            <div className="relative ml-2 space-y-3 border-l border-border/70 pl-4">
-              {activeTask.steps.map((step, idx) => (
-                <div
-                  key={`${step.at}-${String(idx)}`}
-                  className="relative flex flex-col gap-0.5 text-xs"
-                >
-                  <span
-                    aria-hidden
-                    className="absolute -left-5 top-1.5 size-2 rounded-full bg-primary/70 ring-4 ring-background"
-                  />
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                      {new Date(step.at).toLocaleTimeString()}
-                    </span>
-                    {step.modelLabel ? (
-                      <Badge variant="secondary" size="sm">
-                        {step.modelLabel}
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <p className="leading-relaxed text-foreground">{step.message}</p>
-                </div>
-              ))}
-            </div>
-          </PullRequestSection>
-
-          {activeTask.diagnosisReport ? (
-            <PullRequestSection
-              key={`report:${activeTask.id}`}
-              title={gt("Root-cause analysis & solution report")}
-              keepMounted
-              actions={
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={writingBack}
-                    onClick={() =>
-                      void onManualWriteBack({
-                        kind: "comment",
-                        issueKey: activeTask.issueKey,
-                        comment: activeTask.diagnosisReport!,
-                        taskId: activeTask.id,
-                      })
-                    }
-                  >
-                    <SendIcon className="size-3" />
-                    {activeTask.commentSyncedAt ? <T>Re-sync comment</T> : <T>Sync to ZenTao</T>}
-                  </Button>
-                  <Button
-                    size="xs"
-                    disabled={writingBack}
-                    onClick={() =>
-                      void onManualWriteBack({
-                        kind: "resolve",
-                        issueKey: activeTask.issueKey,
-                        resolution: "fixed",
-                        resolvedBuild: "trunk",
-                        comment: activeTask.diagnosisReport!,
-                        taskId: activeTask.id,
-                      })
-                    }
-                  >
-                    <CheckCircle2Icon className="size-3" />
-                    <T>Sync & mark Resolved</T>
-                  </Button>
-                </div>
-              }
-            >
-              <div className="rounded-xl border border-border/60 bg-card/30 p-4">
-                <PullRequestMarkdown
-                  text={activeTask.diagnosisReport}
-                  cwd={
-                    projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ?? cwd
-                  }
-                  environmentId={environmentId}
-                />
-              </div>
-            </PullRequestSection>
-          ) : null}
-
-          {activeTask.reviewReport ? (
-            <PullRequestSection
-              key={`review:${activeTask.id}`}
-              title={gt("Heterogeneous model cross-review")}
-            >
-              <div className="rounded-xl border border-border/60 bg-card/30 p-4">
-                <PullRequestMarkdown
-                  text={activeTask.reviewReport}
-                  cwd={
-                    projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ?? cwd
-                  }
-                  environmentId={environmentId}
-                />
-              </div>
-            </PullRequestSection>
-          ) : null}
         </div>
       ) : null}
     </div>

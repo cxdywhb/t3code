@@ -156,17 +156,20 @@ function makeInitialSlotsFromEntries(
   ];
 }
 
-function SkillMultiPicker({
+export function SkillMultiPicker({
   availableSkills,
   selectedNames,
   onChange,
+  catalog = false,
 }: {
+  readonly catalog?: boolean;
   readonly availableSkills: ReadonlyArray<PrReviewSkillDescriptor>;
   readonly selectedNames: ReadonlyArray<string>;
   readonly onChange: (next: ReadonlyArray<string>) => void;
 }) {
   const gt = useGT();
   const [search, setSearch] = useState("");
+  const [limit, setLimit] = useState(30);
   const selectedSet = new Set(selectedNames);
   const needle = search.trim().toLowerCase();
   const filtered = availableSkills.filter(
@@ -185,20 +188,23 @@ function SkillMultiPicker({
     }
   };
 
-  if (availableSkills.length === 0) {
+  if (!catalog && availableSkills.length === 0 && selectedNames.length === 0) {
     return (
       <div className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
-        <T>No workspace or provider skills detected yet (.agents/skills or .claude/skills).</T>
+        <T>Add favorite skills on the Presets tab.</T>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-2">
-      {availableSkills.length > 5 ? (
+      {catalog || availableSkills.length > 5 ? (
         <Input
           value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
+          onChange={(e) => {
+            setSearch(e.currentTarget.value);
+            setLimit(30);
+          }}
           placeholder={gt("Filter skills by name or description…")}
         />
       ) : null}
@@ -213,7 +219,15 @@ function SkillMultiPicker({
             <T>No matching skills</T>
           </p>
         ) : null}
-        {filtered.map((skill) => {
+        {selectedNames
+          .filter((name) => !availableSkills.some((skill) => skill.name === name))
+          .map((name) => (
+            <label key={name} className="flex items-center gap-2 text-xs">
+              <Checkbox checked onCheckedChange={() => toggle(name)} />
+              {name}
+            </label>
+          ))}
+        {filtered.slice(0, limit).map((skill) => {
           const checked = selectedSet.has(skill.name);
           return (
             <label
@@ -246,6 +260,11 @@ function SkillMultiPicker({
             </label>
           );
         })}
+        {filtered.length > limit ? (
+          <Button variant="ghost" size="sm" onClick={() => setLimit(limit + 30)}>
+            <T>Show more</T>
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -401,7 +420,6 @@ export function LaunchPrReviewDialog({
       ...(catalog.pickableEntries.length > 0
         ? { isSelectionAvailable: catalog.isSelectionAvailable }
         : {}),
-      availableSkillNames: new Set(availableSkills.map((skill) => skill.name)),
       fallbackSelection: catalog.firstAvailableSelection,
     }),
   );
@@ -589,6 +607,7 @@ export function LaunchPrReviewDialog({
   };
 
   const firstTarget = targets[0];
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -683,7 +702,13 @@ export function LaunchPrReviewDialog({
                   }}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue>
+                      {selectedPreset ? (
+                        `${selectedPreset.name} (${selectedPreset.reviewerModels.length})`
+                      ) : (
+                        <T>Custom ad-hoc configuration</T>
+                      )}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     <SelectItem value="__custom__">

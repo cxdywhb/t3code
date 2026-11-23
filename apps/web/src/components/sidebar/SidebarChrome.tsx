@@ -320,7 +320,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           {prReviewSupported ? (
             <SidebarUtilityItem
               icon={<ShieldCheckIcon />}
-              label={gt("PR Fusion Review")}
+              label={gt("PR Cross Review")}
               onClick={handlePrReviewClick}
             />
           ) : null}

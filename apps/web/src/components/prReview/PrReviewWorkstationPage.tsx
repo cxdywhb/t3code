@@ -14,19 +14,24 @@ import type {
 import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, Var } from "gt-react";
 import {
+  ActivityIcon,
+  AlertTriangleIcon,
   ArrowUpRightIcon,
   BarChart3Icon,
   BotIcon,
   CheckCircle2Icon,
   ClockIcon,
-  GripVerticalIcon,
+  EyeIcon,
+  GlobeIcon,
   LayersIcon,
+  PenLineIcon,
   PlusIcon,
   Settings2Icon,
   ShieldAlertIcon,
   ShieldCheckIcon,
   Trash2Icon,
   WorkflowIcon,
+  XCircleIcon,
   ZapIcon,
 } from "lucide-react";
 import {
@@ -35,15 +40,31 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import { PullRequestSearchInput } from "~/components/pullRequest/PullRequestListFilters";
+import {
+  PullRequestRowBranches,
+  PullRequestRowLines,
+} from "~/components/pullRequest/PullRequestListRow";
 import type { EnvironmentPullRequestEntry } from "~/components/pullRequest/pullRequestList.logic";
 import type { PullRequestHostAvailability } from "~/components/pullRequest/pullRequestProjectAssignment.logic";
-import { PullRequestStateGlyph } from "~/components/pullRequest/pullRequestPresentation";
+import {
+  PullRequestMetaLine,
+  PullRequestStateGlyph,
+} from "~/components/pullRequest/pullRequestPresentation";
+import { PULL_REQUEST_STATE_PRESENTATION } from "~/components/pullRequest/pullRequestIcons";
 import { usePullRequestScope } from "~/components/pullRequest/usePullRequestListView";
 import { RelativeTime } from "~/components/RelativeTime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
-import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
+import { WorkspaceInspectorDrawer } from "~/components/WorkspaceInspectorDrawer";
+import { WorkspacePageContainer } from "~/components/WorkspacePageContainer";
+import {
+  WORKSPACE_BAR_ENTER_CLASS,
+  WORKSPACE_TAB_PANEL_CLASS,
+  WorkspacePageHeader,
+  WorkspacePageTitle,
+  WorkspacePageToolbar,
+} from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -52,12 +73,18 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { useProjects } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-import { prReviewEnvironment, usePrReviewLiveState } from "~/state/prReview";
+import {
+  prReviewEnvironment,
+  useFavoriteReviewSkills,
+  usePrReviewLiveState,
+} from "~/state/prReview";
 import { pullRequestEnvironment, usePullRequestHostList } from "~/state/pullRequests";
+import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Dialog, DialogHeader, DialogTitle, DialogPanel, DialogPopup } from "../ui/dialog";
 import { Checkbox } from "../ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -66,7 +93,6 @@ import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PrReviewAnalyticsView } from "./PrReviewAnalyticsView";
 import {
   isPrReviewStageActive,
@@ -75,6 +101,7 @@ import {
   PrReviewVerdictBadge,
 } from "./PrReviewInspector";
 import {
+  SkillMultiPicker,
   LaunchPrReviewDialog,
   PresetEditorDialog,
   usePrReviewRoleLabel,
@@ -149,6 +176,13 @@ export function PrReviewWorkstationPage() {
   const writeBackLabel = usePrReviewWriteBackLabel();
   const isWideDesktop = useMediaQuery("(min-width: 1024px)");
   const environmentId = usePrimaryEnvironmentId();
+  const [favorites, setFavorites] = useFavoriteReviewSkills(environmentId);
+  const [addingSkills, setAddingSkills] = useState(false);
+  const catalog = useEnvironmentQuery(
+    addingSkills && environmentId
+      ? prReviewEnvironment.skillsQuery({ environmentId, input: {} })
+      : null,
+  );
   const allProjects = useProjects();
   const { snapshot, refresh: refreshPrReview } = usePrReviewLiveState(environmentId);
   const deletePreset = useAtomCommand(prReviewEnvironment.deletePreset, { reportFailure: false });
@@ -201,6 +235,14 @@ export function PrReviewWorkstationPage() {
   const prListQuery = usePullRequestHostList(listTargets);
   const prEntries = prListQuery.data?.entries ?? [];
   const hostProviders = prListQuery.data?.providers ?? [];
+  const selectedHostProvider = prefs.host
+    ? hostProviders.find((hp) => hp.host === prefs.host)
+    : undefined;
+  const SelectedHostIcon = selectedHostProvider
+    ? getSourceControlPresentationForKind(selectedHostProvider.kind).Icon
+    : null;
+  const stateIconPresentation =
+    prefs.state === "all" ? null : PULL_REQUEST_STATE_PRESENTATION[prefs.state];
 
   const latestTaskByPrKey = new Map<string, PrReviewTask>();
   for (const task of snapshot.tasks) {
@@ -346,18 +388,16 @@ export function PrReviewWorkstationPage() {
         <WorkspacePageHeader
           electron={isElectron}
           reserveNativeControls={!desktopInspectorVisible}
-          className="shrink-0 border-b bg-background"
+          className="relative bg-background"
         >
-          <WorkspaceBreadcrumb ariaLabel={gt("PR Fusion Review Workstation")}>
-            <WorkspaceBreadcrumbItem current>
-              <h1 className="flex items-center gap-2 truncate">
-                <ShieldCheckIcon className="size-4 text-primary" />
-                <T>PR Multi-Model Fusion Review</T>
-              </h1>
-            </WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
+          <WorkspacePageTitle ariaLabel={gt("PR Cross Review")}>
+            <T>PR Cross Review</T>
+          </WorkspacePageTitle>
           <div className="min-w-0 flex-1" />
-          <div className="flex items-center gap-2">
+          <div
+            className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]"
+            data-workspace-titlebar-controls
+          >
             {snapshot.activeRunCount > 0 ? (
               <Badge variant="info">
                 <Spinner className="mr-1 size-3" />
@@ -365,10 +405,11 @@ export function PrReviewWorkstationPage() {
               </Badge>
             ) : null}
             {allTimeQuickSummary.completedCount > 0 ? (
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant="ghost"
+                className="hidden xl:inline-flex"
                 onClick={() => setPrefs((prev) => ({ ...prev, tab: "analytics" }))}
-                className="hidden items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground xl:inline-flex"
               >
                 <CheckCircle2Icon className="size-3.5 text-success" />
                 <span className="font-mono text-foreground tabular-nums">
@@ -376,12 +417,14 @@ export function PrReviewWorkstationPage() {
                     ? `${allTimeQuickSummary.successRate.toFixed(0)}%`
                     : "-"}
                 </span>
-                <span>·</span>
+                <span className="text-muted-foreground">·</span>
                 <span className="font-mono text-primary tabular-nums">
                   +{allTimeQuickSummary.estimatedHoursSaved.toFixed(1)}h
                 </span>
-                <T>saved</T>
-              </button>
+                <span className="text-muted-foreground">
+                  <T>saved</T>
+                </span>
+              </Button>
             ) : null}
             <Button
               size="sm"
@@ -393,7 +436,7 @@ export function PrReviewWorkstationPage() {
             </Button>
             <Button
               size="icon-sm"
-              variant="outline"
+              variant="ghost"
               onClick={() => void handleRefreshAll()}
               aria-label={gt("Refresh")}
             >
@@ -409,42 +452,39 @@ export function PrReviewWorkstationPage() {
               desktopInspectorVisible && isInspectorExpanded ? "hidden 2xl:flex" : "",
             )}
           >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+            <WorkspacePageToolbar>
               <ToggleGroup
+                className="max-w-full flex-wrap"
                 value={[prefs.tab]}
                 onValueChange={(vals) => {
                   const next = vals[0] as PrReviewWorkstationTab | undefined;
                   if (next) setPrefs((prev) => ({ ...prev, tab: next }));
                 }}
               >
-                <Toggle value="queue" size="sm">
+                <Toggle value="queue">
                   <LayersIcon className="size-3.5" />
                   <T>Cloud MR / PR Queue</T>
                 </Toggle>
-                <Toggle value="runs" size="sm">
-                  <WorkflowIcon className="size-3.5" />
+                <Toggle value="runs">
+                  {snapshot.activeRunCount > 0 ? (
+                    <Spinner size="xs" />
+                  ) : (
+                    <WorkflowIcon className="size-3.5" />
+                  )}
                   <T>Fusion Runs</T>
-                  {snapshot.tasks.length > 0 ? (
-                    <span className="ml-1 rounded-full bg-muted px-1.5 font-mono text-3xs tabular-nums">
-                      {snapshot.tasks.length}
-                    </span>
-                  ) : null}
                 </Toggle>
-                <Toggle value="analytics" size="sm">
+                <Toggle value="analytics">
                   <BarChart3Icon className="size-3.5" />
                   <T>Metrics & ROI</T>
                 </Toggle>
-                <Toggle value="presets" size="sm">
+                <Toggle value="presets">
                   <Settings2Icon className="size-3.5" />
                   <T>Presets & Skills</T>
-                  <span className="ml-1 rounded-full bg-muted px-1.5 font-mono text-3xs tabular-nums">
-                    {snapshot.presets.length}
-                  </span>
                 </Toggle>
               </ToggleGroup>
 
               {prefs.tab === "queue" && selectedEntries.length > 0 ? (
-                <div className="flex items-center gap-2">
+                <div className={cn("ms-auto flex items-center gap-2", WORKSPACE_BAR_ENTER_CLASS)}>
                   <span className="text-xs text-muted-foreground">
                     <Var>{selectedEntries.length}</Var> <T>selected</T>
                   </span>
@@ -467,11 +507,25 @@ export function PrReviewWorkstationPage() {
                   </Button>
                 </div>
               ) : null}
-            </div>
+            </WorkspacePageToolbar>
 
             {prefs.tab === "queue" ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex flex-wrap items-center gap-2 border-b bg-muted/20 px-4 py-2">
+              <div
+                key="queue"
+                className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
+              >
+                <div className="flex flex-wrap items-center gap-2 border-b border-border/50 bg-background py-2.5 pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)">
+                  <div className="min-w-48 flex-1">
+                    <PullRequestSearchInput
+                      value={query}
+                      busy={prListQuery.isPending && query.length > 0}
+                      label={gt("Search PRs or MRs")}
+                      placeholder={gt("Search cloud MRs / PRs by title or branch…")}
+                      onChange={setQuery}
+                      onSubmit={setQuery}
+                    />
+                  </div>
+
                   <ToggleGroup
                     value={[prefs.involvement]}
                     onValueChange={(vals) => {
@@ -479,13 +533,16 @@ export function PrReviewWorkstationPage() {
                       if (next) setPrefs((prev) => ({ ...prev, involvement: next }));
                     }}
                   >
-                    <Toggle value="authored" size="sm">
+                    <Toggle value="authored">
+                      <PenLineIcon />
                       <T>Created by Me</T>
                     </Toggle>
-                    <Toggle value="reviewing" size="sm">
+                    <Toggle value="reviewing">
+                      <EyeIcon />
                       <T>Reviewing</T>
                     </Toggle>
-                    <Toggle value="all" size="sm">
+                    <Toggle value="all">
+                      <LayersIcon />
                       <T>All</T>
                     </Toggle>
                   </ToggleGroup>
@@ -497,8 +554,25 @@ export function PrReviewWorkstationPage() {
                         setPrefs((prev) => ({ ...prev, state: val as PullRequestListState }));
                     }}
                   >
-                    <SelectTrigger className="w-28">
-                      <SelectValue />
+                    <SelectTrigger className="w-36">
+                      {stateIconPresentation ? (
+                        <stateIconPresentation.Icon
+                          className={cn("size-3.5 shrink-0", stateIconPresentation.toneClassName)}
+                        />
+                      ) : (
+                        <LayersIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <SelectValue>
+                        {prefs.state === "open" ? (
+                          <T>Open</T>
+                        ) : prefs.state === "merged" ? (
+                          <T>Merged</T>
+                        ) : prefs.state === "closed" ? (
+                          <T>Closed</T>
+                        ) : (
+                          <T>All states</T>
+                        )}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectPopup>
                       <SelectItem value="open">
@@ -526,8 +600,23 @@ export function PrReviewWorkstationPage() {
                         }));
                       }}
                     >
-                      <SelectTrigger className="w-44">
-                        <SelectValue />
+                      <SelectTrigger className="w-52">
+                        {SelectedHostIcon ? (
+                          <SelectedHostIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                        )}
+                        <SelectValue>
+                          {prefs.host ? (
+                            selectedHostProvider && !selectedHostProvider.configured ? (
+                              `${prefs.host} (${gt("unauthenticated")})`
+                            ) : (
+                              prefs.host
+                            )
+                          ) : (
+                            <T>All GitLab / GitHub hosts</T>
+                          )}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectPopup>
                         <SelectItem value="__all__">
@@ -542,44 +631,32 @@ export function PrReviewWorkstationPage() {
                       </SelectPopup>
                     </Select>
                   ) : null}
-
-                  <div className="min-w-48 flex-1">
-                    <PullRequestSearchInput
-                      value={query}
-                      busy={prListQuery.isPending && query.length > 0}
-                      label={gt("Search PRs or MRs")}
-                      placeholder={gt("Search cloud MRs / PRs by title or branch…")}
-                      onChange={setQuery}
-                      onSubmit={setQuery}
-                    />
-                  </div>
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
+                <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-12 sm:px-7">
                   {prListQuery.isPending && prEntries.length === 0 ? (
-                    <div className="flex items-center justify-center gap-2 py-16 text-xs text-muted-foreground">
-                      <Spinner className="size-4" />
-                      <T>Loading cloud Merge Requests & Pull Requests…</T>
-                    </div>
+                    <PullRequestListGhost />
                   ) : prEntries.length === 0 ? (
-                    <Empty>
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <ShieldCheckIcon className="size-5" />
-                        </EmptyMedia>
-                        <EmptyTitle>
-                          <T>No matching Merge Requests or Pull Requests</T>
-                        </EmptyTitle>
-                        <EmptyDescription>
-                          <T>
-                            Configure your GitLab Personal Access Token in Settings → Source control
-                            & issues, or switch filter tabs above to browse more items.
-                          </T>
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
+                    <div className="flex min-h-full items-center justify-center">
+                      <Empty>
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <ShieldCheckIcon className="size-5" />
+                          </EmptyMedia>
+                          <EmptyTitle>
+                            <T>No matching Merge Requests or Pull Requests</T>
+                          </EmptyTitle>
+                          <EmptyDescription>
+                            <T>
+                              Configure your GitLab Personal Access Token in Settings → Source
+                              control & issues, or switch filter tabs above to browse more items.
+                            </T>
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    </div>
                   ) : (
-                    <div className="flex flex-col divide-y">
+                    <div className="flex flex-col gap-0.5">
                       {prEntries.map((entry) => {
                         const key = entryIdentityKey(entry);
                         const checked = checkedKeys.includes(key);
@@ -594,8 +671,10 @@ export function PrReviewWorkstationPage() {
                           <div
                             key={key}
                             className={cn(
-                              "flex items-center gap-3 rounded-md px-2.5 py-2.5 text-xs transition-colors hover:bg-accent/30",
-                              latestTask && latestTask.id === selectedTaskId ? "bg-accent/40" : "",
+                              "flex items-center gap-2.5 rounded-md px-3 py-2 text-xs transition-colors duration-150",
+                              latestTask && latestTask.id === selectedTaskId
+                                ? "bg-accent"
+                                : "hover:bg-accent/60",
                             )}
                           >
                             <Checkbox
@@ -604,56 +683,64 @@ export function PrReviewWorkstationPage() {
                             />
                             <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
                             <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center gap-1.5">
-                                  <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                  <span className="font-mono text-muted-foreground">
-                                    {entry.repository}
-                                    {sigil}
-                                    {entry.number}
-                                  </span>
-                                </span>
-                                {isCloudUncloned ? (
-                                  <Badge variant="outline" size="sm">
-                                    <T>Cloud MR</T>
-                                  </Badge>
-                                ) : null}
-                                {latestTask ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setSelectedTaskId(latestTask.id)}
-                                    className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
-                                  >
-                                    {isPrReviewStageActive(latestTask.stage) ? (
-                                      <PrReviewStageBadge stage={latestTask.stage} />
-                                    ) : (
-                                      <PrReviewVerdictBadge verdict={latestTask.verdict} />
-                                    )}
-                                    <span className="text-2xs text-muted-foreground">
-                                      <T>Report</T>
+                              <PullRequestRowLines
+                                number={
+                                  <span className="inline-flex shrink-0 items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
+                                    <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                    <span>
+                                      {entry.repository}
+                                      {sigil}
+                                      {entry.number}
                                     </span>
-                                  </button>
-                                ) : null}
-                              </div>
-                              <div className="mt-0.5 truncate text-sm font-medium text-foreground">
-                                {entry.title}
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
-                                <span>@{entry.author?.login ?? "unknown"}</span>
-                                <span>·</span>
-                                <span className="font-mono">
-                                  {entry.headBranch} → {entry.baseBranch}
-                                </span>
-                                <span>·</span>
-                                <RelativeTime timestamp={entry.updatedAt} />
-                              </div>
+                                  </span>
+                                }
+                                title={entry.title}
+                                signals={
+                                  <>
+                                    {isCloudUncloned ? (
+                                      <Badge variant="outline" size="sm">
+                                        <T>Cloud MR</T>
+                                      </Badge>
+                                    ) : null}
+                                    {latestTask ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedTaskId(latestTask.id)}
+                                        className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
+                                      >
+                                        {isPrReviewStageActive(latestTask.stage) ? (
+                                          <PrReviewStageBadge stage={latestTask.stage} />
+                                        ) : (
+                                          <PrReviewVerdictBadge verdict={latestTask.verdict} />
+                                        )}
+                                        <span className="text-2xs text-muted-foreground">
+                                          <T>Report</T>
+                                        </span>
+                                      </button>
+                                    ) : null}
+                                  </>
+                                }
+                                meta={
+                                  <PullRequestMetaLine className="min-w-0">
+                                    <span className="shrink-0">
+                                      @{entry.author?.login ?? "unknown"}
+                                    </span>
+                                    <PullRequestRowBranches
+                                      head={entry.headBranch}
+                                      base={entry.baseBranch}
+                                    />
+                                    <span className="shrink-0">
+                                      <RelativeTime timestamp={entry.updatedAt} />
+                                    </span>
+                                  </PullRequestMetaLine>
+                                }
+                              />
                             </div>
 
-                            <div className="flex min-w-34 shrink-0 flex-col items-stretch justify-center gap-2">
+                            <div className="flex shrink-0 items-center gap-1.5">
                               <Button
                                 size="xs"
                                 variant="outline"
-                                className="w-full justify-center"
                                 onClick={() =>
                                   setLaunchModalState({
                                     targets: [toTargetItem(entry)],
@@ -667,7 +754,6 @@ export function PrReviewWorkstationPage() {
                               <Button
                                 size="xs"
                                 variant="outline"
-                                className="w-full justify-center"
                                 onClick={() =>
                                   setLaunchModalState({
                                     targets: [toTargetItem(entry)],
@@ -687,118 +773,161 @@ export function PrReviewWorkstationPage() {
                 </div>
               </div>
             ) : prefs.tab === "runs" ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                {snapshot.tasks.length > 0 ? (
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2">
-                    <ToggleGroup
-                      value={[prefs.runFilter]}
-                      onValueChange={(vals) => {
-                        const next = vals[0] as PrReviewRunFilter | undefined;
-                        if (next) setPrefs((prev) => ({ ...prev, runFilter: next }));
-                      }}
-                    >
-                      <Toggle value="all" size="sm">
-                        <T>All</T> ({snapshot.tasks.length})
-                      </Toggle>
-                      <Toggle value="active" size="sm">
-                        <T>Running</T> ({allTimeQuickSummary.activeCount})
-                      </Toggle>
-                      <Toggle value="completed" size="sm">
-                        <T>Succeeded</T> ({allTimeQuickSummary.completedCount})
-                      </Toggle>
-                      <Toggle value="request_changes" size="sm">
-                        <T>Request Changes</T> ({allTimeQuickSummary.requestChangesCount})
-                      </Toggle>
-                      <Toggle value="failed" size="sm">
-                        <T>Failed</T> ({allTimeQuickSummary.failedCount})
-                      </Toggle>
-                    </ToggleGroup>
+              <div
+                key="runs"
+                className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
+              >
+                {snapshot.tasks.length > 0 || allTimeQuickSummary.totalRunsCount > 0 ? (
+                  <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3 pb-2.5 sm:px-7">
+                    {snapshot.tasks.length > 0 ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <ToggleGroup
+                          value={[prefs.runFilter]}
+                          onValueChange={(vals) => {
+                            const next = vals[0] as PrReviewRunFilter | undefined;
+                            if (next) setPrefs((prev) => ({ ...prev, runFilter: next }));
+                          }}
+                        >
+                          <Toggle value="all">
+                            <span className="inline-flex items-center gap-1.5">
+                              <LayersIcon />
+                              <T>All</T>
+                              <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                                {snapshot.tasks.length}
+                              </span>
+                            </span>
+                          </Toggle>
+                          <Toggle value="active">
+                            <span className="inline-flex items-center gap-1.5">
+                              <ActivityIcon />
+                              <T>Running</T>
+                              {allTimeQuickSummary.activeCount > 0 ? (
+                                <span className="font-mono text-2xs text-info tabular-nums">
+                                  {allTimeQuickSummary.activeCount}
+                                </span>
+                              ) : null}
+                            </span>
+                          </Toggle>
+                          <Toggle value="completed">
+                            <span className="inline-flex items-center gap-1.5">
+                              <CheckCircle2Icon />
+                              <T>Succeeded</T>
+                              <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                                {allTimeQuickSummary.completedCount}
+                              </span>
+                            </span>
+                          </Toggle>
+                          <Toggle value="request_changes">
+                            <span className="inline-flex items-center gap-1.5">
+                              <AlertTriangleIcon />
+                              <T>Request Changes</T>
+                              {allTimeQuickSummary.requestChangesCount > 0 ? (
+                                <span className="font-mono text-2xs text-warning tabular-nums">
+                                  {allTimeQuickSummary.requestChangesCount}
+                                </span>
+                              ) : null}
+                            </span>
+                          </Toggle>
+                          <Toggle value="failed">
+                            <span className="inline-flex items-center gap-1.5">
+                              <XCircleIcon />
+                              <T>Failed</T>
+                              {allTimeQuickSummary.failedCount > 0 ? (
+                                <span className="font-mono text-2xs text-destructive tabular-nums">
+                                  {allTimeQuickSummary.failedCount}
+                                </span>
+                              ) : null}
+                            </span>
+                          </Toggle>
+                        </ToggleGroup>
 
-                    <div className="min-w-44 flex-1 sm:max-w-xs">
-                      <PullRequestSearchInput
-                        value={runSearchQuery}
-                        busy={false}
-                        label={gt("Filter runs")}
-                        placeholder={gt("Filter runs by repo, title, or model…")}
-                        onChange={setRunSearchQuery}
-                        onSubmit={setRunSearchQuery}
-                      />
-                    </div>
+                        <div className="min-w-44 flex-1 sm:max-w-xs">
+                          <PullRequestSearchInput
+                            value={runSearchQuery}
+                            busy={false}
+                            label={gt("Filter runs")}
+                            placeholder={gt("Filter runs by repo, title, or model…")}
+                            onChange={setRunSearchQuery}
+                            onSubmit={setRunSearchQuery}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {allTimeQuickSummary.totalRunsCount > 0 ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums">
+                          <span>
+                            <T>Success rate</T>:{" "}
+                            <strong className="font-mono text-success">
+                              {allTimeQuickSummary.successRate !== null
+                                ? `${allTimeQuickSummary.successRate.toFixed(1)}%`
+                                : "-"}
+                            </strong>
+                          </span>
+                          <span>
+                            <T>Failure rate</T>:{" "}
+                            <strong
+                              className={cn(
+                                "font-mono",
+                                (allTimeQuickSummary.failureRate ?? 0) > 0
+                                  ? "text-destructive"
+                                  : "text-foreground",
+                              )}
+                            >
+                              {allTimeQuickSummary.failureRate !== null
+                                ? `${allTimeQuickSummary.failureRate.toFixed(1)}%`
+                                : "-"}
+                            </strong>
+                          </span>
+                          <span>
+                            <T>Avg latency</T>:{" "}
+                            <strong className="font-mono text-foreground">
+                              {formatCompactDuration(allTimeQuickSummary.avgDurationMs)}
+                            </strong>
+                          </span>
+                          <span>
+                            <T>Est. saved</T>:{" "}
+                            <strong className="font-mono text-primary">
+                              {allTimeQuickSummary.estimatedHoursSaved.toFixed(1)}h
+                            </strong>
+                          </span>
+                        </div>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => setPrefs((prev) => ({ ...prev, tab: "analytics" }))}
+                        >
+                          <BarChart3Icon className="size-3.5 text-primary" />
+                          <T>Metrics & ROI</T>
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
-                {allTimeQuickSummary.totalRunsCount > 0 ? (
-                  <div className="grid grid-cols-2 gap-2 border-b bg-card/20 px-4 py-2.5 sm:grid-cols-4">
-                    <div className="flex items-center justify-between rounded-md border border-border/50 bg-background/60 px-3 py-1.5 text-xs">
-                      <span className="text-muted-foreground">
-                        <T>Success rate</T>
-                      </span>
-                      <span className="font-mono font-semibold text-success tabular-nums">
-                        {allTimeQuickSummary.successRate !== null
-                          ? `${allTimeQuickSummary.successRate.toFixed(1)}%`
-                          : "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border border-border/50 bg-background/60 px-3 py-1.5 text-xs">
-                      <span className="text-muted-foreground">
-                        <T>Failure rate</T>
-                      </span>
-                      <span
-                        className={cn(
-                          "font-mono font-semibold tabular-nums",
-                          (allTimeQuickSummary.failureRate ?? 0) > 0
-                            ? "text-destructive"
-                            : "text-muted-foreground",
-                        )}
-                      >
-                        {allTimeQuickSummary.failureRate !== null
-                          ? `${allTimeQuickSummary.failureRate.toFixed(1)}%`
-                          : "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border border-border/50 bg-background/60 px-3 py-1.5 text-xs">
-                      <span className="text-muted-foreground">
-                        <T>Avg latency</T>
-                      </span>
-                      <span className="font-mono font-semibold tabular-nums">
-                        {formatCompactDuration(allTimeQuickSummary.avgDurationMs)}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPrefs((prev) => ({ ...prev, tab: "analytics" }))}
-                      className="flex items-center justify-between rounded-md border border-border/50 bg-background/60 px-3 py-1.5 text-xs transition-colors hover:bg-accent/50"
-                    >
-                      <span className="text-muted-foreground">
-                        <T>Est. saved</T>
-                      </span>
-                      <span className="font-mono font-semibold text-primary tabular-nums">
-                        {allTimeQuickSummary.estimatedHoursSaved.toFixed(1)}h ↗
-                      </span>
-                    </button>
-                  </div>
-                ) : null}
-
-                <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
                   {filteredRuns.length === 0 ? (
-                    <Empty>
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <WorkflowIcon className="size-5" />
-                        </EmptyMedia>
-                        <EmptyTitle>
-                          <T>No matching fusion review runs</T>
-                        </EmptyTitle>
-                        <EmptyDescription>
-                          <T>
-                            Select any Cloud MR or Pull Request in the queue to start a multi-model
-                            fusion review or jump directly into an Agent session.
-                          </T>
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
+                    <div className="flex min-h-full items-center justify-center">
+                      <Empty>
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <WorkflowIcon className="size-5" />
+                          </EmptyMedia>
+                          <EmptyTitle>
+                            <T>No matching fusion review runs</T>
+                          </EmptyTitle>
+                          <EmptyDescription>
+                            <T>
+                              Select any Cloud MR or Pull Request in the queue to start a
+                              multi-model fusion review or jump directly into an Agent session.
+                            </T>
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    </div>
                   ) : (
-                    <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-0.5">
                       {filteredRuns.map((task) => {
                         const sigil = task.provider === "gitlab" ? "!" : "#";
                         const isSelected = task.id === selectedTaskId;
@@ -817,8 +946,8 @@ export function PrReviewWorkstationPage() {
                               if (e.key === "Enter" || e.key === " ") setSelectedTaskId(task.id);
                             }}
                             className={cn(
-                              "flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3.5 text-xs transition-colors",
-                              isSelected ? "border-primary bg-accent/60" : "hover:bg-accent/30",
+                              "flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2.5 text-xs transition-colors duration-150",
+                              isSelected ? "bg-accent" : "hover:bg-accent/60",
                             )}
                           >
                             <div className="min-w-0 flex-1">
@@ -870,18 +999,20 @@ export function PrReviewWorkstationPage() {
                             </div>
 
                             {task.synthesisThreadId ? (
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  jumpToThread(task.synthesisThreadId!);
-                                }}
-                              >
-                                <BotIcon className="size-3.5" />
-                                <T>Agent</T>
-                                <ArrowUpRightIcon className="size-3" />
-                              </Button>
+                              <span className="group/agent-btn shrink-0">
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    jumpToThread(task.synthesisThreadId!);
+                                  }}
+                                >
+                                  <BotIcon className="size-3.5" />
+                                  <T>Agent</T>
+                                  <ArrowUpRightIcon className="size-3 transition-transform duration-150 group-hover/agent-btn:translate-x-0.5 group-hover/agent-btn:-translate-y-0.5 motion-reduce:transition-none" />
+                                </Button>
+                              </span>
                             ) : null}
                           </div>
                         );
@@ -891,10 +1022,14 @@ export function PrReviewWorkstationPage() {
                 </div>
               </div>
             ) : prefs.tab === "analytics" ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-5 py-2.5">
+              <div
+                key="analytics"
+                className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-background px-5 py-3 sm:px-7">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-medium text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <ClockIcon className="size-3.5" />
                       <T>Time window:</T>
                     </span>
                     <ToggleGroup
@@ -936,8 +1071,16 @@ export function PrReviewWorkstationPage() {
                         }
                       }}
                     >
-                      <SelectTrigger className="w-48">
-                        <SelectValue />
+                      <SelectTrigger className="w-52">
+                        <SelectValue>
+                          {prefs.roiBaseline === "conservative" ? (
+                            <T>Conservative (500 LoC/h)</T>
+                          ) : prefs.roiBaseline === "strict" ? (
+                            <T>Strict dual-gate (250 LoC/h)</T>
+                          ) : (
+                            <T>Standard R&D (350 LoC/h)</T>
+                          )}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectPopup>
                         <SelectItem value="conservative">
@@ -954,7 +1097,7 @@ export function PrReviewWorkstationPage() {
                   </div>
                 </div>
 
-                <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 sm:px-7">
+                <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 sm:px-7">
                   <PrReviewAnalyticsView
                     summary={analyticsSummary}
                     roiBaseline={prefs.roiBaseline}
@@ -969,205 +1112,242 @@ export function PrReviewWorkstationPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-sm font-semibold">
-                        <T>Multi-Model Fusion Review Presets</T>
-                      </h2>
-                      <p className="text-xs text-muted-foreground">
-                        <T>
-                          Configure heterogeneous reviewer models, synthesizer judge, bound skills,
-                          and write-back automation.
-                        </T>
-                      </p>
+              <div
+                key="presets"
+                className={cn(
+                  "topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto",
+                  WORKSPACE_TAB_PANEL_CLASS,
+                )}
+              >
+                <WorkspacePageContainer width="expanded" className="gap-6 pb-16">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-sm font-semibold">
+                          <T>Multi-Model Fusion Review Presets</T>
+                        </h2>
+                        <p className="text-xs text-muted-foreground">
+                          <T>
+                            Configure heterogeneous reviewer models, synthesizer judge, bound
+                            skills, and write-back automation.
+                          </T>
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => setPresetModalState({ open: true, preset: null })}
+                      >
+                        <PlusIcon className="size-3.5" />
+                        <T>Create Preset</T>
+                      </Button>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => setPresetModalState({ open: true, preset: null })}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      <T>Create Preset</T>
-                    </Button>
-                  </div>
 
-                  {snapshot.presets.length === 0 ? (
-                    <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
-                      <T>
-                        No saved presets yet. Click &quot;Create Preset&quot; to build your reusable
-                        multi-model review pipeline.
-                      </T>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                      {snapshot.presets.map((preset) => (
-                        <div
-                          key={preset.id}
-                          className="flex flex-col justify-between gap-3 rounded-lg border bg-card/40 p-3.5 text-xs"
-                        >
-                          <div className="flex flex-col gap-1.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-sm font-semibold">{preset.name}</span>
-                              {preset.isDefault ? (
-                                <Badge variant="secondary" size="sm">
-                                  <T>Default</T>
-                                </Badge>
+                    {snapshot.presets.length === 0 ? (
+                      <Empty size="compact">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <Settings2Icon />
+                          </EmptyMedia>
+                          <EmptyDescription>
+                            <T>
+                              No saved presets yet. Click &quot;Create Preset&quot; to build your
+                              reusable multi-model review pipeline.
+                            </T>
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                        {snapshot.presets.map((preset) => (
+                          <div
+                            key={preset.id}
+                            className="flex flex-col justify-between gap-3 rounded-xl border border-border/60 bg-card/40 p-3.5 text-xs shadow-xs/5 transition-colors duration-150 hover:border-border"
+                          >
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-semibold">{preset.name}</span>
+                                {preset.isDefault ? (
+                                  <Badge variant="secondary" size="sm">
+                                    <T>Default</T>
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              {preset.description ? (
+                                <p className="text-muted-foreground">{preset.description}</p>
                               ) : null}
-                            </div>
-                            {preset.description ? (
-                              <p className="text-muted-foreground">{preset.description}</p>
-                            ) : null}
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {preset.reviewerModels.map((slot) => (
-                                <Badge key={slot.id} variant="outline" size="sm">
-                                  {slot.modelSelection.instanceId}:{slot.modelSelection.model} (
-                                  {roleLabel(slot.role)})
-                                </Badge>
-                              ))}
-                            </div>
-                            {preset.boundSkillNames.length > 0 ? (
-                              <div className="flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
-                                <span>
-                                  <T>Skills:</T>
-                                </span>
-                                {preset.boundSkillNames.map((s) => (
-                                  <Badge key={s} variant="secondary" size="sm">
-                                    {s}
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {preset.reviewerModels.map((slot) => (
+                                  <Badge key={slot.id} variant="outline" size="sm">
+                                    {slot.modelSelection.instanceId}:{slot.modelSelection.model} (
+                                    {roleLabel(slot.role)})
                                   </Badge>
                                 ))}
                               </div>
-                            ) : null}
-                            <div className="text-2xs text-muted-foreground">
-                              {writeBackLabel(preset.writeBackMode)}
+                              {preset.boundSkillNames.length > 0 ? (
+                                <div className="flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
+                                  <span>
+                                    <T>Skills:</T>
+                                  </span>
+                                  {preset.boundSkillNames.map((s) => (
+                                    <Badge key={s} variant="secondary" size="sm">
+                                      {s}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <div className="text-2xs text-muted-foreground">
+                                {writeBackLabel(preset.writeBackMode)}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-2">
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => setPresetModalState({ open: true, preset })}
+                              >
+                                <T>Edit</T>
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost-muted"
+                                onClick={async () => {
+                                  if (!environmentId) return;
+                                  const r = await deletePreset({
+                                    environmentId,
+                                    input: { presetId: preset.id },
+                                  });
+                                  if (r._tag === "Failure") {
+                                    const f = squashAtomCommandFailure(r);
+                                    toastManager.add({
+                                      type: "error",
+                                      title: gt("Could not delete preset"),
+                                      description: f instanceof Error ? f.message : String(f),
+                                    });
+                                  }
+                                }}
+                              >
+                                <Trash2Icon className="size-3.5" />
+                              </Button>
                             </div>
                           </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-                          <div className="flex items-center justify-end gap-2 border-t pt-2">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-sm font-semibold">
+                        <T>Favorite skills</T>
+                      </h2>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!environmentId}
+                        onClick={() => setAddingSkills(true)}
+                      >
+                        <PlusIcon />
+                        <T>Add skills</T>
+                      </Button>
+                    </div>
+                    <Dialog open={addingSkills} onOpenChange={setAddingSkills}>
+                      <DialogPopup>
+                        <DialogHeader>
+                          <DialogTitle>
+                            <T>Add skills</T>
+                          </DialogTitle>
+                        </DialogHeader>
+                        <DialogPanel>
+                          {catalog.error ? (
+                            <div role="alert">
+                              {catalog.error}{" "}
+                              <Button onClick={catalog.refresh}>
+                                <T>Retry</T>
+                              </Button>
+                            </div>
+                          ) : catalog.data ? (
+                            <SkillMultiPicker
+                              catalog
+                              availableSkills={catalog.data}
+                              selectedNames={favorites.map((s) => s.name)}
+                              onChange={(names) =>
+                                setFavorites((previous) =>
+                                  names.flatMap(
+                                    (name) =>
+                                      previous.find((s) => s.name === name) ??
+                                      catalog.data?.find((s) => s.name === name) ??
+                                      [],
+                                  ),
+                                )
+                              }
+                            />
+                          ) : (
+                            <PullRequestListGhost rows={3} caption={gt("Loading skills")} />
+                          )}
+                        </DialogPanel>
+                      </DialogPopup>
+                    </Dialog>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {favorites.map((skill) => (
+                        <div
+                          key={skill.name}
+                          className="flex flex-col gap-1 rounded-xl border border-border/60 bg-card/40 p-3 text-xs shadow-xs/5 transition-colors duration-150 hover:border-border"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate font-semibold">
+                              {skill.displayName || skill.name}
+                            </span>
                             <Button
-                              size="xs"
-                              variant="outline"
-                              onClick={() => setPresetModalState({ open: true, preset })}
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label={gt("Remove {name}", { name: skill.name })}
+                              onClick={() =>
+                                setFavorites((previous) =>
+                                  previous.filter((s) => s.name !== skill.name),
+                                )
+                              }
                             >
-                              <T>Edit</T>
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="ghost-muted"
-                              onClick={async () => {
-                                if (!environmentId) return;
-                                const r = await deletePreset({
-                                  environmentId,
-                                  input: { presetId: preset.id },
-                                });
-                                if (r._tag === "Failure") {
-                                  const f = squashAtomCommandFailure(r);
-                                  toastManager.add({
-                                    type: "error",
-                                    title: gt("Could not delete preset"),
-                                    description: f instanceof Error ? f.message : String(f),
-                                  });
-                                }
-                              }}
-                            >
-                              <Trash2Icon className="size-3.5" />
+                              <Trash2Icon />
                             </Button>
                           </div>
+                          {skill.description ? (
+                            <p className="line-clamp-2 text-2xs text-muted-foreground">
+                              {skill.description}
+                            </p>
+                          ) : null}
+                          <code className="truncate font-mono text-3xs text-muted-foreground">
+                            {skill.path}
+                          </code>
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <h2 className="text-sm font-semibold">
-                    <T>
-                      Discovered Workspace & Provider Skills (
-                      <Var>{snapshot.availableSkills.length}</Var>)
-                    </T>
-                  </h2>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {snapshot.availableSkills.map((skill) => (
-                      <div
-                        key={skill.name}
-                        className="flex flex-col gap-1 rounded-lg border bg-card/30 p-3 text-xs"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-semibold">
-                            {skill.displayName || skill.name}
-                          </span>
-                          <Badge variant="outline" size="sm">
-                            {skill.source}
-                          </Badge>
-                        </div>
-                        {skill.description ? (
-                          <p className="line-clamp-2 text-2xs text-muted-foreground">
-                            {skill.description}
-                          </p>
-                        ) : null}
-                        <code className="truncate font-mono text-3xs text-muted-foreground">
-                          {skill.path}
-                        </code>
-                      </div>
-                    ))}
                   </div>
-                </div>
+                </WorkspacePageContainer>
               </div>
             )}
           </div>
 
-          {desktopInspectorVisible ? (
-            <aside
-              className="relative hidden h-full min-h-0 shrink-0 border-l border-border bg-background lg:flex"
-              style={{
-                width: isInspectorExpanded
-                  ? "min(84vw, 1320px)"
-                  : `${String(clampedInspectorWidth)}px`,
-              }}
-            >
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <div
-                      role="separator"
-                      tabIndex={0}
-                      aria-orientation="vertical"
-                      aria-label={gt("Drag to resize inspector width (double-click to reset)")}
-                      onPointerDown={startResizeInspector}
-                      onKeyDown={handleSplitterKeyDown}
-                      onDoubleClick={() => {
-                        setIsInspectorExpanded(false);
-                        setPrefs((prev) => ({
-                          ...prev,
-                          inspectorWidth: DEFAULT_PR_INSPECTOR_WIDTH,
-                        }));
-                      }}
-                      className={cn(
-                        "group absolute inset-y-0 -left-1.5 z-20 flex w-3 cursor-col-resize items-center justify-center transition-colors focus-visible:outline-none",
-                        isDraggingSplitter ? "bg-primary/25" : "hover:bg-primary/15",
-                      )}
-                    />
-                  }
-                >
-                  <span
-                    className={cn(
-                      "flex h-10 w-3.5 items-center justify-center rounded-full border bg-background shadow-xs transition-opacity",
-                      isDraggingSplitter
-                        ? "border-primary text-primary opacity-100"
-                        : "border-border/80 text-muted-foreground opacity-70 group-hover:opacity-100",
-                    )}
-                  >
-                    <GripVerticalIcon className="size-3" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipPopup side="left">
-                  <T>Drag to resize panel · Double-click to reset</T>
-                </TooltipPopup>
-              </Tooltip>
-
-              {inspectorNode}
-            </aside>
-          ) : null}
+          <WorkspaceInspectorDrawer
+            open={desktopInspectorVisible}
+            scopeKey={environmentId}
+            width={clampedInspectorWidth}
+            expanded={isInspectorExpanded}
+            isResizing={isDraggingSplitter}
+            resizeLabel={gt("Drag to resize inspector width (double-click to reset)")}
+            resizeTooltip={<T>Drag to resize panel · Double-click to reset</T>}
+            onResizePointerDown={startResizeInspector}
+            onResizeKeyDown={handleSplitterKeyDown}
+            onResizeDoubleClick={() => {
+              setIsInspectorExpanded(false);
+              setPrefs((prev) => ({
+                ...prev,
+                inspectorWidth: DEFAULT_PR_INSPECTOR_WIDTH,
+              }));
+            }}
+          >
+            {inspectorNode}
+          </WorkspaceInspectorDrawer>
 
           {!isWideDesktop && inspectorVisible ? (
             <Sheet
@@ -1193,7 +1373,7 @@ export function PrReviewWorkstationPage() {
           environmentId={environmentId}
           targets={launchModalState.targets}
           presets={snapshot.presets}
-          availableSkills={snapshot.availableSkills}
+          availableSkills={favorites}
           defaultMode={launchModalState.defaultMode}
           onLaunched={({ tasks, jumpThreadId, mode }) => {
             setLaunchModalState(null);
@@ -1217,7 +1397,7 @@ export function PrReviewWorkstationPage() {
           }}
           environmentId={environmentId}
           editingPreset={presetModalState.preset}
-          availableSkills={snapshot.availableSkills}
+          availableSkills={favorites}
         />
       ) : null}
     </SidebarInset>

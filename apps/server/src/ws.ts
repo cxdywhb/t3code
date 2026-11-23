@@ -2042,6 +2042,7 @@ export const layerWsRpc = (
         [WS_METHODS.issueAutomationAnalyzeIssues]: (input) => issueAutomation.analyzeIssues(input),
         [WS_METHODS.issueAutomationCancelTask]: (input) => issueAutomation.cancelTask(input),
         [WS_METHODS.issueAutomationWriteBack]: (input) => issueAutomation.writeBack(input),
+        [WS_METHODS.prReviewListSkills]: () => prReview.listSkills,
         [WS_METHODS.prReviewGetState]: () => prReview.getState,
         [WS_METHODS.prReviewSubscribe]: () => prReview.subscribe,
         [WS_METHODS.prReviewSavePreset]: (input) => prReview.savePreset(input),

@@ -17,10 +17,12 @@ import {
   ArrowUpRightIcon,
   BotIcon,
   CheckCircle2Icon,
+  ChevronRightIcon,
   ClockIcon,
   ExternalLinkIcon,
   EyeIcon,
   FileCode2Icon,
+  LayersIcon,
   Maximize2Icon,
   MessageSquareShareIcon,
   Minimize2Icon,
@@ -36,15 +38,19 @@ import { useState } from "react";
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { PullRequestMarkdown } from "~/components/pullRequest/PullRequestMarkdown";
+import { PullRequestSection } from "~/components/pullRequest/PullRequestSummaryTab";
 import { RelativeTime } from "~/components/RelativeTime";
+import { WORKSPACE_TAB_PANEL_CLASS } from "~/components/WorkspacePageHeader";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { prReviewEnvironment } from "~/state/prReview";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { Alert, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
@@ -367,14 +373,10 @@ export function PrReviewInspector({
             <span className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-2xs">
               {task.headBranch} → {task.baseBranch}
             </span>
-            <button
-              type="button"
-              onClick={(event) => void openLink(task.prUrl, { event })}
-              className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
-            >
+            <InlineButton onClick={(event) => void openLink(task.prUrl, { event })}>
               <T>Open on host</T>
               <ExternalLinkIcon className="size-3" />
-            </button>
+            </InlineButton>
             {task.synthesisThreadId ? (
               <Button
                 size="xs"
@@ -434,7 +436,7 @@ export function PrReviewInspector({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/15 px-5 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background px-5 py-2.5">
         <ToggleGroup
           variant="segmented"
           size="segmented"
@@ -449,7 +451,7 @@ export function PrReviewInspector({
               <ShieldCheckIcon className="size-3.5" />
               <T>Fusion Report</T>
               {task.findings.length > 0 ? (
-                <span className="rounded-full bg-background/80 px-1.5 font-mono text-2xs tabular-nums">
+                <span className="font-mono text-2xs text-muted-foreground tabular-nums">
                   {task.findings.length}
                 </span>
               ) : null}
@@ -459,7 +461,7 @@ export function PrReviewInspector({
             <span className="inline-flex items-center gap-1.5">
               <BotIcon className="size-3.5" />
               <T>Reviewer Models</T>
-              <span className="rounded-full bg-background/80 px-1.5 font-mono text-2xs tabular-nums">
+              <span className="font-mono text-2xs text-muted-foreground tabular-nums">
                 {task.reviewerRuns.length}
               </span>
             </span>
@@ -483,112 +485,127 @@ export function PrReviewInspector({
         ) : null}
       </div>
 
-      <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div
+        className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
+        data-pull-request-summary-scroll
+      >
         {tab === "report" ? (
-          <div className="flex flex-col gap-5 pb-8">
-            {task.stage === "completed" || task.findings.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                <div className="rounded-lg border border-border/60 bg-card/50 px-3 py-2.5">
-                  <div className="text-2xs text-muted-foreground">
-                    <T>Total findings</T>
+          <div key="report" className={cn("flex flex-col pb-8", WORKSPACE_TAB_PANEL_CLASS)}>
+            {task.stage === "completed" ||
+            task.findings.length > 0 ||
+            task.boundSkillNames.length > 0 ||
+            task.lastError ? (
+              <div className="flex flex-col gap-3 px-4 pt-4 pb-1">
+                {task.stage === "completed" || task.findings.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                    <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2.5 shadow-xs/5">
+                      <div className="text-2xs text-muted-foreground">
+                        <T>Total findings</T>
+                      </div>
+                      <div className="mt-0.5 font-mono text-lg font-semibold tabular-nums">
+                        {task.findings.length}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2.5 shadow-xs/5">
+                      <div className="text-2xs text-muted-foreground">
+                        <T>Blocker / Major</T>
+                      </div>
+                      <div
+                        className={cn(
+                          "mt-0.5 font-mono text-lg font-semibold tabular-nums",
+                          highSevCount > 0 ? "text-warning" : "text-success",
+                        )}
+                      >
+                        {highSevCount}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2.5 shadow-xs/5">
+                      <div className="text-2xs text-muted-foreground">
+                        <T>Multi-model consensus</T>
+                      </div>
+                      <div className="mt-0.5 font-mono text-lg font-semibold text-primary tabular-nums">
+                        {consensusCount}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2.5 shadow-xs/5">
+                      <div className="text-2xs text-muted-foreground">
+                        <T>Models & Judge</T>
+                      </div>
+                      <div className="mt-0.5 font-mono text-lg font-semibold tabular-nums">
+                        {task.reviewerRuns.length}
+                        {task.synthesizerModelLabel ? "+1" : ""}
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-0.5 font-mono text-lg font-semibold tabular-nums">
-                    {task.findings.length}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-border/60 bg-card/50 px-3 py-2.5">
-                  <div className="text-2xs text-muted-foreground">
-                    <T>Blocker / Major</T>
-                  </div>
-                  <div
-                    className={cn(
-                      "mt-0.5 font-mono text-lg font-semibold tabular-nums",
-                      highSevCount > 0 ? "text-warning" : "text-success",
-                    )}
-                  >
-                    {highSevCount}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-border/60 bg-card/50 px-3 py-2.5">
-                  <div className="text-2xs text-muted-foreground">
-                    <T>Multi-model consensus</T>
-                  </div>
-                  <div className="mt-0.5 font-mono text-lg font-semibold text-primary tabular-nums">
-                    {consensusCount}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-border/60 bg-card/50 px-3 py-2.5">
-                  <div className="text-2xs text-muted-foreground">
-                    <T>Models & Judge</T>
-                  </div>
-                  <div className="mt-0.5 font-mono text-lg font-semibold tabular-nums">
-                    {task.reviewerRuns.length}
-                    {task.synthesizerModelLabel ? "+1" : ""}
-                  </div>
-                </div>
-              </div>
-            ) : null}
+                ) : null}
 
-            {task.boundSkillNames.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-muted-foreground">
-                  <T>Skills:</T>
-                </span>
-                {task.boundSkillNames.map((skill) => (
-                  <Badge key={skill} variant="secondary" size="sm">
-                    {skill}
-                  </Badge>
-                ))}
-              </div>
-            ) : null}
+                {task.boundSkillNames.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">
+                      <T>Skills:</T>
+                    </span>
+                    {task.boundSkillNames.map((skill) => (
+                      <Badge key={skill} variant="secondary" size="sm">
+                        {skill}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
 
-            {task.lastError ? (
-              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3.5 text-xs text-destructive">
-                {task.lastError}
+                {task.lastError ? (
+                  <Alert variant="error">
+                    <AlertDescription>{task.lastError}</AlertDescription>
+                  </Alert>
+                ) : null}
               </div>
             ) : null}
 
             {task.findings.length > 0 ? (
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                    <T>
-                      Consensus Findings (<Var>{visibleFindings.length}</Var>/
-                      <Var>{task.findings.length}</Var>)
-                    </T>
-                  </h3>
-
+              <PullRequestSection
+                key={`findings:${task.id}`}
+                title={`${gt("Consensus Findings")} (${String(visibleFindings.length)}/${String(task.findings.length)})`}
+                keepMounted
+                actions={
                   <ToggleGroup
-                    size="sm"
+                    variant="segmented"
+                    size="segmented"
                     value={[severityFilter]}
                     onValueChange={(vals) => {
                       const next = vals[0] as SeverityFilter | undefined;
                       if (next) setSeverityFilter(next);
                     }}
                   >
-                    <Toggle value="all" size="sm">
+                    <Toggle value="all">
+                      <LayersIcon />
                       <T>All</T>
                     </Toggle>
-                    <Toggle value="blocker" size="sm">
+                    <Toggle value="blocker">
+                      <span aria-hidden className="size-1.5 rounded-full bg-destructive" />
                       <T>Blocker</T>
                     </Toggle>
-                    <Toggle value="major" size="sm">
+                    <Toggle value="major">
+                      <span aria-hidden className="size-1.5 rounded-full bg-warning" />
                       <T>Major</T>
                     </Toggle>
-                    <Toggle value="minor" size="sm">
+                    <Toggle value="minor">
+                      <span aria-hidden className="size-1.5 rounded-full bg-info" />
                       <T>Minor</T>
                     </Toggle>
-                    <Toggle value="nit" size="sm">
+                    <Toggle value="nit">
+                      <span aria-hidden className="size-1.5 rounded-full bg-muted-foreground/70" />
                       <T>Nit</T>
                     </Toggle>
                   </ToggleGroup>
-                </div>
-
-                <div className="flex flex-col gap-2.5">
+                }
+              >
+                <div
+                  key={severityFilter}
+                  className={cn("flex flex-col gap-2.5", WORKSPACE_TAB_PANEL_CLASS)}
+                >
                   {visibleFindings.map((finding) => (
                     <div
                       key={finding.id}
-                      className="flex flex-col gap-2 rounded-lg border border-border/70 bg-card/50 p-3.5 text-xs"
+                      className="flex flex-col gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 text-xs shadow-xs/5 transition-colors duration-150 hover:border-border"
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
@@ -637,15 +654,16 @@ export function PrReviewInspector({
                     </div>
                   ))}
                 </div>
-              </div>
+              </PullRequestSection>
             ) : null}
 
             {task.summaryMarkdown ? (
-              <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                  <T>Detailed Fusion Report</T>
-                </h3>
-                <div className="rounded-lg border border-border/70 bg-card/40 p-4">
+              <PullRequestSection
+                key={`summary:${task.id}`}
+                title={gt("Detailed Fusion Report")}
+                keepMounted
+              >
+                <div className="rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5">
                   <PullRequestMarkdown
                     text={task.summaryMarkdown}
                     cwd={cwd}
@@ -653,27 +671,27 @@ export function PrReviewInspector({
                     threadRef={threadRef}
                   />
                 </div>
-              </div>
+              </PullRequestSection>
             ) : active ? (
-              <div className="flex items-center gap-3 rounded-lg border border-dashed p-4 text-xs text-muted-foreground">
-                <Spinner className="size-4 shrink-0" />
-                <T>
-                  Models are analyzing the diff and cross-verifying consensus findings… Click
-                  &quot;Reviewer Models&quot; above to inspect any live Agent session in real time.
-                </T>
+              <div className="px-4 pt-3">
+                <div className="flex items-center gap-3 rounded-xl border border-dashed border-border/70 p-4 text-xs text-muted-foreground">
+                  <Spinner className="size-4 shrink-0" />
+                  <T>
+                    Models are analyzing the diff and cross-verifying consensus findings… Click
+                    &quot;Reviewer Models&quot; above to inspect any live Agent session in real
+                    time.
+                  </T>
+                </div>
               </div>
             ) : null}
 
             {task.steps.length > 0 ? (
-              <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                  <T>Execution Log</T>
-                </h3>
-                <div className="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-card/30 p-3 text-xs">
+              <PullRequestSection key={`steps:${task.id}`} title={gt("Execution Log")} keepMounted>
+                <div className="flex flex-col gap-1.5 rounded-xl border border-border/60 bg-card/30 p-3 text-xs">
                   {task.steps.map((step) => (
                     <div
                       key={`${step.at}-${step.stage}-${step.message}`}
-                      className="flex items-start gap-2.5"
+                      className="flex items-start gap-2.5 motion-safe:animate-step-in"
                     >
                       <span className="shrink-0 pt-0.5 text-2xs text-muted-foreground tabular-nums">
                         <RelativeTime timestamp={step.at} />
@@ -691,13 +709,16 @@ export function PrReviewInspector({
                     </div>
                   ))}
                 </div>
-              </div>
+              </PullRequestSection>
             ) : null}
           </div>
         ) : tab === "models" ? (
-          <div className="flex flex-col gap-3.5 pb-8">
+          <div
+            key="models"
+            className={cn("flex flex-col gap-3.5 px-5 py-4 pb-8", WORKSPACE_TAB_PANEL_CLASS)}
+          >
             {task.synthesizerModelLabel ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-accent/20 p-3.5 text-xs">
+              <div className="flex flex-col gap-2 rounded-xl border border-primary/40 bg-accent/20 p-3.5 text-xs shadow-xs/5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <ShieldCheckIcon className="size-4 text-primary" />
@@ -730,7 +751,7 @@ export function PrReviewInspector({
             {task.reviewerRuns.map((run) => (
               <div
                 key={run.slotId}
-                className="flex flex-col gap-2.5 rounded-lg border border-border/70 bg-card/40 p-3.5 text-xs"
+                className="flex flex-col gap-2.5 rounded-xl border border-border/60 bg-card/40 p-3.5 text-xs shadow-xs/5 transition-colors duration-150 hover:border-border"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
@@ -768,32 +789,41 @@ export function PrReviewInspector({
                   ) : null}
                 </div>
                 {run.error ? (
-                  <div className="rounded-md bg-destructive/10 p-2.5 text-destructive">
-                    {run.error}
-                  </div>
+                  <Alert variant="error">
+                    <AlertDescription>{run.error}</AlertDescription>
+                  </Alert>
                 ) : null}
                 {run.reportMarkdown ? (
-                  <details className="group" open={task.reviewerRuns.length === 1}>
-                    <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">
-                      <T>View individual model review report</T>
-                    </summary>
-                    <div className="mt-2.5 rounded-md border border-border/60 bg-background p-3.5">
-                      <PullRequestMarkdown
-                        text={run.reportMarkdown}
-                        cwd={cwd}
-                        environmentId={environmentId}
-                        threadRef={
-                          run.threadId ? scopeThreadRef(environmentId, run.threadId) : null
-                        }
+                  <Collapsible defaultOpen={task.reviewerRuns.length === 1}>
+                    <CollapsibleTrigger className="group flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+                      <ChevronRightIcon
+                        aria-hidden
+                        className="size-3.5 text-muted-foreground/60 transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none"
                       />
-                    </div>
-                  </details>
+                      <T>View individual model review report</T>
+                    </CollapsibleTrigger>
+                    <CollapsiblePanel>
+                      <div className="mt-2.5 rounded-lg border border-border/60 bg-background p-3.5">
+                        <PullRequestMarkdown
+                          text={run.reportMarkdown}
+                          cwd={cwd}
+                          environmentId={environmentId}
+                          threadRef={
+                            run.threadId ? scopeThreadRef(environmentId, run.threadId) : null
+                          }
+                        />
+                      </div>
+                    </CollapsiblePanel>
+                  </Collapsible>
                 ) : null}
               </div>
             ))}
           </div>
         ) : (
-          <div className="flex flex-col gap-4 pb-8">
+          <div
+            key="writeback"
+            className={cn("flex flex-col gap-4 px-5 py-4 pb-8", WORKSPACE_TAB_PANEL_CLASS)}
+          >
             {task.commentSyncedAt || task.reviewSyncedAt ? (
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {task.commentSyncedAt ? (
@@ -816,8 +846,10 @@ export function PrReviewInspector({
                 type="button"
                 onClick={() => setWbKind("comment")}
                 className={cn(
-                  "rounded-lg border p-3 text-left text-xs transition-colors",
-                  wbKind === "comment" ? "border-primary bg-accent/60" : "hover:bg-accent/30",
+                  "cursor-pointer rounded-xl border p-3 text-left text-xs transition-colors duration-150",
+                  wbKind === "comment"
+                    ? "border-primary bg-accent/60"
+                    : "border-border/60 bg-card/40 hover:border-border hover:bg-accent/30",
                 )}
               >
                 <div className="font-semibold text-foreground">
@@ -831,8 +863,10 @@ export function PrReviewInspector({
                 type="button"
                 onClick={() => setWbKind("review")}
                 className={cn(
-                  "rounded-lg border p-3 text-left text-xs transition-colors",
-                  wbKind === "review" ? "border-primary bg-accent/60" : "hover:bg-accent/30",
+                  "cursor-pointer rounded-xl border p-3 text-left text-xs transition-colors duration-150",
+                  wbKind === "review"
+                    ? "border-primary bg-accent/60"
+                    : "border-border/60 bg-card/40 hover:border-border hover:bg-accent/30",
                 )}
               >
                 <div className="font-semibold text-foreground">
@@ -862,7 +896,15 @@ export function PrReviewInspector({
                     }}
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue>
+                        {effectiveVerdict === "approve" ? (
+                          <T>Approve</T>
+                        ) : effectiveVerdict === "request-changes" ? (
+                          <T>Request changes</T>
+                        ) : (
+                          <T>Comment only</T>
+                        )}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectPopup>
                       <SelectItem value="comment">
@@ -981,19 +1023,20 @@ export function PrReviewInspector({
                   <T>Markdown Content to Post</T>
                 </Label>
                 <ToggleGroup
-                  size="sm"
+                  variant="segmented"
+                  size="segmented"
                   value={[wbPreviewMode]}
                   onValueChange={(vals) => {
                     const next = vals[0] as "edit" | "preview" | undefined;
                     if (next) setWbPreviewMode(next);
                   }}
                 >
-                  <Toggle value="edit" size="sm">
-                    <PencilLineIcon className="size-3" />
+                  <Toggle value="edit">
+                    <PencilLineIcon />
                     <T>Edit</T>
                   </Toggle>
-                  <Toggle value="preview" size="sm">
-                    <EyeIcon className="size-3" />
+                  <Toggle value="preview">
+                    <EyeIcon />
                     <T>Preview</T>
                   </Toggle>
                 </ToggleGroup>

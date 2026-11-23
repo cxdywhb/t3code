@@ -60,7 +60,7 @@ export function PullRequestListGhost({ rows = 7, caption }: { rows?: number; cap
       {caption ? (
         <p className="px-3 pb-1 text-xs font-medium text-muted-foreground">{caption}</p>
       ) : null}
-      <div className="motion-safe:animate-skeleton space-y-0.5">
+      <div className="loading-shimmer space-y-0.5">
         {Array.from({ length: rows }, (_, index) => (
           <div
             key={index}
@@ -147,7 +147,7 @@ export function PullRequestDetailGhost({
       )}
       className={cn(
         "flex h-full min-h-0 flex-col overflow-hidden bg-background",
-        !seed && "motion-safe:animate-skeleton",
+        !seed && "loading-shimmer",
       )}
     >
       <div className="@container/pr-header grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
@@ -446,11 +446,7 @@ export function PullRequestDetailGhost({
 export function PullRequestPeopleGhost({ rows = 4 }: { rows?: number }) {
   const gt = useGT();
   return (
-    <div
-      role="status"
-      aria-label={gt("Loading people")}
-      className="motion-safe:animate-skeleton space-y-1 p-1"
-    >
+    <div role="status" aria-label={gt("Loading people")} className="loading-shimmer space-y-1 p-1">
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="flex h-7 items-center gap-2 rounded-md px-2">
           <GhostBar className="size-4 rounded-full" />
@@ -464,11 +460,7 @@ export function PullRequestPeopleGhost({ rows = 4 }: { rows?: number }) {
 export function PullRequestTimelineGhost({ rows = 6 }: { rows?: number }) {
   const gt = useGT();
   return (
-    <div
-      role="status"
-      aria-label={gt("Loading timeline")}
-      className="motion-safe:animate-skeleton px-4 py-5"
-    >
+    <div role="status" aria-label={gt("Loading timeline")} className="loading-shimmer px-4 py-5">
       <div className="relative ml-2 border-l border-border/70 pl-5">
         {Array.from({ length: rows }, (_, index) => (
           <div key={index} className="relative pb-5">
@@ -497,7 +489,7 @@ export function PullRequestConversationGhost({
         "Loading {term, select, mr {merge request} cr {change request} other {pull request}} conversation",
         { term: changeRequestTermKind(terminology) },
       )}
-      className="motion-safe:animate-skeleton space-y-4 py-2"
+      className="loading-shimmer space-y-4 py-2"
     >
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="flex items-start gap-2">

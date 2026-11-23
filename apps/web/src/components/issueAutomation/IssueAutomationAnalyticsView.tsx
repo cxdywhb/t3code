@@ -1,6 +1,7 @@
 import { T, useGT } from "gt-react";
 import {
   ActivityIcon,
+  ArrowUpRightIcon,
   AwardIcon,
   BotIcon,
   CheckCircle2Icon,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { WORKSPACE_TAB_PANEL_CLASS } from "~/components/WorkspacePageHeader";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
@@ -92,7 +94,7 @@ export function IssueAutomationAnalyticsView({
   return (
     <div className="flex flex-col gap-5 pb-12">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-        <div className="flex flex-col justify-between gap-2 rounded-lg border border-border/60 bg-card/60 p-3.5">
+        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Issues covered</T>
@@ -120,13 +122,16 @@ export function IssueAutomationAnalyticsView({
         <button
           type="button"
           onClick={() => onJumpToRuns(summary.activeCount > 0 ? "active" : "all")}
-          className="flex flex-col justify-between gap-2 rounded-lg border border-border/60 bg-card/60 p-3.5 text-left transition-colors hover:border-border hover:bg-accent/40"
+          className="group flex cursor-pointer flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 text-left shadow-xs/5 transition-[background-color,border-color,transform] duration-150 ease-out hover:-translate-y-0.5 hover:border-border hover:bg-accent/40 active:translate-y-0 motion-reduce:transition-colors motion-reduce:transform-none"
         >
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Completion rate</T>
             </span>
-            <ActivityIcon className="size-3.5 shrink-0 text-info" />
+            <span className="inline-flex items-center gap-1">
+              <ArrowUpRightIcon className="size-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 motion-reduce:transition-none" />
+              <ActivityIcon className="size-3.5 shrink-0 text-info" />
+            </span>
           </div>
           <div className="flex items-baseline gap-1.5">
             <span className="font-mono text-2xl font-semibold tracking-tight text-foreground tabular-nums">
@@ -147,13 +152,16 @@ export function IssueAutomationAnalyticsView({
         <button
           type="button"
           onClick={() => onJumpToRuns("completed")}
-          className="flex flex-col justify-between gap-2 rounded-lg border border-border/60 bg-card/60 p-3.5 text-left transition-colors hover:border-border hover:bg-accent/40"
+          className="group flex cursor-pointer flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 text-left shadow-xs/5 transition-[background-color,border-color,transform] duration-150 ease-out hover:-translate-y-0.5 hover:border-border hover:bg-accent/40 active:translate-y-0 motion-reduce:transition-colors motion-reduce:transform-none"
         >
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>First-pass success</T>
             </span>
-            <CheckCircle2Icon className="size-3.5 shrink-0 text-success" />
+            <span className="inline-flex items-center gap-1">
+              <ArrowUpRightIcon className="size-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 motion-reduce:transition-none" />
+              <CheckCircle2Icon className="size-3.5 shrink-0 text-success" />
+            </span>
           </div>
           <div className="flex items-baseline gap-1.5">
             <span className="font-mono text-2xl font-semibold tracking-tight text-success tabular-nums">
@@ -166,7 +174,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </button>
 
-        <div className="flex flex-col justify-between gap-2 rounded-lg border border-border/60 bg-card/60 p-3.5">
+        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Avg diagnosis time</T>
@@ -189,7 +197,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between gap-2 rounded-lg border border-border/60 bg-card/60 p-3.5">
+        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
           <div className="flex items-center justify-between gap-1.5 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Est. hours saved</T>
@@ -241,7 +249,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between gap-2 rounded-lg border border-border/60 bg-card/60 p-3.5">
+        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Autonomous & sync</T>
@@ -263,7 +271,7 @@ export function IssueAutomationAnalyticsView({
         </div>
       </div>
 
-      <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+      <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3 shadow-xs/5">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="font-medium text-foreground">
             <T>Pipeline outcome distribution</T>
@@ -272,7 +280,7 @@ export function IssueAutomationAnalyticsView({
             <button
               type="button"
               onClick={() => onJumpToRuns("completed")}
-              className="inline-flex items-center gap-1.5 hover:text-foreground"
+              className="inline-flex cursor-pointer items-center gap-1.5 transition-colors hover:text-foreground"
             >
               <span className="size-2 rounded-full bg-success" />
               <T>Completed</T> {summary.completedCount}
@@ -280,7 +288,7 @@ export function IssueAutomationAnalyticsView({
             <button
               type="button"
               onClick={() => onJumpToRuns("needs_human")}
-              className="inline-flex items-center gap-1.5 hover:text-foreground"
+              className="inline-flex cursor-pointer items-center gap-1.5 transition-colors hover:text-foreground"
             >
               <span className="size-2 rounded-full bg-warning" />
               <T>Needs review</T> {summary.needsHumanCount}
@@ -288,7 +296,7 @@ export function IssueAutomationAnalyticsView({
             <button
               type="button"
               onClick={() => onJumpToRuns("active")}
-              className="inline-flex items-center gap-1.5 hover:text-foreground"
+              className="inline-flex cursor-pointer items-center gap-1.5 transition-colors hover:text-foreground"
             >
               <span className="size-2 rounded-full bg-info" />
               <T>Running</T> {summary.activeCount}
@@ -296,7 +304,7 @@ export function IssueAutomationAnalyticsView({
             <button
               type="button"
               onClick={() => onJumpToRuns("failed")}
-              className="inline-flex items-center gap-1.5 hover:text-foreground"
+              className="inline-flex cursor-pointer items-center gap-1.5 transition-colors hover:text-foreground"
             >
               <span className="size-2 rounded-full bg-destructive" />
               <T>Failed</T> {summary.failedCount}
@@ -306,22 +314,25 @@ export function IssueAutomationAnalyticsView({
         <div className="flex h-2 w-full overflow-hidden rounded-full bg-secondary">
           {completedPct > 0 ? (
             <div
-              className="bg-success transition-all"
+              className="origin-left bg-success transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none"
               style={{ width: `${String(completedPct)}%` }}
             />
           ) : null}
           {needsHumanPct > 0 ? (
             <div
-              className="bg-warning transition-all"
+              className="origin-left bg-warning transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none"
               style={{ width: `${String(needsHumanPct)}%` }}
             />
           ) : null}
           {activePct > 0 ? (
-            <div className="bg-info transition-all" style={{ width: `${String(activePct)}%` }} />
+            <div
+              className="origin-left bg-info transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none"
+              style={{ width: `${String(activePct)}%` }}
+            />
           ) : null}
           {failedPct > 0 ? (
             <div
-              className="bg-destructive transition-all"
+              className="origin-left bg-destructive transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none"
               style={{ width: `${String(failedPct)}%` }}
             />
           ) : null}
@@ -329,7 +340,7 @@ export function IssueAutomationAnalyticsView({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <div className="flex flex-col justify-between rounded-lg border border-border/60 bg-card/50 p-4 xl:col-span-7">
+        <div className="flex flex-col justify-between rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5 xl:col-span-7">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
@@ -367,7 +378,7 @@ export function IssueAutomationAnalyticsView({
                     <div className="flex w-full max-w-9 flex-1 items-end justify-center rounded-sm bg-secondary/40 px-0.5">
                       {point.total > 0 ? (
                         <div
-                          className="flex w-full flex-col-reverse overflow-hidden rounded-xs transition-all group-hover:opacity-90"
+                          className="flex w-full origin-bottom flex-col-reverse overflow-hidden rounded-xs transition-[transform,filter] duration-300 ease-out starting:scale-y-0 group-hover:brightness-110 motion-reduce:transition-none"
                           style={{ height: `${String(barHeightPct)}%` }}
                         >
                           {okShare > 0 ? (
@@ -453,7 +464,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between gap-4 rounded-lg border border-border/60 bg-card/50 p-4 xl:col-span-5">
+        <div className="flex flex-col justify-between gap-4 rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5 xl:col-span-5">
           <div>
             <h3 className="text-sm font-semibold text-foreground">
               <T>Stage latency & critical bug breakdown</T>
@@ -474,7 +485,7 @@ export function IssueAutomationAnalyticsView({
                   </div>
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                     <div
-                      className="h-full rounded-full bg-primary transition-all"
+                      className="h-full origin-left rounded-full bg-primary transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none"
                       style={{
                         width: `${String(Math.max(stage.avgDurationMs ? 4 : 0, stage.sharePercent))}%`,
                       }}
@@ -533,7 +544,7 @@ export function IssueAutomationAnalyticsView({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div className="flex flex-col rounded-lg border border-border/60 bg-card/50 p-4">
+        <div className="flex flex-col rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div>
               <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
@@ -551,7 +562,7 @@ export function IssueAutomationAnalyticsView({
             {summary.modelLeaderboard.map((row, idx) => (
               <div
                 key={row.modelLabel}
-                className="flex flex-wrap items-center justify-between gap-3 py-2.5 first:pt-1 last:pb-0"
+                className="-mx-2 flex flex-wrap items-center justify-between gap-3 rounded-md px-2 py-2.5 transition-colors duration-150 first:pt-1 last:pb-0 hover:bg-accent/40"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-2.5">
                   <span className="flex size-5 shrink-0 items-center justify-center rounded bg-secondary font-mono text-xs text-muted-foreground tabular-nums">
@@ -590,7 +601,7 @@ export function IssueAutomationAnalyticsView({
                 <div className="flex shrink-0 items-center gap-2.5">
                   <div className="hidden h-1.5 w-20 overflow-hidden rounded-full bg-secondary sm:block">
                     <div
-                      className="h-full rounded-full bg-success"
+                      className="h-full origin-left rounded-full bg-success transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none"
                       style={{ width: `${String(row.successRate ?? 0)}%` }}
                     />
                   </div>
@@ -603,7 +614,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col rounded-lg border border-border/60 bg-card/50 p-4">
+        <div className="flex flex-col rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
@@ -624,9 +635,11 @@ export function IssueAutomationAnalyticsView({
               }}
             >
               <Toggle value="repos">
+                <FolderGit2Icon />
                 <T>Repositories</T>
               </Toggle>
               <Toggle value="modules">
+                <LayersIcon />
                 <T>Modules</T>
               </Toggle>
             </ToggleGroup>
@@ -637,11 +650,14 @@ export function IssueAutomationAnalyticsView({
               <T>No repository or module routing records yet.</T>
             </p>
           ) : (
-            <div className="divide-y divide-border/50">
+            <div
+              key={hotspotTab}
+              className={cn("divide-y divide-border/50", WORKSPACE_TAB_PANEL_CLASS)}
+            >
               {activeHotspots.map((item) => (
                 <div
                   key={item.key}
-                  className="flex flex-wrap items-center justify-between gap-3 py-2.5 first:pt-1 last:pb-0"
+                  className="-mx-2 flex flex-wrap items-center justify-between gap-3 rounded-md px-2 py-2.5 transition-colors duration-150 first:pt-1 last:pb-0 hover:bg-accent/40"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -682,7 +698,7 @@ export function IssueAutomationAnalyticsView({
                     <div className="hidden h-1.5 w-20 overflow-hidden rounded-full bg-secondary sm:block">
                       <div
                         className={cn(
-                          "h-full rounded-full",
+                          "h-full origin-left rounded-full transition-[width,transform] duration-300 ease-out starting:scale-x-0 motion-reduce:transition-none",
                           (item.successRate ?? 100) < 60 ? "bg-warning" : "bg-primary",
                         )}
                         style={{ width: `${String(item.successRate ?? 0)}%` }}

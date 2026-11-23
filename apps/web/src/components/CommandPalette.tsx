@@ -1738,7 +1738,7 @@ function OpenCommandPaletteDialog(props: {
       "融合",
       "工作站",
     ],
-    title: gt("Open PR Multi-Model Fusion Review"),
+    title: gt("Open PR Cross Review"),
     icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/pr-review" });

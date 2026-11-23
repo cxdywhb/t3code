@@ -1,7 +1,8 @@
-import type { ComponentPropsWithoutRef } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 
 import { cn } from "../lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../workspaceTitlebar";
+import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "./WorkspaceBreadcrumb";
 
 export function WorkspacePageHeader({
   electron = false,
@@ -23,5 +24,35 @@ export function WorkspacePageHeader({
       )}
       {...props}
     />
+  );
+}
+
+export function WorkspacePageTitle({
+  ariaLabel,
+  children,
+}: {
+  readonly ariaLabel: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <WorkspaceBreadcrumb ariaLabel={ariaLabel}>
+      <WorkspaceBreadcrumbItem current>
+        <h1 className="truncate">{children}</h1>
+      </WorkspaceBreadcrumbItem>
+    </WorkspaceBreadcrumb>
+  );
+}
+
+export const WORKSPACE_TAB_PANEL_CLASS =
+  "transition-[opacity,translate] duration-180 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:transition-none";
+
+export const WORKSPACE_BAR_ENTER_CLASS =
+  "transition-[opacity,translate] duration-180 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:transition-none";
+
+export function WorkspacePageToolbar({ children }: { readonly children: ReactNode }) {
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/60 bg-background py-2 pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)">
+      {children}
+    </div>
   );
 }

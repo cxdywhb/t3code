@@ -171,7 +171,7 @@ import { PullRequestGuideTab } from "./PullRequestGuideTab";
 import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
 import { useNavigate } from "@tanstack/react-router";
-import { usePrReviewLiveState } from "~/state/prReview";
+import { useFavoriteReviewSkills, usePrReviewLiveState } from "~/state/prReview";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { LaunchPrReviewDialog } from "../prReview/PrReviewLaunchModal";
 
@@ -834,6 +834,7 @@ export function PullRequestDetailPanel({
   const newThread = useNewThreadHandler();
   const navigateToRoute = useNavigate();
   const [fusionModalOpen, setFusionModalOpen] = useState(false);
+  const [favoriteSkills] = useFavoriteReviewSkills(environmentId);
   const { snapshot: prReviewSnapshot } = usePrReviewLiveState(environmentId);
   const { environments } = useEnvironments();
   const pickableEnvironments =
@@ -2270,7 +2271,7 @@ export function PullRequestDetailPanel({
             },
           ]}
           presets={prReviewSnapshot.presets}
-          availableSkills={prReviewSnapshot.availableSkills}
+          availableSkills={favoriteSkills}
           onLaunched={({ jumpThreadId, mode }) => {
             if (mode === "direct_agent" && jumpThreadId) {
               void navigateToRoute({

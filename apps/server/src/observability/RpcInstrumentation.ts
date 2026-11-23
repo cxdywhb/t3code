@@ -190,6 +190,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.issueAutomationAnalyzeIssues]: "issues",
   [WS_METHODS.issueAutomationCancelTask]: "issues",
   [WS_METHODS.issueAutomationWriteBack]: "issues",
+  [WS_METHODS.prReviewListSkills]: "pull-requests",
   [WS_METHODS.prReviewGetState]: "pull-requests",
   [WS_METHODS.prReviewSubscribe]: "pull-requests",
   [WS_METHODS.prReviewSavePreset]: "pull-requests",

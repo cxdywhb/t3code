@@ -2683,3 +2683,31 @@ code {
 .messages-timeline-scroll:focus-visible {
   outline: none;
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .loading-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .loading-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      105deg,
+      transparent 25%,
+      color-mix(in srgb, var(--foreground) 7%, transparent) 50%,
+      transparent 75%
+    );
+    animation: loading-shimmer 1.7s ease-in-out infinite;
+  }
+  @keyframes loading-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+}
