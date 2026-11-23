@@ -1207,13 +1207,21 @@ const make = Effect.gen(function* () {
       secretText = decoder.decode(existing.value);
     }
 
+    const savedBaseUrl = input.id
+      ? yield* repo
+          .getConnectorBaseUrl(input.id, input.platform)
+          .pipe(Effect.mapError(mapRepoErr("readConnector")))
+      : undefined;
+    const keepInstance =
+      savedBaseUrl !== undefined &&
+      plugin.normalizeBaseUrl(rawBaseUrl) === plugin.normalizeBaseUrl(savedBaseUrl);
     const probe = yield* plugin.probeAndListScopes(
       {
-        baseUrl: rawBaseUrl,
+        baseUrl: keepInstance ? savedBaseUrl : rawBaseUrl,
         account: input.account.trim(),
         secret: secretText,
       },
-      "discover",
+      keepInstance ? "saved" : "discover",
     );
 
     yield* secrets
@@ -1225,7 +1233,7 @@ const make = Effect.gen(function* () {
       id: connectorId,
       platform: input.platform,
       name: input.name.trim(),
-      baseUrl: probe.normalizedBaseUrl,
+      baseUrl: keepInstance ? savedBaseUrl : probe.normalizedBaseUrl,
       account: input.account.trim(),
       hasSecret: true,
       status: "connected",

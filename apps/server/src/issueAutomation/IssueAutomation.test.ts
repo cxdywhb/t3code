@@ -1,6 +1,13 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { ProjectId, type OrchestrationProjectShell } from "@t3tools/contracts";
+import {
+  IssueAutomationPlatformKind,
+  ProjectId,
+  type OrchestrationProjectShell,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { vi } from "vite-plus/test";
 
 import {
@@ -11,6 +18,15 @@ import {
   zenTaoHtmlToMarkdown,
   ZenTaoSessionClient,
 } from "./connectors/zentao/ZenTaoClient.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerConfig from "../config.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as IssueAutomation from "./IssueAutomationService.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
 
 describe("ZenTaoClient helpers", () => {
@@ -218,6 +234,56 @@ function handleStandardZenTaoEndpoints(url: string, validBaseUrl: string): Respo
   }
   return null;
 }
+
+const connectorTestLayer = IssueAutomation.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      Sqlite.layerMemory,
+      ServerSecretStore.layer,
+      Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(GitWorkflow.GitWorkflowService)({}),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      Layer.mock(ThreadIssueService.ThreadIssueService)({}),
+    ),
+  ),
+  Layer.provide(ServerConfig.layerTest(import.meta.dirname, { prefix: "t3-connector-edit-" })),
+  Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+);
+
+it.effect("keeps the saved ZenTao instance when renaming an unavailable connector", () =>
+  Effect.gen(function* () {
+    const service = yield* IssueAutomation.IssueAutomationService;
+    const original = "https://pms.example.com/team";
+    const other = "https://pms.example.com/zentao";
+    let online = original;
+    using requests = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async (input) =>
+          handleStandardZenTaoEndpoints(String(input), online) ??
+          new Response(null, { status: 404 }),
+      );
+    const input = {
+      platform: IssueAutomationPlatformKind.make("zentao"),
+      name: "Original",
+      baseUrl: original,
+      account: "alice",
+    };
+    const saved = yield* service.saveConnector({ ...input, secret: "test" });
+    online = other;
+    requests.mockClear();
+    const edit = { ...input, id: saved.id, name: "Renamed" };
+    expect((yield* Effect.result(service.saveConnector(edit)))._tag).toBe("Failure");
+    expect(requests.mock.calls.map(([url]) => String(url))).toEqual([
+      original + "/index.php?mode=getconfig",
+    ]);
+    expect((yield* service.getState).connectors).toEqual([saved]);
+    const moved = yield* service.saveConnector({ ...edit, baseUrl: "https://pms.example.com" });
+    expect(moved.baseUrl).toBe(other);
+    expect(moved.id).toBe(saved.id);
+  }).pipe(Effect.provide(connectorTestLayer)),
+);
 
 describe("ZenTaoSessionClient discovery & probe", () => {
   it.effect("discovers /zentao from the welcome HTML page across all 4 user input formats", () =>
