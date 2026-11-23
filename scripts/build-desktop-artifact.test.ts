@@ -512,6 +512,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("uses the fork update feed for local macOS releases", () =>
+    Effect.gen(function* () {
+      const release = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.18",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const mock = yield* createBuildConfig("mac", "dmg", "0.1.18", false, true, 3000, undefined);
+
+      assert.deepStrictEqual(release.publish, [
+        { provider: "github", owner: "cxdywhb", repo: "t3code", releaseType: "release" },
+      ]);
+      assert.deepStrictEqual(mock.publish, [{ provider: "generic", url: "http://localhost:3000" }]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
   it.effect("omits update feeds for pull request preview builds", () =>
     Effect.gen(function* () {
       const preview = yield* createBuildConfig(

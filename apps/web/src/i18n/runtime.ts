@@ -64,12 +64,6 @@ function activateLocale(locale: string): void {
   for (const listener of listeners) listener();
 }
 
-function applyLanguageSetting(): void {
-  // Not desktopBridge.getSystemLocale(): that is the regional/time locale, not the UI language.
-  requestedLocale = resolveWebLocaleSelection(getClientSettings().language, navigator.languages);
-  void whenLocaleReady();
-}
-
 /** GT's own locale setters write the saved setting, which stays the only source of truth. */
 export function persistGTLocale(locale: string): void {
   void updateClientSettings({ language: locale });
@@ -77,6 +71,14 @@ export function persistGTLocale(locale: string): void {
 
 export function startI18n(): void {
   initializeI18n(persistGTLocale);
+  const systemLanguages = window.desktopBridge?.getPreferredSystemLanguages?.();
+  const applyLanguageSetting = () => {
+    requestedLocale = resolveWebLocaleSelection(
+      getClientSettings().language,
+      systemLanguages?.length ? systemLanguages : navigator.languages,
+    );
+    void whenLocaleReady();
+  };
   subscribeClientSettings(applyLanguageSetting);
   applyLanguageSetting();
 }

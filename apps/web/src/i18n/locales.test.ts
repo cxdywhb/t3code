@@ -5,6 +5,7 @@ import { resolveWebLocaleSelection } from "./locales";
 describe("resolveWebLocaleSelection", () => {
   it.each([
     ["system", ["en-GB"], "en", undefined],
+    ["system", ["zh-Hans-CN"], "zh", undefined],
     ["system", ["zh-TW", "en-GB"], "en", undefined],
     ["en", ["en-GB"], "en", undefined],
     ["en", ["de-DE"], "en", "en"],
