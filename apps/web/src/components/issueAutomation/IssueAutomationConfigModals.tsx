@@ -557,12 +557,14 @@ export function ConnectorModal({
   environmentId,
   platforms,
   initial,
+  onSaved,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (next: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly platforms: ReadonlyArray<IssueAutomationPlatformDescriptor>;
   readonly initial: IssueAutomationConnector | null;
+  readonly onSaved?: ((connector: IssueAutomationConnector) => void) | undefined;
 }) {
   const gt = useGT();
   const saveConnector = useAtomCommand(issueAutomationEnvironment.saveConnector, {
@@ -607,6 +609,7 @@ export function ConnectorModal({
       setErrorText(err instanceof Error ? err.message : gt("Connection verification failed."));
       return;
     }
+    onSaved?.(res.value);
     onOpenChange(false);
   };
 

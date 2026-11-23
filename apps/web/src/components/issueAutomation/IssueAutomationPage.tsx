@@ -27,6 +27,7 @@ import {
   LayersIcon,
   MessageSquareIcon,
   PanelRightIcon,
+  PencilIcon,
   PlayIcon,
   Plug2Icon,
   Settings2Icon,
@@ -62,7 +63,7 @@ import { issueAutomationEnvironment, useIssueAutomationLiveState } from "~/state
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -209,6 +210,8 @@ export function IssueAutomationPage() {
     snapshot.connectors.find((c) => c.id === prefs.selectedConnectorId) ??
     snapshot.connectors[0] ??
     null;
+  const activeConnectorHealthy =
+    activeConnector !== null && activeConnector.status === "connected" && activeConnector.hasSecret;
 
   const sortedConnectorScopes = activeConnector ? sortScopesByIdDesc(activeConnector.scopes) : [];
 
@@ -686,6 +689,14 @@ export function IssueAutomationPage() {
           void cancelTaskCmd({ environmentId, input: { taskId } });
         }}
         onOpenThread={openThread}
+        onEditConnector={
+          activeConnector
+            ? () => {
+                setEditingConnector(activeConnector);
+                setConnectorModalOpen(true);
+              }
+            : undefined
+        }
         onClose={() => setInspectorOpen(false)}
       />
     ) : null;
@@ -700,10 +711,10 @@ export function IssueAutomationPage() {
             reserveNativeControls={!desktopInspectorVisible}
             className="relative shrink-0 border-b border-border/50 bg-background"
           >
-            <WorkspaceBreadcrumb ariaLabel={gt("ZenTao Issue Auto-Analysis")}>
+            <WorkspaceBreadcrumb ariaLabel={gt("ZenTao")}>
               <WorkspaceBreadcrumbItem current>
                 <h1 className="truncate font-semibold">
-                  <T>ZenTao Issue Auto-Analysis</T>
+                  <T>ZenTao</T>
                 </h1>
               </WorkspaceBreadcrumbItem>
             </WorkspaceBreadcrumb>
@@ -753,12 +764,38 @@ export function IssueAutomationPage() {
               data-workspace-titlebar-controls
             >
               {activeConnector ? (
-                <span className="hidden items-center gap-1.5 text-xs text-muted-foreground xl:inline-flex">
-                  <span aria-hidden className="size-2 rounded-full bg-primary" />
-                  <span className="max-w-48 truncate">
-                    {activeConnector.name} · {activeConnector.viewerName ?? activeConnector.account}
-                  </span>
-                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant={activeConnectorHealthy ? "ghost" : "outline"}
+                        aria-label={gt("Edit connection settings")}
+                        onClick={() => {
+                          setEditingConnector(activeConnector);
+                          setConnectorModalOpen(true);
+                        }}
+                      />
+                    }
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        activeConnectorHealthy ? "bg-primary" : "bg-warning",
+                      )}
+                    />
+                    <span className="max-w-28 truncate xl:max-w-48">
+                      {activeConnector.name}
+                      <span className="hidden text-muted-foreground xl:inline">
+                        {" "}
+                        · {activeConnector.viewerName ?? activeConnector.account}
+                      </span>
+                    </span>
+                    <PencilIcon className="size-3 shrink-0 opacity-70" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">{gt("Edit connection settings")}</TooltipPopup>
+                </Tooltip>
               ) : (
                 <Button
                   size="xs"
@@ -1089,6 +1126,21 @@ export function IssueAutomationPage() {
                     <Alert variant="error">
                       <AlertTitle>{gt("Could not load issues from ZenTao")}</AlertTitle>
                       <AlertDescription>{remoteIssuesQuery.error}</AlertDescription>
+                      {activeConnector ? (
+                        <AlertAction>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingConnector(activeConnector);
+                              setConnectorModalOpen(true);
+                            }}
+                          >
+                            <PencilIcon className="size-3.5" />
+                            <T>Edit connection</T>
+                          </Button>
+                        </AlertAction>
+                      ) : null}
                     </Alert>
                   </div>
                 ) : issues.length === 0 ? (
@@ -1695,11 +1747,19 @@ export function IssueAutomationPage() {
 
       {environmentId && connectorModalOpen ? (
         <ConnectorModal
+          key={editingConnector?.id ?? "new"}
           open={connectorModalOpen}
           onOpenChange={setConnectorModalOpen}
           environmentId={environmentId}
           platforms={snapshot.platforms}
           initial={editingConnector}
+          onSaved={(saved) => {
+            if (!editingConnector) {
+              handleSelectConnector(saved.id);
+            }
+            remoteIssuesQuery.refresh();
+            remoteDetailQuery.refresh();
+          }}
         />
       ) : null}
 

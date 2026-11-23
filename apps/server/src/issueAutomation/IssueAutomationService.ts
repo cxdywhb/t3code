@@ -1191,7 +1191,7 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     const plugin = yield* plugins.requirePlugin(input.platform);
     const connectorId = input.id ?? IssueAutomationConnectorId.make(NodeCrypto.randomUUID());
-    const normalizedUrl = plugin.normalizeBaseUrl(input.baseUrl);
+    const rawBaseUrl = input.baseUrl.trim();
 
     let secretText = input.secret?.trim();
     if (!secretText) {
@@ -1208,7 +1208,7 @@ const make = Effect.gen(function* () {
     }
 
     const probe = yield* plugin.probeAndListScopes({
-      baseUrl: normalizedUrl,
+      baseUrl: rawBaseUrl,
       account: input.account.trim(),
       secret: secretText,
     });

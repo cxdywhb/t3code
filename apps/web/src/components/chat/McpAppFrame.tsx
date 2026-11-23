@@ -9,6 +9,10 @@ import {
   type McpAppHost,
   type McpAppHostContext,
 } from "@t3tools/client-runtime/mcp-apps";
+import {
+  mcpAppToolApprovalRefusalMessage,
+  mcpAppToolApprovals,
+} from "@t3tools/client-runtime/mcp-apps/tool-approval";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   clampMcpAppHeight,
@@ -21,12 +25,23 @@ import {
 } from "@t3tools/shared/mcpApp";
 import { msg, T, useGT, Var } from "gt-react";
 import { Minimize2Icon } from "lucide-react";
-import { useEffect, useRef, useState, type FocusEvent, type ToggleEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FocusEvent,
+  type ToggleEvent,
+} from "react";
 import { flushSync } from "react-dom";
 
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 import { APP_VERSION } from "~/branding";
-import { isConfirmDialogActive, requestConfirmDialog } from "~/confirmDialog";
+import {
+  isConfirmDialogActive,
+  requestChoiceConfirmDialog,
+  requestConfirmDialog,
+} from "~/confirmDialog";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { Button } from "~/components/ui/button";
@@ -232,6 +247,11 @@ export function McpAppFrame(props: {
   // The host belongs to this frame element, which is replaced when the document is reopened.
   const attachFrame = (frame: HTMLIFrameElement) => {
     frameRef.current = frame;
+    const frameAbort = new AbortController();
+    const isFrameUserActive = () =>
+      document.activeElement === frameRef.current &&
+      Boolean(navigator.userActivation?.isActive) &&
+      performance.now() - lastPageInputAt >= PAGE_ACTIVATION_MS;
     const hostContext = (): McpAppHostContext => {
       const current = readLive();
       return {
@@ -281,16 +301,51 @@ export function McpAppFrame(props: {
       post: (message) => target()?.postMessage(message, "*"),
       hostContext,
       callTool: async ({ name, arguments: args }) => {
+        const userInitiated = isFrameUserActive();
         const { environmentId, input } = scope();
-        const info = await readLive().toolInfo({ environmentId, input: { ...input, name } });
-        if (info._tag !== "Success") throw commandFailure(info);
-        if (!info.value.callable)
-          throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
-        if (!info.value.readOnly) {
-          const approved = await ask(
-            `${m(msg("Allow {server} to run {tool}?", { server: app.server, tool: info.value.title ?? name }))}\n${JSON.stringify(args, null, 2)}`,
-          );
-          if (approved !== true) throw new McpAppHostRefusal({ message: "Declined by the user." });
+        const toolTarget = { environmentId, server: app.server, tool: name };
+        if (!mcpAppToolApprovals.isAllowed(toolTarget)) {
+          if (!userInitiated && mcpAppToolApprovals.isBackgroundSuppressed(toolTarget)) {
+            throw new McpAppHostRefusal({
+              message: mcpAppToolApprovalRefusalMessage("suppressed"),
+            });
+          }
+          if (mcpAppToolApprovals.isPromptPending(toolTarget)) {
+            throw new McpAppHostRefusal({
+              message: mcpAppToolApprovalRefusalMessage("already-pending"),
+            });
+          }
+          const info = await readLive().toolInfo({ environmentId, input: { ...input, name } });
+          if (info._tag !== "Success") throw commandFailure(info);
+          if (!info.value.callable)
+            throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
+          if (!info.value.readOnly) {
+            const auth = await mcpAppToolApprovals.authorize({
+              target: toolTarget,
+              userInitiated,
+              prompt: async () => {
+                if (frameAbort.signal.aborted) return undefined;
+                flushSync(() => setDisplayMode("inline"));
+                const choice = await requestChoiceConfirmDialog(
+                  `${m(msg("Allow {server} to run {tool}?", { server: app.server, tool: info.value.title ?? name }))}\n${JSON.stringify(args, null, 2)}`,
+                  {
+                    confirmLabel: m(msg("Allow once")),
+                    secondaryLabel: m(msg("Always allow this session")),
+                    signal: frameAbort.signal,
+                  },
+                );
+                if (choice === "confirm") return "allow-once";
+                if (choice === "secondary") return "allow-session";
+                if (choice === "cancel") return "decline";
+                return undefined;
+              },
+            });
+            if (!auth.approved) {
+              throw new McpAppHostRefusal({
+                message: mcpAppToolApprovalRefusalMessage(auth.reason),
+              });
+            }
+          }
         }
         const result = await readLive().callTool({
           environmentId,
@@ -341,9 +396,7 @@ export function McpAppFrame(props: {
         if (
           mode === "fullscreen" &&
           (!fullscreenSupported ||
-            document.activeElement !== frameRef.current ||
-            !navigator.userActivation?.isActive ||
-            performance.now() - lastPageInputAt < PAGE_ACTIVATION_MS ||
+            !isFrameUserActive() ||
             readLive().props.awaitingUser === true ||
             isConfirmDialogActive() ||
             (otherFullscreen !== null && otherFullscreen !== boxRef.current))
@@ -406,6 +459,7 @@ export function McpAppFrame(props: {
     };
     window.addEventListener("message", receive);
     return () => {
+      frameAbort.abort();
       window.removeEventListener("message", receive);
       void host.teardown();
       hostRef.current = null;
@@ -424,6 +478,12 @@ export function McpAppFrame(props: {
     if (toolCall !== undefined) hostRef.current?.setToolCall(toolCall);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Each new document needs the call.
   }, [toolCall, src, documentGeneration]);
+
+  const toolPermissions = useSyncExternalStore(
+    mcpAppToolApprovals.subscribe,
+    () => mcpAppToolApprovals.getServerSnapshot(props.environmentId, app.server),
+    () => mcpAppToolApprovals.getServerSnapshot(props.environmentId, app.server),
+  );
 
   if (closed) {
     return (
@@ -449,68 +509,100 @@ export function McpAppFrame(props: {
   }
 
   const fullscreen = displayMode === "fullscreen";
+  const hasToolPermissions =
+    toolPermissions.allowedTools.length > 0 || toolPermissions.suppressedTools.length > 0;
+  const permissionSummary = [
+    toolPermissions.allowedTools.length > 0
+      ? gt("Allowed this session: {tools}", {
+          tools: toolPermissions.allowedTools.join(", "),
+        })
+      : null,
+    toolPermissions.suppressedTools.length > 0
+      ? gt("Muted prompts: {tools}", {
+          tools: toolPermissions.suppressedTools.join(", "),
+        })
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+
   return (
-    // Preserve inline row height during fullscreen to prevent timeline jumps.
-    <div style={{ height }}>
-      <div
-        ref={attachBox}
-        // Preserve the frame's parent to avoid reloads; the top layer escapes timeline containment.
-        {...(fullscreenSupported
-          ? { popover: "auto" as const, onToggle: onBoxToggle, onBlur: onBoxBlur }
-          : {})}
-        data-mcp-app-fullscreen={fullscreen ? "" : undefined}
-        className={cn(
-          "relative size-full overflow-hidden",
-          app.prefersBorder === true && !fullscreen && "rounded-lg border border-border",
-          fullscreen
-            ? "fixed inset-0 m-0 flex h-dvh max-h-none w-dvw max-w-none flex-col border-0 bg-background p-0"
-            : "block! static! m-0 border-0 bg-transparent p-0 text-inherit",
-        )}
-        // Keep the header clear of the native window controls.
-        style={fullscreen ? { paddingTop: nativeTitlebarHeight } : undefined}
-      >
-        {fullscreen ? (
-          <div
-            ref={attachFullscreenChrome}
-            className="flex h-10 shrink-0 items-center justify-between border-border border-b px-3 text-sm"
-          >
-            <span className="truncate">{app.server}</span>
-            <Button
-              aria-label={gt("Exit full screen")}
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => setDisplayMode("inline")}
+    <div className="flex flex-col">
+      {/* Preserve inline row height during fullscreen to prevent timeline jumps. */}
+      <div style={{ height }}>
+        <div
+          ref={attachBox}
+          // Preserve the frame's parent to avoid reloads; the top layer escapes timeline containment.
+          {...(fullscreenSupported
+            ? { popover: "auto" as const, onToggle: onBoxToggle, onBlur: onBoxBlur }
+            : {})}
+          data-mcp-app-fullscreen={fullscreen ? "" : undefined}
+          className={cn(
+            "relative size-full overflow-hidden",
+            app.prefersBorder === true && !fullscreen && "rounded-lg border border-border",
+            fullscreen
+              ? "fixed inset-0 m-0 flex h-dvh max-h-none w-dvw max-w-none flex-col border-0 bg-background p-0"
+              : "block! static! m-0 border-0 bg-transparent p-0 text-inherit",
+          )}
+          // Keep the header clear of the native window controls.
+          style={fullscreen ? { paddingTop: nativeTitlebarHeight } : undefined}
+        >
+          {fullscreen ? (
+            <div
+              ref={attachFullscreenChrome}
+              className="flex h-10 shrink-0 items-center justify-between border-border border-b px-3 text-sm"
             >
-              <Minimize2Icon className="size-4" />
-            </Button>
-          </div>
-        ) : null}
-        {navigatedAway ? (
-          <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
-            <T>
-              The <Var>{app.server}</Var> app left its page and was stopped
-            </T>
-          </p>
-        ) : src !== null ? (
-          <iframe
-            ref={attachFrame}
-            src={src}
-            title={gt("{server} app", { server: app.server })}
-            // Omitting allow-same-origin isolates the app from the session.
-            sandbox="allow-scripts allow-forms"
-            allow={mcpAppAllowAttribute(app.permissions)}
-            onLoad={onFrameLoad}
-            className={cn("block w-full border-0", fullscreen ? "min-h-0 flex-1" : "h-full")}
-            style={{ colorScheme: theme.appearance }}
-          />
-        ) : asset._tag === "Failure" ? (
-          <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
-            <T>
-              Unable to load the <Var>{app.server}</Var> app
-            </T>
-          </p>
-        ) : null}
+              <span className="truncate">{app.server}</span>
+              <Button
+                aria-label={gt("Exit full screen")}
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setDisplayMode("inline")}
+              >
+                <Minimize2Icon className="size-4" />
+              </Button>
+            </div>
+          ) : null}
+          {navigatedAway ? (
+            <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+              <T>
+                The <Var>{app.server}</Var> app left its page and was stopped
+              </T>
+            </p>
+          ) : src !== null ? (
+            <iframe
+              ref={attachFrame}
+              src={src}
+              title={gt("{server} app", { server: app.server })}
+              // Omitting allow-same-origin isolates the app from the session.
+              sandbox="allow-scripts allow-forms"
+              allow={mcpAppAllowAttribute(app.permissions)}
+              onLoad={onFrameLoad}
+              className={cn("block w-full border-0", fullscreen ? "min-h-0 flex-1" : "h-full")}
+              style={{ colorScheme: theme.appearance }}
+            />
+          ) : asset._tag === "Failure" ? (
+            <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+              <T>
+                Unable to load the <Var>{app.server}</Var> app
+              </T>
+            </p>
+          ) : null}
+        </div>
       </div>
+      {hasToolPermissions ? (
+        <div className="mt-1.5 flex items-center justify-between gap-2 px-1 text-muted-foreground text-xs">
+          <span className="min-w-0 truncate">{permissionSummary}</span>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="shrink-0"
+            onClick={() => mcpAppToolApprovals.resetServer(props.environmentId, app.server)}
+          >
+            <T>Reset</T>
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
