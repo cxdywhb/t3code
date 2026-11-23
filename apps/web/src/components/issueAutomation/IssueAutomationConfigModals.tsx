@@ -170,7 +170,7 @@ export function SearchableScopeMenu({
               </MenuItem>
             ) : (
               filtered.map((scope) => (
-                <MenuRadioItem key={scope.id} value={scope.id}>
+                <MenuRadioItem key={scope.id} value={scope.id} closeOnClick>
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="min-w-9 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                       #{scope.id}

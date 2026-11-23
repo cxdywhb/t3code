@@ -54,6 +54,7 @@ import {
   parseScopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
+  scopedProjectKey,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import {
@@ -438,8 +439,6 @@ function useSidebarThreads(input: {
   readonly departingThreadKey: string | null;
   // Set in boring mode: the project groups to fold active threads into, in order.
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
-  // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
-  readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
 }) {
   const {
     projectScopeKey,
@@ -452,7 +451,6 @@ function useSidebarThreads(input: {
     routeRowThreadKey,
     departingThreadKey,
     folderGroups,
-    keepEmptyFolders: keepEmpty,
   } = input;
   const shelfRouteThreadKey = routeRowThreadKey === departingThreadKey ? null : routeRowThreadKey;
   // Folders already separate the work, so boring mode has no Working shelf.
@@ -539,26 +537,38 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  const projectFolders =
-    folderGroups === null
-      ? null
-      : groupSidebarThreadsByProject(folderGroups, activeThreads, keepEmpty).map((folder) => {
-          const collapsed = !resolveProjectExpanded(
-            projectExpandedById,
-            sidebarFolderExpansionKeys(folder.group),
+  const projectFolders = (() => {
+    if (folderGroups === null) return null;
+    const projectsWithThreads = new Set(threads.map(scopedProjectKey));
+    const folders = groupSidebarThreadsByProject(folderGroups, activeThreads, (group) => {
+      if (group.archived) return false;
+      if (scopedProjectKeys !== null || group.pinned) return true;
+      return (
+        !group.isScratch &&
+        group.memberProjectRefs.every((ref) => {
+          const older = olderSettledShelf.environments.get(ref.environmentId)?.older;
+          return (
+            !projectsWithThreads.has(scopedProjectKey(ref)) && !older?.counts.get(ref.projectId)
           );
-          return {
-            group: folder.group,
-            collapsed,
-            // A closed folder still shows the open thread, and hints at the rest.
-            threads: collapsed
-              ? routeThreadOnly(folder.threads, routeRowThreadKey)
-              : folder.threads,
-            hiddenThreads: collapsed
-              ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
-              : EMPTY_THREADS,
-          };
-        });
+        })
+      );
+    });
+    return folders.map((folder) => {
+      const collapsed = !resolveProjectExpanded(
+        projectExpandedById,
+        sidebarFolderExpansionKeys(folder.group),
+      );
+      return {
+        group: folder.group,
+        collapsed,
+        // A closed folder still shows the open thread, and hints at the rest.
+        threads: collapsed ? routeThreadOnly(folder.threads, routeRowThreadKey) : folder.threads,
+        hiddenThreads: collapsed
+          ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
+          : EMPTY_THREADS,
+      };
+    });
+  })();
   const orderedThreads = [
     ...pinnedThreads,
     ...(projectFolders === null
@@ -1366,8 +1376,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
         : scopedProjectGroups
       : null,
-    keepEmptyFolders: (group) =>
-      scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -1979,7 +1987,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
         return { kind: "thread", key, section };
       });
-    // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
+    // Boring mode can show project folders even when there are no threads to list.
     if (
       !hasProjectFolders &&
       pinnedThreads.length +
