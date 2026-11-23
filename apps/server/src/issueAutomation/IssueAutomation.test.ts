@@ -405,4 +405,68 @@ describe("ZenTaoSessionClient discovery & probe", () => {
       expect(requestedUrls.some((u) => u.includes("evil.example.net"))).toBe(false);
     }),
   );
+
+  it.effect(
+    "re-authenticates when a ZenTao .json endpoint returns an HTML user-login redirect",
+    () =>
+      Effect.gen(function* () {
+        let authCount = 0;
+        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          const base = "https://zentao.example.com/zentao";
+          if (url === `${base}/index.php?mode=getconfig`) {
+            authCount += 1;
+            const sid = authCount === 1 ? "sid-stale" : "sid-fresh";
+            return jsonResponse(
+              {
+                version: "10.6",
+                requestType: "PATH_INFO",
+                requestFix: "-",
+                sessionName: "zentaosid",
+                sessionID: sid,
+                rand: 42,
+              },
+              url,
+            );
+          }
+          const sid = authCount === 1 ? "sid-stale" : "sid-fresh";
+          if (url === `${base}/api-getSessionID.json?zentaosid=${sid}`) {
+            return jsonResponse({
+              status: "success",
+              data: JSON.stringify({ sessionName: "zentaosid", sessionID: sid, rand: 42 }),
+            });
+          }
+          if (url === `${base}/user-login.json?zentaosid=${sid}`) {
+            return jsonResponse({
+              status: "success",
+              user: { account: "alice", realname: "Alice" },
+            });
+          }
+          if (url === `${base}/bug-browse.json?zentaosid=sid-stale`) {
+            return new Response(
+              `<html><script>self.location='/zentao/user-login-L3plbnRhby9idWctYnJvd3NlLmpzb24=.json';</script></html>`,
+              { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+            );
+          }
+          if (url === `${base}/bug-browse.json?zentaosid=sid-fresh`) {
+            return jsonResponse({
+              status: "success",
+              data: JSON.stringify({ products: { "0": "", "68": "Core Product" } }),
+            });
+          }
+          return new Response("Not Found", { status: 404 });
+        });
+
+        const client = new ZenTaoSessionClient();
+        const probe = yield* client.probeAndListScopes({
+          baseUrl: "https://zentao.example.com/zentao",
+          account: "alice",
+          secret: "secret-pass",
+        });
+        expect(authCount).toBe(2);
+        expect(probe.normalizedBaseUrl).toBe("https://zentao.example.com/zentao");
+        expect(probe.scopes).toEqual([{ id: "68", name: "Core Product" }]);
+      }),
+  );
 });

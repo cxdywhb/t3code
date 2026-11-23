@@ -784,7 +784,7 @@ export class ZenTaoSessionClient {
         methodName,
         params,
       );
-      const raw = await fetchJsonWithTimeout(url, {
+      const res = await fetchTextWithTimeout(url, {
         method: postForm ? "POST" : "GET",
         headers: {
           Cookie: `${session.config.sessionName}=${session.config.sessionID}`,
@@ -792,6 +792,17 @@ export class ZenTaoSessionClient {
         },
         ...(postForm ? { body: postForm } : {}),
       });
+      let raw: unknown;
+      try {
+        raw = JSON.parse(res.text);
+      } catch {
+        if (!forceRelogin && (/user-login/i.test(res.text) || /user-login/i.test(res.url))) {
+          return null;
+        }
+        throw new Error(
+          `ZenTao returned non-JSON response (HTTP ${String(res.status)}): ${res.text.slice(0, 180)}`,
+        );
+      }
       const outer = isRecord(raw) ? raw : {};
       const locate = typeof outer.locate === "string" ? outer.locate : "";
       if (locate.includes("user-login") && !forceRelogin) {
