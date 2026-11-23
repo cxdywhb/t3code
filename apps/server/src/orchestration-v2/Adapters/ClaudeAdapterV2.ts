@@ -165,6 +165,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { McpAppConnections } from "../../mcpApps/McpAppConnections.ts";
 import { snapshotMcpApp } from "../../mcpApps/McpAppSnapshot.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
@@ -5311,6 +5312,7 @@ interface ActiveClaudeSubagent {
 }
 
 interface ClaudeLiveQueryContext {
+  readonly mcpAppConnections: McpAppConnections;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   readonly nativeThreadId: string;
   readonly settingsCwd: string | null;
@@ -8951,7 +8953,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               detail: "Another MCP server's tool names overlap this app's server.",
             });
           }
-          return { liveQuery, statuses };
+          const status = statuses.find((candidate) => candidate.name === server);
+          const connectionId = liveQuery.mcpAppConnections.observe(server, [
+            providerThread.providerSessionId,
+            providerThread.id,
+            status?.status ?? null,
+            status?.source ?? null,
+            status?.scope ?? null,
+            status?.config ?? null,
+            status?.serverInfo ?? null,
+          ]);
+          return { liveQuery, status, connectionId };
         });
 
         /** Reads an app tool's `ui://` document into an attachment; a plain tool row is the fallback. */
@@ -13389,6 +13401,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
           const closed = yield* Deferred.make<void, never>();
           const context: ClaudeLiveQueryContext = {
+            mcpAppConnections: new McpAppConnections(),
             queryPolicy,
             nativeThreadId,
             settingsCwd: turnInput.runtimePolicy.cwd,
@@ -13450,6 +13463,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.claudeCodeVersion = message.claude_code_version;
                   }
                   if (message.type === "system" && message.subtype === "init") {
+                    for (const server of message.mcp_servers ?? []) {
+                      if (server.status !== "connected")
+                        context.mcpAppConnections.forget(server.name);
+                    }
                     // Recorded frames from older CLIs can omit the list.
                     context.checkMcpSignIns = (message.mcp_servers ?? []).some(
                       (server) =>
@@ -14597,22 +14614,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               providerThread,
               server,
             }) {
-              const { liveQuery, statuses } = yield* mcpAppServerStatuses(providerThread, server);
-              const status = statuses.find((candidate) => candidate.name === server);
+              const { liveQuery, status, connectionId } = yield* mcpAppServerStatuses(
+                providerThread,
+                server,
+              );
               const rules = yield* liveQuery.query.listPermissionRules.pipe(
                 Effect.orElseSucceed(() => null),
               );
-              return (status?.tools ?? []).map((tool) => claudeMcpToolForApps(tool, rules));
+              return {
+                connectionId,
+                tools: (status?.tools ?? []).map((tool) => claudeMcpToolForApps(tool, rules)),
+              };
             }),
             callTool: Effect.fn("ClaudeAdapterV2.callMcpTool")(function* (call) {
-              const { liveQuery, statuses } = yield* mcpAppServerStatuses(
+              const { liveQuery, status, connectionId } = yield* mcpAppServerStatuses(
                 call.providerThread,
                 call.server,
               );
               const tool = claudeMcpToolName(call.server, call.tool);
-              const sameName = (
-                statuses.find((status) => status.name === call.server)?.tools ?? []
-              ).filter((candidate) => claudeMcpToolName(call.server, candidate.name) === tool);
+              const sameName = (status?.tools ?? []).filter(
+                (candidate) => claudeMcpToolName(call.server, candidate.name) === tool,
+              );
               // `refresh.weather` and `refresh_weather` reach Claude as one name, so the checked tool may not be the one run.
               if (sameName.length > 1) {
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
@@ -14635,6 +14657,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CLAUDE_PROVIDER,
                   detail: `A Claude deny rule may cover ${tool}, so it was not called.`,
+                });
+              }
+              if (
+                connectionId !== call.connectionId ||
+                liveQuery.mcpAppConnections.current(call.server) !== connectionId
+              ) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail: "The MCP app connection changed. Request approval again.",
                 });
               }
               return claudeMcpCallToolResult(
@@ -14722,6 +14753,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               server,
             }) {
               const liveQuery = yield* liveQueryForThread(providerThread);
+              liveQuery.mcpAppConnections.forget(server);
               const authorizationUrl = yield* liveQuery.query.mcpAuthenticate(server).pipe(
                 Effect.mapError(
                   () =>
@@ -14759,6 +14791,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     ),
                   ),
                 );
+              liveQuery.mcpAppConnections.forget(server);
               // The CLI reconnects after its own callback page, but not after a pasted address.
               yield* liveQuery.query
                 .reconnectMcpServer(server)

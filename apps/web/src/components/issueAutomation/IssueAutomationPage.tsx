@@ -1756,9 +1756,10 @@ export function IssueAutomationPage() {
           onSaved={(saved) => {
             if (!editingConnector) {
               handleSelectConnector(saved.id);
+            } else if (saved.id === activeConnector?.id) {
+              remoteIssuesQuery.refresh();
+              remoteDetailQuery.refresh();
             }
-            remoteIssuesQuery.refresh();
-            remoteDetailQuery.refresh();
           }}
         />
       ) : null}

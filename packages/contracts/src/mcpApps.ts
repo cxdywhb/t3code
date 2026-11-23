@@ -11,6 +11,8 @@ const McpAppTarget = {
 export const McpAppCallToolInput = Schema.Struct({
   ...McpAppTarget,
   name: TrimmedNonEmptyString,
+  connectionId: Schema.optional(TrimmedNonEmptyString),
+  readOnly: Schema.optional(Schema.Literal(true)),
   arguments: Schema.Record(Schema.String, Schema.Unknown),
 });
 export type McpAppCallToolInput = typeof McpAppCallToolInput.Type;
@@ -30,6 +32,7 @@ export const McpAppToolInfoInput = Schema.Struct({
 export type McpAppToolInfoInput = typeof McpAppToolInfoInput.Type;
 
 export const McpAppToolInfo = Schema.Struct({
+  connectionId: Schema.optional(TrimmedNonEmptyString),
   callable: Schema.Boolean,
   readOnly: Schema.Boolean,
   title: Schema.optional(Schema.String),

@@ -113,7 +113,7 @@ function McpAppFullscreen({
       navigation.goBack();
     });
   };
-  const [size, setSize] = useState({ width: 0, height: 0 });
+  const [width, setWidth] = useState(0);
   const conversationThreadId = useConversationThreadId(
     environmentId,
     threadId,
@@ -153,12 +153,7 @@ function McpAppFullscreen({
       <View
         className="flex-1"
         style={{ paddingBottom: insets.bottom }}
-        onLayout={(event) =>
-          setSize({
-            width: Math.round(event.nativeEvent.layout.width),
-            height: Math.round(event.nativeEvent.layout.height - insets.bottom),
-          })
-        }
+        onLayout={(event) => setWidth(Math.round(event.nativeEvent.layout.width))}
       >
         {app === undefined ? (
           detail.data === undefined ? null : (
@@ -166,7 +161,7 @@ function McpAppFullscreen({
               <T>This app cannot be shown.</T>
             </Text>
           )
-        ) : size.width > 0 ? (
+        ) : width > 0 ? (
           <ThreadMcpApp
             environmentId={environmentId}
             threadId={threadId}
@@ -174,8 +169,7 @@ function McpAppFullscreen({
             itemId={itemId}
             revision={params.revision ?? (item == null ? "" : turnItemDetailRevision(item))}
             app={app}
-            width={size.width}
-            height={size.height}
+            width={width}
             displayMode="fullscreen"
             onExitFullscreen={onClose}
           />

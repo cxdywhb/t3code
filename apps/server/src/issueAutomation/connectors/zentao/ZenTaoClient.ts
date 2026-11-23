@@ -42,7 +42,7 @@ interface CachedSession {
 const SESSION_TTL_MS = 25 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const DISCOVERY_FALLBACK_TIMEOUT_MS = 10_000;
-const MAX_DISCOVERY_PROBES = 10;
+const MAX_PROBES_PER_PROTOCOL = 10;
 const COMMON_ZENTAO_SUBPATHS = ["/zentao", "/pro", "/biz", "/max", "/pms"] as const;
 
 function md5Hex(input: string): string {
@@ -110,6 +110,35 @@ export function normalizeZenTaoBaseUrl(rawUrl: string): string {
   return `${parsed.origin}${pathname}`;
 }
 
+function isAllowedDestination(from: URL, to: URL): boolean {
+  return (
+    (to.protocol === "https:" || to.protocol === "http:") &&
+    !to.username &&
+    !to.password &&
+    (from.origin === to.origin ||
+      (from.protocol === "http:" &&
+        to.protocol === "https:" &&
+        from.hostname === to.hostname &&
+        from.port === to.port))
+  );
+}
+
+function* htmlNavigationTargets(html: string): Generator<string> {
+  for (const script of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+    for (const match of (script[1] ?? "").matchAll(
+      /\b(?:(?:window|self|top|parent)\.)?location(?:\.(?:replace|assign)\(\s*|(?:\.href)?\s*=\s*)['"]([^'"]+)['"]/gi,
+    )) {
+      if (match[1]) yield match[1];
+    }
+  }
+  for (const match of html.matchAll(/<meta\b[^>]*http-equiv\s*=\s*['"]?refresh['"]?[^>]*>/gi)) {
+    const contentMatch = /\bcontent\s*=\s*['"]([^'"]+)['"]/i.exec(match[0]);
+    if (!contentMatch?.[1]) continue;
+    const urlMatch = /(?:^|;)\s*url\s*=\s*['"]?([^'";\s]+)['"]?/i.exec(contentMatch[1]);
+    if (urlMatch?.[1]) yield urlMatch[1];
+  }
+}
+
 function extractZenTaoRedirectCandidates(html: string, pageUrl: string): string[] {
   const originUrl = parseHttpUrl(pageUrl);
   if (!originUrl || !html) return [];
@@ -133,8 +162,7 @@ function extractZenTaoRedirectCandidates(html: string, pageUrl: string): string[
     } catch {
       return;
     }
-    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return;
-    if (resolved.hostname.toLowerCase() !== originUrl.hostname.toLowerCase()) return;
+    if (!isAllowedDestination(originUrl, resolved)) return;
     const normalized = normalizeZenTaoBaseUrl(resolved.toString());
     if (normalized && !seen.has(normalized)) {
       seen.add(normalized);
@@ -142,24 +170,7 @@ function extractZenTaoRedirectCandidates(html: string, pageUrl: string): string[
     }
   };
 
-  for (const match of html.matchAll(
-    /\b(?:(?:window|self|top)\.)?location\.(?:replace|assign)\(\s*['"]([^'"]+)['"]\s*\)/gi,
-  )) {
-    if (match[1]) pushCandidate(match[1]);
-  }
-
-  for (const match of html.matchAll(
-    /\b(?:(?:window|self|top)\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/gi,
-  )) {
-    if (match[1]) pushCandidate(match[1]);
-  }
-
-  for (const match of html.matchAll(/<meta\b[^>]*http-equiv\s*=\s*['"]?refresh['"]?[^>]*>/gi)) {
-    const contentMatch = /\bcontent\s*=\s*['"]([^'"]+)['"]/i.exec(match[0]);
-    if (!contentMatch?.[1]) continue;
-    const urlMatch = /(?:^|;)\s*url\s*=\s*['"]?([^'";\s]+)['"]?/i.exec(contentMatch[1]);
-    if (urlMatch?.[1]) pushCandidate(urlMatch[1]);
-  }
+  for (const target of htmlNavigationTargets(html)) pushCandidate(decodeHtmlEntities(target));
 
   for (const match of html.matchAll(/<a\b([^>]*)>/gi)) {
     const attrs = match[1] ?? "";
@@ -388,7 +399,7 @@ interface FetchedTextResponse {
   readonly status: number;
   readonly ok: boolean;
   readonly url: string;
-  readonly contentType: string;
+
   readonly text: string;
 }
 
@@ -401,46 +412,136 @@ function isZenTaoConfigPayload(cfgObj: Record<string, unknown>): boolean {
   );
 }
 
+class ZenTaoDestinationError extends Schema.TaggedError<ZenTaoDestinationError>()(
+  "ZenTaoDestinationError",
+  {},
+) {
+  override get message(): string {
+    return "禅道请求目标不属于已授权的实例";
+  }
+}
+
+const isZenTaoDestinationError = Schema.is(ZenTaoDestinationError);
+
+async function fetchWithRedirects(
+  initialUrl: string,
+  init: RequestInit,
+  allowTarget?: (target: URL) => boolean,
+  write = false,
+): Promise<{ response: Response; url: string }> {
+  let url = new URL(initialUrl);
+  const request: RequestInit = { ...init, redirect: "manual" };
+  for (let hop = 0; hop <= 10; hop++) {
+    if (allowTarget && !allowTarget(url)) throw new ZenTaoDestinationError();
+    const response = await fetch(url.href, request);
+    const location = response.headers.get("location");
+    if (!location || ![301, 302, 303, 307, 308].includes(response.status)) {
+      return { response, url: url.href };
+    }
+    await response.body?.cancel();
+    const target = new URL(location, url);
+    if (!isAllowedDestination(url, target)) throw new ZenTaoDestinationError();
+    if (request.method === "POST") {
+      if (response.status === 307 || response.status === 308) {
+        if (write) throw new Error("禅道请求要求重新发送写入内容");
+      } else {
+        const headers = new Headers(request.headers);
+        headers.delete("content-type");
+        request.method = "GET";
+        request.body = null;
+        request.headers = headers;
+      }
+    }
+    url = target;
+  }
+  throw new Error("禅道重定向次数过多");
+}
+
+function isLoginTarget(raw: string, pageUrl: string, base: URL, requestFix: string): boolean {
+  if (!URL.canParse(raw, pageUrl)) return false;
+  const url = new URL(raw, pageUrl);
+  const prefix = base.pathname.replace(/\/$/, "") + "/";
+  if (!isAllowedDestination(base, url) || !url.pathname.startsWith(prefix)) return false;
+  const route = url.pathname.slice(prefix.length);
+  if (
+    (route === "" || route === "index.php") &&
+    url.searchParams.get("m") === "user" &&
+    url.searchParams.get("f") === "login"
+  )
+    return true;
+  const fix = requestFix || "-";
+  const login = "user" + fix + "login";
+  const path = route.replace(/^index\.php\//i, "");
+  return (
+    path === login ||
+    path === login + ".html" ||
+    path === login + ".json" ||
+    path.startsWith(login + fix)
+  );
+}
+
 async function fetchTextWithTimeout(
   url: string,
   init?: RequestInit,
-  timeoutMs = REQUEST_TIMEOUT_MS,
+  {
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    baseUrl,
+    requestFix = "-",
+    write = false,
+  }: {
+    timeoutMs?: number;
+    baseUrl?: string;
+    requestFix?: string;
+    write?: boolean;
+  } = {},
 ): Promise<FetchedTextResponse> {
+  const base = baseUrl ? new URL(baseUrl) : undefined;
+  const initial = new URL(url);
+  const allowTarget =
+    base &&
+    ((target: URL) =>
+      isAllowedDestination(base, target) &&
+      ((target.pathname === initial.pathname &&
+        target.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/")) ||
+        new URL(normalizeZenTaoBaseUrl(target.href)).pathname === base.pathname ||
+        isLoginTarget(target.href, url, base, requestFix)));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
-      ...init,
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-        ...init?.headers,
+    const result = await fetchWithRedirects(
+      url,
+      {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json, text/javascript, */*; q=0.01",
+          "X-Requested-With": "XMLHttpRequest",
+          ...init?.headers,
+        },
       },
-    });
-    const text = await response.text();
+      allowTarget,
+      write,
+    );
+    const { response } = result;
     return {
       status: response.status,
       ok: response.ok,
-      url: response.url || url,
-      contentType: response.headers.get("content-type") ?? "",
-      text,
+      url: result.url,
+      text: await response.text(),
     };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchJsonWithTimeout(url: string, init?: RequestInit): Promise<unknown> {
-  const res = await fetchTextWithTimeout(url, init);
-  try {
-    return JSON.parse(res.text);
-  } catch {
-    throw new Error(
-      `ZenTao returned non-JSON response (HTTP ${String(res.status)}): ${res.text.slice(0, 180)}`,
-    );
-  }
+async function fetchJsonWithTimeout(
+  baseUrl: string,
+  url: string,
+  init?: RequestInit,
+): Promise<unknown> {
+  const res = await fetchTextWithTimeout(url, init, { baseUrl });
+  if (!res.ok) throw new Error(`禅道请求失败 (HTTP ${String(res.status)})`);
+  return JSON.parse(res.text);
 }
 
 function buildOriginDiscoveryCandidates(startBaseUrl: string): string[] {
@@ -489,132 +590,58 @@ async function discoverZenTaoServerConfig(rawBaseUrl: string): Promise<{
     }
   }
 
-  const queue: string[] = [];
-  const queuedSet = new Set<string>();
-  const enqueueBack = (urls: ReadonlyArray<string>) => {
-    for (const u of urls) {
-      if (!queuedSet.has(u)) {
-        queuedSet.add(u);
-        queue.push(u);
-      }
-    }
-  };
-  const promoteFront = (urls: ReadonlyArray<string>) => {
-    for (let i = urls.length - 1; i >= 0; i -= 1) {
-      const u = urls[i];
-      if (!u) continue;
-      const existingIdx = queue.indexOf(u);
-      if (existingIdx !== -1) {
-        queue.splice(existingIdx, 1);
-      }
-      queuedSet.add(u);
-      queue.unshift(u);
-    }
-  };
-
-  for (const start of roundStarts) {
-    enqueueBack(buildOriginDiscoveryCandidates(start));
-  }
-
   const visited = new Set<string>();
   const transportFailedOrigins = new Set<string>();
-  let probeCount = 0;
-  let primaryFailure: Error | null = null;
-
-  while (queue.length > 0 && probeCount < MAX_DISCOVERY_PROBES) {
-    const candidate = queue.shift();
-    if (!candidate || visited.has(candidate)) continue;
-    const candidateParsed = parseHttpUrl(candidate);
-    if (!candidateParsed || transportFailedOrigins.has(candidateParsed.origin)) continue;
-
-    visited.add(candidate);
-    probeCount += 1;
-    const timeoutMs = probeCount === 1 ? REQUEST_TIMEOUT_MS : DISCOVERY_FALLBACK_TIMEOUT_MS;
-    const requestUrl = `${candidate}/index.php?mode=getconfig`;
-
-    let res: FetchedTextResponse;
-    try {
-      res = await fetchTextWithTimeout(requestUrl, undefined, timeoutMs);
-    } catch (cause) {
-      transportFailedOrigins.add(candidateParsed.origin);
-      primaryFailure ??= cause instanceof Error ? cause : new Error(`请求 ${requestUrl} 失败`);
-      continue;
-    }
-
-    const effectiveUrl = res.url && parseHttpUrl(res.url) ? res.url : requestUrl;
-    const effectiveParsed = parseHttpUrl(effectiveUrl);
-    const redirectedBase = normalizeZenTaoBaseUrl(effectiveUrl);
-
-    try {
-      const parsedJson: unknown = JSON.parse(res.text);
-      const cfgObj = unwrapZenTaoData(parsedJson);
-      if (isZenTaoConfigPayload(cfgObj)) {
-        return {
-          baseUrl: redirectedBase || candidate,
-          cfgObj,
-        };
-      }
-      primaryFailure ??= new Error(`ZenTao config payload invalid (HTTP ${String(res.status)})`);
-    } catch {
-      const snippet = res.text.replace(/\s+/g, " ").trim().slice(0, 140);
-      primaryFailure ??= new Error(
-        `ZenTao returned non-JSON response (HTTP ${String(res.status)})${snippet ? `: ${snippet}` : ""}`,
-      );
-    }
-
-    const discovered: string[] = [];
-    const seenDiscovered = new Set<string>();
-    const addDiscovered = (u: string) => {
-      if (u && u !== candidate && !visited.has(u) && !seenDiscovered.has(u)) {
-        const parsedU = parseHttpUrl(u);
-        if (parsedU && !transportFailedOrigins.has(parsedU.origin)) {
-          seenDiscovered.add(u);
-          discovered.push(u);
-        }
-      }
-    };
-
-    if (redirectedBase && redirectedBase !== candidate) {
-      addDiscovered(redirectedBase);
-    }
-    for (const extracted of extractZenTaoRedirectCandidates(res.text, effectiveUrl)) {
-      addDiscovered(extracted);
-    }
-
-    if (
-      probeCount === 1 &&
-      res.status >= 400 &&
-      discovered.length === 0 &&
-      candidateParsed.pathname === "/" &&
-      probeCount < MAX_DISCOVERY_PROBES
-    ) {
-      probeCount += 1;
+  let primaryFailure: Error | undefined;
+  for (const start of roundStarts) {
+    const queue = buildOriginDiscoveryCandidates(start);
+    let probeCount = 0;
+    while (queue.length && probeCount < MAX_PROBES_PER_PROTOCOL) {
+      const candidate = queue.shift()!;
+      const origin = new URL(candidate).origin;
+      if (visited.has(candidate) || transportFailedOrigins.has(origin)) continue;
+      visited.add(candidate);
+      probeCount++;
+      let res: FetchedTextResponse;
       try {
-        const rootRes = await fetchTextWithTimeout(
-          `${candidate}/`,
-          undefined,
-          DISCOVERY_FALLBACK_TIMEOUT_MS,
-        );
-        const rootEffectiveUrl =
-          rootRes.url && parseHttpUrl(rootRes.url) ? rootRes.url : `${candidate}/`;
-        const rootRedirectedBase = normalizeZenTaoBaseUrl(rootEffectiveUrl);
-        if (rootRedirectedBase && rootRedirectedBase !== candidate) {
-          addDiscovered(rootRedirectedBase);
-        }
-        for (const extracted of extractZenTaoRedirectCandidates(rootRes.text, rootEffectiveUrl)) {
-          addDiscovered(extracted);
-        }
-      } catch {
-        // Ignore root probe errors and proceed with subpath candidates.
+        res = await fetchTextWithTimeout(candidate + "/index.php?mode=getconfig", undefined, {
+          timeoutMs: probeCount === 1 ? REQUEST_TIMEOUT_MS : DISCOVERY_FALLBACK_TIMEOUT_MS,
+        });
+      } catch (cause) {
+        if (isZenTaoDestinationError(cause)) throw cause;
+        transportFailedOrigins.add(origin);
+        primaryFailure ??= cause instanceof Error ? cause : new Error("请求禅道配置失败");
+        continue;
       }
-    }
 
-    if (discovered.length > 0) {
-      promoteFront(discovered);
-    }
-
-    if (effectiveParsed && effectiveParsed.origin !== candidateParsed.origin) {
-      enqueueBack(COMMON_ZENTAO_SUBPATHS.map((subpath) => `${effectiveParsed.origin}${subpath}`));
+      const effectiveBase = normalizeZenTaoBaseUrl(res.url);
+      try {
+        const cfgObj = unwrapZenTaoData(JSON.parse(res.text));
+        if (res.ok && isZenTaoConfigPayload(cfgObj)) return { baseUrl: effectiveBase, cfgObj };
+      } catch {
+        // Installation landing pages can point to the actual application directory.
+      }
+      primaryFailure ??= new Error(`禅道未返回有效配置 (HTTP ${String(res.status)})`);
+      const hints = extractZenTaoRedirectCandidates(res.text, res.url);
+      if (candidate !== effectiveBase) hints.unshift(effectiveBase);
+      if (probeCount === 1 && !res.ok && !hints.length && candidate === origin) {
+        probeCount++;
+        try {
+          const welcome = await fetchTextWithTimeout(candidate + "/", undefined, {
+            timeoutMs: DISCOVERY_FALLBACK_TIMEOUT_MS,
+          });
+          const welcomeBase = normalizeZenTaoBaseUrl(welcome.url);
+          if (candidate !== welcomeBase) hints.push(welcomeBase);
+          hints.push(...extractZenTaoRedirectCandidates(welcome.text, welcome.url));
+        } catch (cause) {
+          if (isZenTaoDestinationError(cause)) throw cause;
+        }
+      }
+      queue.unshift(...hints);
+      const effectiveOrigin = new URL(res.url).origin;
+      if (origin !== effectiveOrigin) {
+        queue.push(...COMMON_ZENTAO_SUBPATHS.map((path) => effectiveOrigin + path));
+      }
     }
   }
 
@@ -641,25 +668,33 @@ export class ZenTaoSessionClient {
     return `${normalizeZenTaoBaseUrl(credentials.baseUrl)}::${credentials.account.trim()}`;
   }
 
-  private clearSession(credentials: PlatformCredentials): void {
-    const key = this.cacheKey(credentials);
-    const existing = this.sessions.get(key);
-    this.sessions.delete(key);
-    if (existing) {
-      this.sessions.delete(`${existing.baseUrl}::${credentials.account.trim()}`);
-    }
-  }
-
-  private async authenticate(credentials: PlatformCredentials): Promise<CachedSession> {
+  private async authenticate(
+    credentials: PlatformCredentials,
+    discoveredConfig?: Record<string, unknown>,
+  ): Promise<CachedSession> {
     const secretHash = md5Hex(credentials.secret);
     const key = this.cacheKey(credentials);
     const existing = this.sessions.get(key);
-    if (existing && existing.secretHash === secretHash && existing.expiresAtMs > Date.now()) {
+    if (
+      !discoveredConfig &&
+      existing &&
+      existing.secretHash === secretHash &&
+      existing.expiresAtMs > Date.now()
+    ) {
       return existing;
     }
 
-    // Step 1: Discover ZenTao root URL & server config (`index.php?mode=getconfig` works across ZenTao 8.x ~ 21.x)
-    const { baseUrl, cfgObj } = await discoverZenTaoServerConfig(credentials.baseUrl);
+    let baseUrl = normalizeZenTaoBaseUrl(credentials.baseUrl);
+    let cfgObj = discoveredConfig;
+    if (!cfgObj) {
+      const res = await fetchTextWithTimeout(baseUrl + "/index.php?mode=getconfig", undefined, {
+        baseUrl,
+      });
+      if (!res.ok) throw new Error(`禅道请求失败 (HTTP ${String(res.status)})`);
+      cfgObj = unwrapZenTaoData(JSON.parse(res.text));
+      if (!isZenTaoConfigPayload(cfgObj)) throw new Error("已保存的禅道地址未返回有效配置");
+      baseUrl = normalizeZenTaoBaseUrl(res.url);
+    }
     const requestType: "PATH_INFO" | "GET" = cfgObj.requestType === "GET" ? "GET" : "PATH_INFO";
     const requestFix = typeof cfgObj.requestFix === "string" ? cfgObj.requestFix : "-";
     let sessionName = typeof cfgObj.sessionName === "string" ? cfgObj.sessionName : "zentaosid";
@@ -675,7 +710,7 @@ export class ZenTaoSessionClient {
         "api",
         "getSessionID",
       );
-      const sidOuter = await fetchJsonWithTimeout(sidEndpoint);
+      const sidOuter = await fetchJsonWithTimeout(baseUrl, sidEndpoint);
       const sidData = unwrapZenTaoData(sidOuter);
       if (typeof sidData.sessionName === "string" && sidData.sessionName) {
         sessionName = sidData.sessionName;
@@ -686,7 +721,8 @@ export class ZenTaoSessionClient {
       if (sidData.rand !== undefined || sidData.random !== undefined) {
         rand = Number(sidData.rand ?? sidData.random ?? rand);
       }
-    } catch {
+    } catch (cause) {
+      if (isZenTaoDestinationError(cause)) throw cause;
       // Keep getconfig values if api.getSessionID is restricted.
     }
 
@@ -711,7 +747,7 @@ export class ZenTaoSessionClient {
       if (includeRand && rand > 0) {
         form.set("verifyRand", String(rand));
       }
-      const res = await fetchJsonWithTimeout(loginUrl, {
+      const res = await fetchJsonWithTimeout(baseUrl, loginUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
@@ -754,10 +790,6 @@ export class ZenTaoSessionClient {
       expiresAtMs: Date.now() + SESSION_TTL_MS,
     };
     this.sessions.set(key, session);
-    const resolvedKey = `${baseUrl}::${credentials.account.trim()}`;
-    if (resolvedKey !== key) {
-      this.sessions.set(resolvedKey, session);
-    }
     return session;
   }
 
@@ -772,10 +804,7 @@ export class ZenTaoSessionClient {
     readonly outer: Record<string, unknown>;
     readonly data: Record<string, unknown>;
   }> {
-    const attempt = async (forceRelogin: boolean) => {
-      if (forceRelogin) {
-        this.clearSession(credentials);
-      }
+    const attempt = async () => {
       const session = await this.authenticate(credentials);
       const url = buildZenTaoEndpoint(
         session.baseUrl,
@@ -784,48 +813,69 @@ export class ZenTaoSessionClient {
         methodName,
         params,
       );
-      const res = await fetchTextWithTimeout(url, {
-        method: postForm ? "POST" : "GET",
-        headers: {
-          Cookie: `${session.config.sessionName}=${session.config.sessionID}`,
-          ...(postForm ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
-        },
-        ...(postForm ? { body: postForm } : {}),
-      });
+      const uncertainWrite = "禅道写入结果待确认，请先到禅道核对后再操作";
+      let res: FetchedTextResponse;
+      try {
+        res = await fetchTextWithTimeout(
+          url,
+          {
+            method: postForm ? "POST" : "GET",
+            headers: {
+              Cookie: `${session.config.sessionName}=${session.config.sessionID}`,
+              ...(postForm ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+            },
+            ...(postForm ? { body: postForm } : {}),
+          },
+          { baseUrl: session.baseUrl, requestFix: session.config.requestFix, write: !!postForm },
+        );
+      } catch (cause) {
+        if (postForm) throw new Error(uncertainWrite, { cause });
+        throw cause;
+      }
+
       let raw: unknown;
+      const base = new URL(session.baseUrl);
+      const isLogin = (target: string) =>
+        isLoginTarget(target, res.url, base, session.config.requestFix);
+      let login = isLogin(res.url);
       try {
         raw = JSON.parse(res.text);
-      } catch {
-        if (!forceRelogin && (/user-login/i.test(res.text) || /user-login/i.test(res.url))) {
-          return null;
+        if (isRecord(raw) && typeof raw.locate === "string") {
+          login ||= isLogin(raw.locate);
         }
-        throw new Error(
-          `ZenTao returned non-JSON response (HTTP ${String(res.status)}): ${res.text.slice(0, 180)}`,
+      } catch {
+        login ||= Array.from(htmlNavigationTargets(res.text)).some((target) =>
+          isLogin(decodeHtmlEntities(target)),
         );
       }
-      const outer = isRecord(raw) ? raw : {};
-      const locate = typeof outer.locate === "string" ? outer.locate : "";
-      if (locate.includes("user-login") && !forceRelogin) {
+      if (login) {
+        const key = this.cacheKey(credentials);
+        if (this.sessions.get(key) === session) this.sessions.delete(key);
+        if (postForm) throw new Error(uncertainWrite);
         return null;
       }
-      return { session, outer, data: unwrapZenTaoData(outer) };
+      if (!res.ok || !isRecord(raw)) {
+        if (postForm) throw new Error(uncertainWrite);
+        throw new Error(`禅道未返回有效数据 (HTTP ${String(res.status)})`);
+      }
+      return { session, outer: raw, data: unwrapZenTaoData(raw) };
     };
 
-    const first = await attempt(false);
-    if (first !== null) return first;
-    const retried = await attempt(true);
-    if (retried === null) {
-      throw new Error("禅道会话已过期且重新登录失败");
-    }
-    return retried;
+    const result = (await attempt()) ?? (await attempt());
+    if (!result) throw new Error("禅道会话已过期且重新登录失败");
+    return result;
   }
 
   readonly probeAndListScopes = Effect.fn("ZenTaoSessionClient.probeAndListScopes")(
-    (credentials: PlatformCredentials) =>
+    (credentials: PlatformCredentials, mode: "discover" | "saved") =>
       Effect.tryPromise({
         try: async (): Promise<PlatformProbeResult> => {
-          this.clearSession(credentials);
-          const { session, data } = await this.requestData(credentials, "bug", "browse");
+          const discovered =
+            mode === "discover" ? await discoverZenTaoServerConfig(credentials.baseUrl) : undefined;
+          const pinned = discovered ? { ...credentials, baseUrl: discovered.baseUrl } : credentials;
+          this.sessions.delete(this.cacheKey(pinned));
+          if (discovered) await this.authenticate(pinned, discovered.cfgObj);
+          const { session, data } = await this.requestData(pinned, "bug", "browse");
           const productsMap = isRecord(data.products) ? data.products : {};
           const scopes: IssueAutomationRemoteScope[] = sortZenTaoScopesDesc(
             Object.entries(productsMap)
@@ -1072,19 +1122,29 @@ export class ZenTaoSessionClient {
       Effect.tryPromise({
         try: async (): Promise<PlatformDownloadedAsset> => {
           const session = await this.authenticate(input.credentials);
-          const sidParam = `${encodeURIComponent(session.config.sessionName)}=${encodeURIComponent(session.config.sessionID)}`;
-          const separator = input.url.includes("?") ? "&" : "?";
-          const authedUrl = `${input.url}${separator}${sidParam}`;
+          const root = new URL(session.baseUrl);
+          const asset = new URL(input.url);
+          const rootPath = root.pathname.replace(/\/$/, "") + "/";
+          const privateAsset = asset.pathname.startsWith(rootPath);
+          const allowAsset = (target: URL) =>
+            isAllowedDestination(root, target) &&
+            (!privateAsset || target.pathname.startsWith(rootPath));
+          if (privateAsset)
+            asset.searchParams.set(session.config.sessionName, session.config.sessionID);
 
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
           try {
-            const response = await fetch(authedUrl, {
-              signal: controller.signal,
-              headers: {
-                Cookie: `${session.config.sessionName}=${session.config.sessionID}`,
+            const { response } = await fetchWithRedirects(
+              asset.href,
+              {
+                signal: controller.signal,
+                headers: privateAsset
+                  ? { Cookie: `${session.config.sessionName}=${session.config.sessionID}` }
+                  : {},
               },
-            });
+              allowAsset,
+            );
             if (!response.ok) {
               throw new Error(`下载禅道截图失败 (HTTP ${String(response.status)})`);
             }

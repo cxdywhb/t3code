@@ -71,6 +71,7 @@ function setup() {
     value: {
       callable: true,
       readOnly: false,
+      connectionId: "live-connection",
       title: "mobile_android_stream_reset",
     },
   });
@@ -184,11 +185,21 @@ describe("McpAppFrame", () => {
       result: { content: [{ type: "text", text: "ok" }] },
     });
     expect(mockCommands.callTool).toHaveBeenCalledTimes(2);
+    expect(mockCommands.callTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ connectionId: "live-connection" }),
+      }),
+    );
     expect(page.getByRole("button", { name: "Allow once" }).query()).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Reset", exact: true }));
     expect(screen.getByRole("button", { name: "Reset", exact: true }).query()).toBeNull();
 
+    // A legacy server supports explicit approval for this call only.
+    mockCommands.toolInfo.mockResolvedValue({
+      _tag: "Success",
+      value: { callable: true, readOnly: false },
+    });
     const thirdReply = nextReplyFor("req-3");
     appWindow.postMessage(
       {
@@ -200,6 +211,7 @@ describe("McpAppFrame", () => {
       "*",
     );
     await expect.element(page.getByRole("button", { name: "Allow once" })).toBeVisible();
+    expect(page.getByRole("button", { name: "Always allow this session" }).query()).toBeNull();
     await userEvent.click(page.getByRole("button", { name: "Allow once" }));
     await expect(thirdReply).resolves.toMatchObject({
       result: { content: [{ type: "text", text: "ok" }] },
@@ -297,6 +309,9 @@ describe("McpAppFrame", () => {
     expect(
       mcpAppToolApprovals.isPromptPending({
         environmentId: EnvironmentId.make("environment"),
+        threadId: ThreadId.make("thread"),
+        itemId: TurnItemId.make("item"),
+        connectionId: "live-connection",
         server: "mobile-dev",
         tool: "mobile_android_stream_reset",
       }),
@@ -304,6 +319,9 @@ describe("McpAppFrame", () => {
     expect(
       mcpAppToolApprovals.isBackgroundSuppressed({
         environmentId: EnvironmentId.make("environment"),
+        threadId: ThreadId.make("thread"),
+        itemId: TurnItemId.make("item"),
+        connectionId: "live-connection",
         server: "mobile-dev",
         tool: "mobile_android_stream_reset",
       }),

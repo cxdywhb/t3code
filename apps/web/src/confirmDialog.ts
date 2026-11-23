@@ -4,7 +4,7 @@ export type ConfirmDialogChoiceResult = "cancel" | "confirm" | "secondary";
 
 export interface ChoiceConfirmDialogOptions extends ConfirmDialogOptions {
   readonly confirmLabel?: string;
-  readonly secondaryLabel: string;
+  readonly secondaryLabel?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -179,7 +179,7 @@ export function requestChoiceConfirmDialog(
     variant: options.variant ?? "default",
     initialFocus: options.initialFocus,
     ...(options.confirmLabel === undefined ? {} : { confirmLabel: options.confirmLabel }),
-    secondaryLabel: options.secondaryLabel,
+    ...(options.secondaryLabel === undefined ? {} : { secondaryLabel: options.secondaryLabel }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
 }

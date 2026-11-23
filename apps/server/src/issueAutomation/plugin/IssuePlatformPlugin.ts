@@ -79,6 +79,7 @@ export interface IssuePlatformPlugin {
 
   readonly probeAndListScopes: (
     credentials: PlatformCredentials,
+    mode: "discover" | "saved",
   ) => Effect.Effect<PlatformProbeResult, IssueAutomationError>;
 
   readonly listIssues: (input: {

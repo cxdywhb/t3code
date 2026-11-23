@@ -129,8 +129,7 @@ export function Host() {
         alertActions={presented.request.buttons ?? [{ text: gt("OK") }]}
         dismissable={presented.request.options?.cancelable ?? false}
         onAlertAction={(action) => {
-          dismiss(presented.id);
-          action.onPress?.();
+          if (dismiss(presented.id)) action.onPress?.();
         }}
         onCancel={handleCancel}
         onConfirm={handleConfirm}

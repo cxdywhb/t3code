@@ -6870,7 +6870,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("renders a Claude MCP tool's ui:// resource as an app and serves its tool calls", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const { harness, item, mcpRequests } = yield* runClaudeMcpAppToolTurn(MCP_APP_CAPABILITIES);
+      let url = "https://weather.test/one";
+      const { harness, item, mcpRequests } = yield* runClaudeMcpAppToolTurn(MCP_APP_CAPABILITIES, {
+        mcpServerStatus: Effect.sync(() => [
+          { ...PROBE_SERVER_STATUS, config: { type: "http", url } },
+        ]),
+      });
       const app = mcpAppFromToolItem(item);
       assert.deepInclude(app, {
         server: "probe.server",
@@ -6888,7 +6893,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
       const mcpApps = harness.runtime.mcpApps;
       if (mcpApps === undefined) throw new Error("Claude runtime must expose MCP Apps.");
-      const [tool, appOnlyTool] = yield* mcpApps.listTools({
+      const {
+        tools: [tool, appOnlyTool],
+        connectionId,
+      } = yield* mcpApps.listTools({
         providerThread: harness.providerThread,
         server: "probe.server",
       });
@@ -6898,6 +6906,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         annotations: { readOnlyHint: true, destructiveHint: false },
       });
       const result = yield* mcpApps.callTool({
+        connectionId,
         providerThread: harness.providerThread,
         server: "probe.server",
         tool: "refresh_weather",
@@ -6908,6 +6917,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         tool: "mcp__probe_server__refresh_weather",
         arguments: {},
       });
+      url = "https://weather.test/two";
+      const target = { providerThread: harness.providerThread, server: "probe.server" };
+      const changed = yield* Effect.exit(
+        mcpApps.callTool({ ...target, connectionId, tool: "refresh_weather", arguments: {} }),
+      );
+      assert.isTrue(Exit.isFailure(changed));
+      assert.notEqual((yield* mcpApps.listTools(target)).connectionId, connectionId);
+      assert.equal(
+        mcpRequests.filter(
+          (request) => typeof request === "object" && request !== null && "arguments" in request,
+        ).length,
+        1,
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -7143,14 +7165,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       });
       const mcpApps = harness.runtime.mcpApps!;
       const target = { providerThread: harness.providerThread, server };
-      const [listed] = yield* mcpApps.listTools(target);
+      const {
+        tools: [listed],
+        connectionId,
+      } = yield* mcpApps.listTools(target);
       assert.deepEqual(
         listed?.annotations,
         testCase.readOnly
           ? { readOnlyHint: true, destructiveHint: false }
           : { destructiveHint: false },
       );
-      const exit = yield* Effect.exit(mcpApps.callTool({ ...target, tool, arguments: {} }));
+      const exit = yield* Effect.exit(
+        mcpApps.callTool({ ...target, connectionId, tool, arguments: {} }),
+      );
       assert.equal(Exit.isSuccess(exit), testCase.called);
       assert.equal(
         mcpRequests.some(
@@ -7191,6 +7218,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.isUndefined(mcpAppFromToolItem(item));
       const callExit = yield* Effect.exit(
         harness.runtime.mcpApps!.callTool({
+          connectionId: "unavailable",
           providerThread: harness.providerThread,
           server: "probe__server",
           tool: "refresh_weather",
@@ -7234,8 +7262,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           },
         ]),
       });
+      const { connectionId } = yield* harness.runtime.mcpApps!.listTools({
+        providerThread: harness.providerThread,
+        server: "probe.server",
+      });
       const exit = yield* Effect.exit(
         harness.runtime.mcpApps!.callTool({
+          connectionId,
           providerThread: harness.providerThread,
           server: "probe.server",
           tool: "refresh_weather",
@@ -7291,6 +7324,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.deepEqual(mcpRequests, []);
       const exit = yield* Effect.exit(
         harness.runtime.mcpApps!.callTool({
+          connectionId: "unavailable",
           providerThread: harness.providerThread,
           server: "probe.server",
           tool: "refresh_weather",

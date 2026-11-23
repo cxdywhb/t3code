@@ -173,12 +173,22 @@ export function McpAppFrame(props: {
 
   const callTool = useAtomCommand(mcpAppEnvironment.callTool, { reportFailure: false });
   const toolInfo = useAtomCommand(mcpAppEnvironment.toolInfo, { reportFailure: false });
-  const toolDefinition = useEnvironmentQuery(
+  const initialToolInfo = useEnvironmentQuery(
     mcpAppEnvironment.toolInfoQuery({
       environmentId: props.environmentId,
       input: { threadId: props.threadId, itemId: props.itemId, name: app.tool },
     }),
-  ).data?.tool;
+  ).data;
+  const [liveConnection, setLiveConnection] = useState<string | null>();
+  const permissionScope = {
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+    itemId: props.itemId,
+    server: app.server,
+    connectionId:
+      liveConnection === undefined ? initialToolInfo?.connectionId : (liveConnection ?? undefined),
+  };
+  const toolDefinition = initialToolInfo?.tool;
   const readResource = useAtomCommand(mcpAppEnvironment.readResource, { reportFailure: false });
   const updateModelContext = useAtomCommand(mcpAppEnvironment.updateModelContext, {
     reportFailure: false,
@@ -303,53 +313,62 @@ export function McpAppFrame(props: {
       callTool: async ({ name, arguments: args }) => {
         const userInitiated = isFrameUserActive();
         const { environmentId, input } = scope();
-        const toolTarget = { environmentId, server: app.server, tool: name };
-        if (!mcpAppToolApprovals.isAllowed(toolTarget)) {
-          if (!userInitiated && mcpAppToolApprovals.isBackgroundSuppressed(toolTarget)) {
+        const info = await readLive().toolInfo({ environmentId, input: { ...input, name } });
+        if (info._tag !== "Success") throw commandFailure(info);
+        const { connectionId } = info.value;
+        if (frameAbort.signal.aborted)
+          throw new McpAppHostRefusal({ message: mcpAppToolApprovalRefusalMessage("unavailable") });
+        setLiveConnection(connectionId ?? null);
+        if (!info.value.callable)
+          throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
+        if (!info.value.readOnly) {
+          const auth = await mcpAppToolApprovals.authorize({
+            target: {
+              environmentId,
+              threadId: input.threadId,
+              itemId: input.itemId,
+              server: app.server,
+              connectionId,
+              tool: name,
+            },
+            userInitiated,
+            signal: frameAbort.signal,
+            prompt: async () => {
+              if (frameAbort.signal.aborted) return undefined;
+              flushSync(() => setDisplayMode("inline"));
+              const choice = await requestChoiceConfirmDialog(
+                `${m(msg("Allow {server} to run {tool}?", { server: app.server, tool: info.value.title ?? name }))}\n${JSON.stringify(args, null, 2)}`,
+                {
+                  confirmLabel: m(msg("Allow once")),
+                  ...(connectionId === undefined
+                    ? {}
+                    : { secondaryLabel: m(msg("Always allow this session")) }),
+                  signal: frameAbort.signal,
+                },
+              );
+              if (choice === "confirm") return "allow-once";
+              if (choice === "secondary") return "allow-session";
+              if (choice === "cancel") return "decline";
+              return undefined;
+            },
+          });
+          if (!auth.approved) {
             throw new McpAppHostRefusal({
-              message: mcpAppToolApprovalRefusalMessage("suppressed"),
+              message: mcpAppToolApprovalRefusalMessage(auth.reason),
             });
-          }
-          if (mcpAppToolApprovals.isPromptPending(toolTarget)) {
-            throw new McpAppHostRefusal({
-              message: mcpAppToolApprovalRefusalMessage("already-pending"),
-            });
-          }
-          const info = await readLive().toolInfo({ environmentId, input: { ...input, name } });
-          if (info._tag !== "Success") throw commandFailure(info);
-          if (!info.value.callable)
-            throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
-          if (!info.value.readOnly) {
-            const auth = await mcpAppToolApprovals.authorize({
-              target: toolTarget,
-              userInitiated,
-              prompt: async () => {
-                if (frameAbort.signal.aborted) return undefined;
-                flushSync(() => setDisplayMode("inline"));
-                const choice = await requestChoiceConfirmDialog(
-                  `${m(msg("Allow {server} to run {tool}?", { server: app.server, tool: info.value.title ?? name }))}\n${JSON.stringify(args, null, 2)}`,
-                  {
-                    confirmLabel: m(msg("Allow once")),
-                    secondaryLabel: m(msg("Always allow this session")),
-                    signal: frameAbort.signal,
-                  },
-                );
-                if (choice === "confirm") return "allow-once";
-                if (choice === "secondary") return "allow-session";
-                if (choice === "cancel") return "decline";
-                return undefined;
-              },
-            });
-            if (!auth.approved) {
-              throw new McpAppHostRefusal({
-                message: mcpAppToolApprovalRefusalMessage(auth.reason),
-              });
-            }
           }
         }
+        if (frameAbort.signal.aborted)
+          throw new McpAppHostRefusal({ message: mcpAppToolApprovalRefusalMessage("unavailable") });
         const result = await readLive().callTool({
           environmentId,
-          input: { ...input, name, arguments: args },
+          input: {
+            ...input,
+            name,
+            arguments: args,
+            ...(connectionId === undefined ? {} : { connectionId }),
+            ...(info.value.readOnly ? { readOnly: true } : {}),
+          },
         });
         if (result._tag !== "Success") throw commandFailure(result);
         return result.value;
@@ -481,8 +500,8 @@ export function McpAppFrame(props: {
 
   const toolPermissions = useSyncExternalStore(
     mcpAppToolApprovals.subscribe,
-    () => mcpAppToolApprovals.getServerSnapshot(props.environmentId, app.server),
-    () => mcpAppToolApprovals.getServerSnapshot(props.environmentId, app.server),
+    () => mcpAppToolApprovals.getServerSnapshot(permissionScope),
+    () => mcpAppToolApprovals.getServerSnapshot(permissionScope),
   );
 
   if (closed) {
@@ -597,7 +616,7 @@ export function McpAppFrame(props: {
             size="xs"
             variant="ghost"
             className="shrink-0"
-            onClick={() => mcpAppToolApprovals.resetServer(props.environmentId, app.server)}
+            onClick={() => mcpAppToolApprovals.resetServer(permissionScope)}
           >
             <T>Reset</T>
           </Button>

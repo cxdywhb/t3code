@@ -155,6 +155,6 @@ it("ignores a late action from a dialog that a newer one replaced", () => {
 
   act(() => olderClick());
 
-  expect(olderAction).toHaveBeenCalledOnce();
+  expect(olderAction).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Newer");
 });

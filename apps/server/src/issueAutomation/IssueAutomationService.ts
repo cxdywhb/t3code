@@ -1207,11 +1207,14 @@ const make = Effect.gen(function* () {
       secretText = decoder.decode(existing.value);
     }
 
-    const probe = yield* plugin.probeAndListScopes({
-      baseUrl: rawBaseUrl,
-      account: input.account.trim(),
-      secret: secretText,
-    });
+    const probe = yield* plugin.probeAndListScopes(
+      {
+        baseUrl: rawBaseUrl,
+        account: input.account.trim(),
+        secret: secretText,
+      },
+      "discover",
+    );
 
     yield* secrets
       .set(connectorSecretKey(connectorId), encoder.encode(secretText))
@@ -1251,14 +1254,13 @@ const make = Effect.gen(function* () {
     "IssueAutomationService.refreshScopes",
   )(function* (input) {
     const { connector, plugin, credentials } = yield* readConnectorCredentials(input.connectorId);
-    const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials));
+    const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials, "saved"));
     const updatedAt = yield* nowIso;
 
     const updated: IssueAutomationConnector =
       probeResult._tag === "Success"
         ? {
             ...connector,
-            baseUrl: probeResult.success.normalizedBaseUrl,
             status: "connected",
             viewerName: probeResult.success.viewerName,
             serverVersion: probeResult.success.serverVersion,

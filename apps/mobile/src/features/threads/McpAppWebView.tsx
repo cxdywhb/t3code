@@ -14,7 +14,6 @@ import {
 import {
   mcpAppToolApprovalRefusalMessage,
   mcpAppToolApprovals,
-  type McpAppToolApprovalDecision,
 } from "@t3tools/client-runtime/mcp-apps/tool-approval";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -51,6 +50,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { confirmToolApproval } from "./confirmToolApproval";
 import { MCP_APP_INLINE_MAX_HEIGHT, mcpAppInlineHeight } from "./mcpAppSizing";
 
 const ROW_BOTTOM_MARGIN = 8;
@@ -97,27 +97,6 @@ const confirm = (title: string, message: string, action: string) =>
     );
   });
 
-const confirmToolApproval = (title: string, message: string) =>
-  new Promise<McpAppToolApprovalDecision>((resolve) => {
-    let settled = false;
-    const settle = (decision: McpAppToolApprovalDecision) => {
-      if (settled) return;
-      settled = true;
-      resolve(decision);
-    };
-    Dialog.alert(
-      title,
-      message,
-      [
-        { text: m(msg("Cancel")), style: "cancel", onPress: () => settle("decline") },
-        { text: m(msg("Always allow this session")), onPress: () => settle("allow-session") },
-        { text: m(msg("Allow once")), onPress: () => settle("allow-once") },
-      ],
-      // Android dismisses earlier alerts when showing another; decline dismissed requests to release their slots.
-      { cancelable: true, onDismiss: () => settle("decline") },
-    );
-  });
-
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
 // The feed omits tool input and output; the app needs both.
@@ -143,10 +122,10 @@ export function ThreadMcpApp(props: {
   readonly width: number;
   readonly displayMode?: "inline" | "fullscreen";
   readonly onExitFullscreen?: () => void;
-  readonly height?: number;
 }) {
   const gt = useGT();
   const [height, setHeight] = useState(MCP_APP_INLINE_MAX_HEIGHT);
+  const [fullscreenHeight, setFullscreenHeight] = useState(0);
   const [documentKey, setDocumentKeyState] = useState(0);
   // The view keeps its first URL: a re-minted one would reload the app.
   const [uri, setUri] = useState<string | null>(null);
@@ -230,6 +209,15 @@ export function ThreadMcpApp(props: {
       input: { threadId: props.threadId, itemId: props.itemId, name: app.tool },
     }),
   );
+  const [liveConnection, setLiveConnection] = useState<string | null>();
+  const permissionScope = {
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+    itemId: props.itemId,
+    server: app.server,
+    connectionId:
+      liveConnection === undefined ? toolInfo.data?.connectionId : (liveConnection ?? undefined),
+  };
   const toolDefinition = toolInfo.data?.tool;
 
   const callTool = useAtomCommand(mcpAppEnvironment.callTool, { reportFailure: false });
@@ -246,6 +234,7 @@ export function ThreadMcpApp(props: {
     conversation?.hasPendingApprovals === true || conversation?.hasPendingUserInput === true;
   const live = {
     awaitingUser,
+    fullscreenHeight,
     theme,
     props,
     asset,
@@ -271,7 +260,7 @@ export function ThreadMcpApp(props: {
       previous.insets !== live.insets ||
       previous.toolDefinition !== live.toolDefinition ||
       previous.props.width !== live.props.width ||
-      previous.props.height !== live.props.height ||
+      previous.fullscreenHeight !== live.fullscreenHeight ||
       previous.props.displayMode !== live.props.displayMode
     ) {
       host?.updateHostContext();
@@ -302,7 +291,7 @@ export function ThreadMcpApp(props: {
   // are read through `latest`, never captured.
   const attachWebView = (view: WebView<object> | null) => {
     if (view === null) return;
-    let viewDetached = false;
+    const documentLifetime = new AbortController();
     const reloadInline = () => {
       setLoaded(false);
       setHeight(MCP_APP_INLINE_MAX_HEIGHT);
@@ -326,7 +315,7 @@ export function ThreadMcpApp(props: {
         containerDimensions: isFullscreen
           ? {
               width: current.props.width,
-              height: current.props.height ?? MCP_APP_INLINE_MAX_HEIGHT,
+              height: current.fullscreenHeight,
             }
           : { width: current.props.width, maxHeight: MCP_APP_INLINE_MAX_HEIGHT },
         platform: "mobile",
@@ -353,49 +342,57 @@ export function ThreadMcpApp(props: {
       callTool: async ({ name, arguments: args }) => {
         const userInitiated = userActive.current;
         const { environmentId, input } = scope();
-        const target = { environmentId, server: app.server, tool: name };
-        if (!mcpAppToolApprovals.isAllowed(target)) {
-          if (!userInitiated && mcpAppToolApprovals.isBackgroundSuppressed(target)) {
+        const info = await latest.current.toolInfo({ environmentId, input: { ...input, name } });
+        if (info._tag !== "Success") throw commandFailure(info);
+        const { connectionId } = info.value;
+        if (documentLifetime.signal.aborted)
+          throw new McpAppHostRefusal({ message: mcpAppToolApprovalRefusalMessage("unavailable") });
+        setLiveConnection(connectionId ?? null);
+        if (!info.value.callable)
+          throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
+        if (!info.value.readOnly) {
+          const auth = await mcpAppToolApprovals.authorize({
+            target: {
+              environmentId,
+              threadId: input.threadId,
+              itemId: input.itemId,
+              server: app.server,
+              connectionId,
+              tool: name,
+            },
+            userInitiated,
+            signal: documentLifetime.signal,
+            prompt: async () => {
+              return confirmToolApproval(
+                m(
+                  msg("Allow {server} to run {tool}?", {
+                    server: app.server,
+                    tool: info.value.title ?? name,
+                  }),
+                ),
+                JSON.stringify(args, null, 2),
+                documentLifetime.signal,
+                info.value.connectionId !== undefined,
+              );
+            },
+          });
+          if (!auth.approved) {
             throw new McpAppHostRefusal({
-              message: mcpAppToolApprovalRefusalMessage("suppressed"),
+              message: mcpAppToolApprovalRefusalMessage(auth.reason),
             });
-          }
-          if (mcpAppToolApprovals.isPromptPending(target)) {
-            throw new McpAppHostRefusal({
-              message: mcpAppToolApprovalRefusalMessage("already-pending"),
-            });
-          }
-          const info = await latest.current.toolInfo({ environmentId, input: { ...input, name } });
-          if (info._tag !== "Success") throw commandFailure(info);
-          if (!info.value.callable)
-            throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
-          if (!info.value.readOnly) {
-            const auth = await mcpAppToolApprovals.authorize({
-              target,
-              userInitiated,
-              prompt: async () => {
-                if (viewDetached) return undefined;
-                return confirmToolApproval(
-                  m(
-                    msg("Allow {server} to run {tool}?", {
-                      server: app.server,
-                      tool: info.value.title ?? name,
-                    }),
-                  ),
-                  JSON.stringify(args, null, 2),
-                );
-              },
-            });
-            if (!auth.approved) {
-              throw new McpAppHostRefusal({
-                message: mcpAppToolApprovalRefusalMessage(auth.reason),
-              });
-            }
           }
         }
+        if (documentLifetime.signal.aborted)
+          throw new McpAppHostRefusal({ message: mcpAppToolApprovalRefusalMessage("unavailable") });
         const result = await latest.current.callTool({
           environmentId,
-          input: { ...input, name, arguments: args },
+          input: {
+            ...input,
+            name,
+            arguments: args,
+            ...(connectionId === undefined ? {} : { connectionId }),
+            ...(info.value.readOnly ? { readOnly: true } : {}),
+          },
         });
         if (result._tag !== "Success") throw commandFailure(result);
         return result.value;
@@ -554,7 +551,7 @@ export function ThreadMcpApp(props: {
     setHost(documentHost);
     currentHost.current = documentHost;
     return () => {
-      viewDetached = true;
+      documentLifetime.abort();
       if (currentHost.current === documentHost) currentHost.current = null;
       // An unmount cannot wait: the request goes out before the view does.
       void documentHost.teardown();
@@ -564,8 +561,8 @@ export function ThreadMcpApp(props: {
 
   const toolPermissions = useSyncExternalStore(
     mcpAppToolApprovals.subscribe,
-    () => mcpAppToolApprovals.getServerSnapshot(props.environmentId, app.server),
-    () => mcpAppToolApprovals.getServerSnapshot(props.environmentId, app.server),
+    () => mcpAppToolApprovals.getServerSnapshot(permissionScope),
+    () => mcpAppToolApprovals.getServerSnapshot(permissionScope),
   );
   const hasToolPermissions =
     toolPermissions.allowedTools.length > 0 || toolPermissions.suppressedTools.length > 0;
@@ -631,7 +628,14 @@ export function ThreadMcpApp(props: {
 
   return (
     <View style={fullscreen ? { flex: 1 } : { marginBottom: ROW_BOTTOM_MARGIN }}>
-      <View style={fullscreen ? { flex: 1 } : { height }}>
+      <View
+        style={fullscreen ? { flex: 1 } : { height }}
+        onLayout={
+          fullscreen
+            ? (event) => setFullscreenHeight(Math.round(event.nativeEvent.layout.height))
+            : undefined
+        }
+      >
         {navigatedAway ? (
           <View className="flex-1 items-center justify-center">
             <Text className="text-sm text-foreground-muted">
@@ -640,7 +644,7 @@ export function ThreadMcpApp(props: {
               </T>
             </Text>
           </View>
-        ) : uri !== null && !crashed ? (
+        ) : uri !== null && !crashed && (!fullscreen || fullscreenHeight > 0) ? (
           <WebView<object>
             key={`${documentKey}:${generation}:${uri}`}
             ref={attachWebView}
@@ -705,7 +709,7 @@ export function ThreadMcpApp(props: {
             label={gt("Reset")}
             tone="text"
             size="compact"
-            onPress={() => mcpAppToolApprovals.resetServer(props.environmentId, app.server)}
+            onPress={() => mcpAppToolApprovals.resetServer(permissionScope)}
           />
         </View>
       ) : null}
