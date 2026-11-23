@@ -910,7 +910,7 @@ export function IssueAutomationPage() {
               {/* Fixed Non-Scrolling Issues Toolbar */}
               <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-2.5 sm:px-7">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="min-w-48 flex-1">
+                  <div className="min-w-32 max-w-64 flex-1">
                     <PullRequestSearchInput
                       value={keyword}
                       busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
@@ -1038,10 +1038,10 @@ export function IssueAutomationPage() {
                       popupSide="bottom"
                       popupAlign="end"
                       triggerClassName={cn(
-                        "h-8 min-w-0",
+                        "h-8 min-w-0 text-left",
                         desktopInspectorVisible
-                          ? "hidden w-44 2xl:inline-flex"
-                          : "hidden w-52 xl:inline-flex",
+                          ? "hidden w-36 2xl:inline-flex"
+                          : "hidden w-40 xl:inline-flex",
                       )}
                     />
                   ) : null}
