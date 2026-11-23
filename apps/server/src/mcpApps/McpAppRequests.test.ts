@@ -137,14 +137,18 @@ describe("McpAppRequests", () => {
   const calls: Array<{ server: string; tool: string }> = [];
   const mcpApps: ProviderAdapter.ProviderAdapterV2McpApps = {
     listTools: () =>
-      Effect.succeed([
-        { name: "refresh", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
-        {
-          name: "model_only",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: ["model"] } },
-        },
-      ]),
+      Effect.succeed({
+        connectionId: "live-connection",
+        tools: [
+          { name: "write", inputSchema: {} },
+          { name: "refresh", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+          {
+            name: "model_only",
+            inputSchema: { type: "object" },
+            _meta: { ui: { visibility: ["model"] } },
+          },
+        ],
+      }),
     callTool: (input) =>
       Effect.sync(() => {
         calls.push({ server: input.server, tool: input.tool });
@@ -165,6 +169,7 @@ describe("McpAppRequests", () => {
       assert.deepEqual(result, { content: [{ type: "text", text: "ok" }] });
       assert.deepEqual(calls.at(-1), { server: "weather", tool: "refresh" });
       assert.deepEqual(yield* requests.toolInfo({ threadId, itemId, name: "refresh" }), {
+        connectionId: "live-connection",
         callable: true,
         readOnly: true,
         tool: {
@@ -186,7 +191,35 @@ describe("McpAppRequests", () => {
           "tool-not-callable",
         );
       }
+      for (const connectionId of [undefined, "retired-connection"]) {
+        const request = { threadId, itemId, name: "write", arguments: {} };
+        assert.equal(
+          yield* reason(requests.callTool(connectionId ? { ...request, connectionId } : request)),
+          "tool-not-callable",
+        );
+      }
+      assert.equal(
+        yield* reason(
+          requests.callTool({
+            threadId,
+            itemId,
+            name: "write",
+            arguments: {},
+            connectionId: "live-connection",
+            readOnly: true,
+          }),
+        ),
+        "tool-not-callable",
+      );
       assert.equal(calls.length, before);
+      yield* requests.callTool({
+        threadId,
+        itemId,
+        name: "write",
+        arguments: {},
+        connectionId: "live-connection",
+      });
+      assert.equal(calls.length, before + 1);
     }).pipe(Effect.provide(makeLayer({ item: appItem({ t3McpApp: app }), mcpApps }))),
   );
 

@@ -21,6 +21,7 @@ import {
   GitBranchIcon,
   LayersIcon,
   MessageSquareIcon,
+  PencilIcon,
   PlayIcon,
   SendIcon,
   ShieldAlertIcon,
@@ -41,7 +42,7 @@ import {
 } from "~/components/pullRequest/PullRequestSummaryTab";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { cn } from "~/lib/utils";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button, InlineButton } from "../ui/button";
 import {
@@ -170,6 +171,7 @@ export function IssueAutomationInspectorContent({
   onManualWriteBack,
   onCancelTask,
   onOpenThread,
+  onEditConnector,
   onClose,
 }: {
   readonly environmentId: EnvironmentId;
@@ -196,6 +198,7 @@ export function IssueAutomationInspectorContent({
   readonly onManualWriteBack: (payload: ManualWriteBackPayload) => Promise<boolean>;
   readonly onCancelTask: (taskId: IssueAutomationTask["id"]) => void;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly onEditConnector?: (() => void) | undefined;
   readonly onClose: () => void;
 }) {
   const gt = useGT();
@@ -451,6 +454,14 @@ export function IssueAutomationInspectorContent({
                 <Alert variant="error">
                   <AlertTitle>{gt("Could not load issue details")}</AlertTitle>
                   <AlertDescription>{detailError}</AlertDescription>
+                  {onEditConnector ? (
+                    <AlertAction>
+                      <Button size="xs" variant="outline" onClick={onEditConnector}>
+                        <PencilIcon className="size-3.5" />
+                        <T>Edit connection</T>
+                      </Button>
+                    </AlertAction>
+                  ) : null}
                 </Alert>
               </div>
             ) : issueDetail !== null ? (

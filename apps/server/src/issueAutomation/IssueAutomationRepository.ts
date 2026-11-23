@@ -134,6 +134,10 @@ export class IssueAutomationRepository extends Context.Service<
     readonly listConnectors: (
       hasSecret: (id: IssueAutomationConnectorId) => Effect.Effect<boolean>,
     ) => Effect.Effect<ReadonlyArray<IssueAutomationConnector>, IssueAutomationRepositoryError>;
+    readonly getConnectorBaseUrl: (
+      id: IssueAutomationConnectorId,
+      platform: IssueAutomationPlatformKind,
+    ) => Effect.Effect<string | undefined, IssueAutomationRepositoryError>;
     readonly upsertConnector: (
       connector: IssueAutomationConnector,
     ) => Effect.Effect<void, IssueAutomationRepositoryError>;
@@ -272,6 +276,16 @@ const make = Effect.gen(function* () {
       );
     },
     Effect.mapError(toRepoError("listIssueAutomationConnectors", "IssueAutomationConnector")),
+  );
+
+  const getConnectorBaseUrl = Effect.fn("IssueAutomationRepository.getConnectorBaseUrl")(
+    function* (id: IssueAutomationConnectorId, platform: IssueAutomationPlatformKind) {
+      const [row] = yield* sql<Pick<ConnectorRow, "base_url">>`
+        SELECT base_url FROM issue_automation_connectors WHERE connector_id = ${id} AND platform = ${platform}
+      `;
+      return row?.base_url;
+    },
+    Effect.mapError(toRepoError("getConnectorBaseUrl", "IssueAutomationConnector")),
   );
 
   const upsertConnector: IssueAutomationRepository["Service"]["upsertConnector"] = Effect.fn(
@@ -441,6 +455,7 @@ const make = Effect.gen(function* () {
 
   return IssueAutomationRepository.of({
     listConnectors,
+    getConnectorBaseUrl,
     upsertConnector,
     deleteConnector,
     listProfiles,

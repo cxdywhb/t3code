@@ -666,6 +666,7 @@ export function PrReviewWorkstationPage() {
                               </Button>
                               <Button
                                 size="xs"
+                                variant="outline"
                                 className="w-full justify-center"
                                 onClick={() =>
                                   setLaunchModalState({
@@ -674,7 +675,7 @@ export function PrReviewWorkstationPage() {
                                   })
                                 }
                               >
-                                <ShieldCheckIcon className="size-3" />
+                                <ShieldCheckIcon className="size-3 text-primary" />
                                 <T>Fusion Review</T>
                               </Button>
                             </div>

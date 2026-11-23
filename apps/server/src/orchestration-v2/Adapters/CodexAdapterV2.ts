@@ -140,6 +140,7 @@ import {
   MCP_APP_OUTPUT_KEY,
   MCP_APP_RESOURCE_SCHEME,
 } from "@t3tools/shared/mcpApp";
+import { McpAppConnections } from "../../mcpApps/McpAppConnections.ts";
 import { snapshotMcpApp } from "../../mcpApps/McpAppSnapshot.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -2224,6 +2225,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         // Codex reports MCP startup on thread start, usually before the turn context exists.
+        const mcpAppConnections = new Map<string, McpAppConnections>();
         const mcpStartupFailures = new Map<string, Map<string, CodexMcpStartupFailure>>();
         // By server name: the shared app-server signs a server in for every thread at once.
         const mcpSignIns = new Map<string, CodexMcpSignIn>();
@@ -5190,7 +5192,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("mcpServer/startupStatus/updated", (payload) =>
           Effect.gen(function* () {
-            if (payload.threadId == null) return;
+            if (payload.threadId == null) {
+              for (const connections of mcpAppConnections.values())
+                connections.forget(payload.name);
+              return;
+            }
+            mcpAppConnections.get(payload.threadId)?.forget(payload.name);
             const failures =
               mcpStartupFailures.get(payload.threadId) ?? new Map<string, CodexMcpStartupFailure>();
             if (payload.status === "failed") {
@@ -5211,6 +5218,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("mcpServer/oauthLogin/completed", (payload) =>
           Effect.suspend(() => {
+            if (payload.success) {
+              for (const connections of mcpAppConnections.values())
+                connections.forget(payload.name);
+            }
             const signIn = mcpSignIns.get(payload.name);
             return signIn === undefined
               ? Effect.void
@@ -5483,6 +5494,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // their command items, while the shared provider session stays alive.
         yield* client.handleServerNotification("thread/closed", (payload) =>
           Effect.gen(function* () {
+            mcpAppConnections.delete(payload.threadId);
             const closing = threadClosings.get(payload.threadId);
             threadClosings.delete(payload.threadId);
             if (closing !== undefined) yield* Deferred.succeed(closing, undefined);
@@ -7942,8 +7954,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           request: Effect.Effect<A, E, R>,
         ) =>
           request.pipe(
-            Effect.catchIf(isCodexThreadNotFoundError, () =>
-              Effect.all([
+            Effect.catchIf(isCodexThreadNotFoundError, () => {
+              mcpAppConnections.delete(threadId);
+              return Effect.all([
                 readMcpSession(providerThread.appThreadId),
                 readStdioMcpServers(undefined),
               ]).pipe(
@@ -7958,8 +7971,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ),
                 Effect.andThen(request),
-              ),
-            ),
+              );
+            }),
           );
         const mcpApps: ProviderAdapter.ProviderAdapterV2McpApps = {
           listTools: Effect.fn("CodexAdapterV2.listTools")(
@@ -7979,27 +7992,43 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
               const server = response.data.find((entry) => entry.name === toolsInput.server);
-              return Object.values(server?.tools ?? {});
+              let connections = mcpAppConnections.get(threadId);
+              if (connections === undefined) {
+                connections = new McpAppConnections();
+                mcpAppConnections.set(threadId, connections);
+              }
+              const connectionId = connections.observe(toolsInput.server, [
+                toolsInput.providerThread.providerSessionId,
+                toolsInput.providerThread.id,
+                server?.httpOrigin ?? null,
+                server?.pluginId ?? null,
+                server?.serverInfo ?? null,
+                server?.runtimeStatus ?? null,
+              ]);
+              return { tools: Object.values(server?.tools ?? {}), connectionId };
             },
             Effect.mapError(mcpAppsError("Failed to list Codex MCP tools.")),
           ),
           callTool: Effect.fn("CodexAdapterV2.callTool")(
             function* (callInput) {
               const threadId = yield* getNativeThreadId(callInput.providerThread);
-              const response = yield* withLoadedThread(
-                callInput.providerThread,
+              yield* ensureInitialized;
+              if (
+                mcpAppConnections.get(threadId)?.current(callInput.server) !==
+                callInput.connectionId
+              ) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CODEX_PROVIDER,
+                  detail: "The MCP app connection changed. Request approval again.",
+                });
+              }
+              // Resuming an unloaded thread here would dispatch an approved call to a new connection.
+              const response = yield* client.request("mcpServer/tool/call", {
                 threadId,
-                ensureInitialized.pipe(
-                  Effect.andThen(
-                    client.request("mcpServer/tool/call", {
-                      threadId,
-                      server: callInput.server,
-                      tool: callInput.tool,
-                      arguments: callInput.arguments as Schema.Json,
-                    }),
-                  ),
-                ),
-              );
+                server: callInput.server,
+                tool: callInput.tool,
+                arguments: callInput.arguments as Schema.Json,
+              });
               return {
                 content: response.content,
                 ...(response.structuredContent === undefined
@@ -8421,6 +8450,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           unloadThread: Effect.fn("CodexAdapterV2.unloadThread")(
             function* (unloadInput) {
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
+              mcpAppConnections.delete(nativeThreadId);
               sessionApprovals.delete(nativeThreadId);
               // Archive also unloads, inline and without thread/closed; resumeNativeThread
               // unarchives it on the next turn.

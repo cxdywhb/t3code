@@ -717,11 +717,15 @@ export interface ProviderAdapterV2McpApps {
   readonly listTools: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
-  }) => Effect.Effect<ReadonlyArray<ProviderAdapterV2McpTool>, ProviderAdapterV2Error>;
+  }) => Effect.Effect<
+    { readonly connectionId: string; readonly tools: ReadonlyArray<ProviderAdapterV2McpTool> },
+    ProviderAdapterV2Error
+  >;
   readonly callTool: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
     readonly tool: string;
+    readonly connectionId: string;
     readonly arguments: Record<string, unknown>;
   }) => Effect.Effect<ProviderAdapterV2McpCallToolResult, ProviderAdapterV2Error>;
   readonly readResource: (input: {

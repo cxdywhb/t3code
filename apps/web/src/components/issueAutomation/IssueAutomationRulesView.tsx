@@ -79,7 +79,7 @@ export function IssueAutomationRulesView({
         }
       >
         {connectors.map((conn) => {
-          const healthy = conn.status === "connected";
+          const healthy = conn.status === "connected" && conn.hasSecret;
           return (
             <SettingsRow
               key={conn.id}

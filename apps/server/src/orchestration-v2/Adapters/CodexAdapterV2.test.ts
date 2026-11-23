@@ -9116,9 +9116,38 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ...preamble,
             {
               type: "expect_outbound",
-              label: "initial MCP resource read",
               frame: {
                 id: 3,
+                method: "mcpServerStatus/list",
+                params: {
+                  threadId: nativeThreadId,
+                  serverName: "weather",
+                  detail: "toolsAndAuthOnly",
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                id: 3,
+                result: {
+                  data: [
+                    {
+                      name: "weather",
+                      authStatus: "oAuth",
+                      tools: {},
+                      resources: [],
+                      resourceTemplates: [],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "initial MCP resource read",
+              frame: {
+                id: 4,
                 method: "mcpServer/resource/read",
                 params: {
                   threadId: nativeThreadId,
@@ -9131,7 +9160,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "emit_inbound",
               label: "native thread is unloaded",
               frame: {
-                id: 3,
+                id: 4,
                 error: {
                   code: -32600,
                   message: `thread not found: ${nativeThreadId}`,
@@ -9142,7 +9171,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "expect_outbound",
               label: "resume unloaded native thread",
               frame: {
-                id: 4,
+                id: 5,
                 method: "thread/resume",
                 params: {
                   threadId: nativeThreadId,
@@ -9155,7 +9184,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "emit_inbound",
               label: "native thread resumed",
               frame: {
-                id: 4,
+                id: 5,
                 result: {
                   thread: { id: nativeThreadId, updatedAt: 1782622450 },
                 },
@@ -9165,7 +9194,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "expect_outbound",
               label: "retry MCP resource read",
               frame: {
-                id: 5,
+                id: 6,
                 method: "mcpServer/resource/read",
                 params: {
                   threadId: nativeThreadId,
@@ -9177,20 +9206,24 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             {
               type: "emit_inbound",
               label: "MCP resource read succeeds",
-              frame: { id: 5, result: resourceResult },
+              frame: { id: 6, result: resourceResult },
             },
           ],
         });
 
         const resumeParams: Array<unknown> = [];
+        const dispatchedTools: Array<unknown> = [];
         const harness = yield* makeCodexReplayHarness(transcript, undefined, (method, params) =>
           Effect.sync(() => {
             if (method === "thread/resume") resumeParams.push(params);
+            if (method === "mcpServer/tool/call") dispatchedTools.push(params);
           }),
         );
         const mcpApps = harness.runtime.mcpApps;
         assert.ok(mcpApps, "Codex runtime should expose MCP apps");
 
+        const scope = { providerThread: harness.providerThread, server: "weather" };
+        const { connectionId } = yield* mcpApps.listTools(scope);
         const result = yield* mcpApps.readResource({
           providerThread: harness.providerThread,
           server: "weather",
@@ -9198,6 +9231,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
 
         assert.deepEqual(result, resourceResult);
+        const stale = yield* Effect.flip(
+          mcpApps.callTool({ ...scope, connectionId, tool: "refresh", arguments: {} }),
+        );
+        assert.equal(stale._tag, "ProviderAdapterProtocolError");
+        assert.deepEqual(dispatchedTools, []);
         // The shared app-server session's cwd and model belong to whichever thread opened it.
         // Codex must resume this thread with its own saved cwd, or it loads another
         // project's MCP servers and drops this project's.

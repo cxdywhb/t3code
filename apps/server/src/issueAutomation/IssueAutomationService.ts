@@ -1191,7 +1191,7 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     const plugin = yield* plugins.requirePlugin(input.platform);
     const connectorId = input.id ?? IssueAutomationConnectorId.make(NodeCrypto.randomUUID());
-    const normalizedUrl = plugin.normalizeBaseUrl(input.baseUrl);
+    const rawBaseUrl = input.baseUrl.trim();
 
     let secretText = input.secret?.trim();
     if (!secretText) {
@@ -1207,11 +1207,22 @@ const make = Effect.gen(function* () {
       secretText = decoder.decode(existing.value);
     }
 
-    const probe = yield* plugin.probeAndListScopes({
-      baseUrl: normalizedUrl,
-      account: input.account.trim(),
-      secret: secretText,
-    });
+    const savedBaseUrl = input.id
+      ? yield* repo
+          .getConnectorBaseUrl(input.id, input.platform)
+          .pipe(Effect.mapError(mapRepoErr("readConnector")))
+      : undefined;
+    const keepInstance =
+      savedBaseUrl !== undefined &&
+      plugin.normalizeBaseUrl(rawBaseUrl) === plugin.normalizeBaseUrl(savedBaseUrl);
+    const probe = yield* plugin.probeAndListScopes(
+      {
+        baseUrl: keepInstance ? savedBaseUrl : rawBaseUrl,
+        account: input.account.trim(),
+        secret: secretText,
+      },
+      keepInstance ? "saved" : "discover",
+    );
 
     yield* secrets
       .set(connectorSecretKey(connectorId), encoder.encode(secretText))
@@ -1222,7 +1233,7 @@ const make = Effect.gen(function* () {
       id: connectorId,
       platform: input.platform,
       name: input.name.trim(),
-      baseUrl: probe.normalizedBaseUrl,
+      baseUrl: keepInstance ? savedBaseUrl : probe.normalizedBaseUrl,
       account: input.account.trim(),
       hasSecret: true,
       status: "connected",
@@ -1251,14 +1262,13 @@ const make = Effect.gen(function* () {
     "IssueAutomationService.refreshScopes",
   )(function* (input) {
     const { connector, plugin, credentials } = yield* readConnectorCredentials(input.connectorId);
-    const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials));
+    const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials, "saved"));
     const updatedAt = yield* nowIso;
 
     const updated: IssueAutomationConnector =
       probeResult._tag === "Success"
         ? {
             ...connector,
-            baseUrl: probeResult.success.normalizedBaseUrl,
             status: "connected",
             viewerName: probeResult.success.viewerName,
             serverVersion: probeResult.success.serverVersion,
