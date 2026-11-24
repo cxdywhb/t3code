@@ -60,6 +60,58 @@ const base = {
 };
 
 describe("orchestration V2 wire projection", () => {
+  it.each([
+    ["只读自动诊断模式", "diagnose", "iOS"],
+    ["自动诊断与代码修复模式 (fix_worktree_review)", "repair", "未分类"],
+    ["自动诊断与代码修复模式 (auto_resolve)", "repair", "iOS"],
+  ] as const)("summarizes a legacy ZenTao opening in %s mode", (legacyMode, mode, module) => {
+    const issueUrl = "https://zentao.example.com/zentao/bug-view-20774.html";
+    const text = [
+      "# 企业问题自动诊断与解决任务：#20774 - Example issue",
+      "",
+      "## 1. 外部平台问题元数据",
+      "- **所属产品/项目**: Example Product (#81)",
+      `- **所属模块**: ${module}`,
+      `- **问题链接**: ${issueUrl}`,
+      "",
+      "## 3. 问题重现步骤与详情",
+      "Private reproduction steps",
+      "",
+      "## 5. 执行要求",
+      `当前运行模式为【${legacyMode}】：`,
+      "",
+      "## 6. 最终输出报告格式（必须严格输出以下结构化章节，系统将自动提取回写至禅道备注）",
+    ].join("\n");
+    const item = {
+      ...base,
+      type: "user_message",
+      messageId: MessageId.make("legacy-zentao"),
+      inputIntent: "turn_start",
+      createdBy: "user",
+      creationSource: "web",
+      attachments: [],
+      text,
+    } satisfies OrchestrationV2TurnItem;
+    const projected = projectTurnItemForWire(item);
+    expect(decodeTurnItem(decodeTurnItemJson(encodeTurnItemJson(projected)))).toMatchObject({
+      text,
+      context: {
+        issueAutomation: {
+          mode,
+          scopeName: "Example Product",
+          moduleName: module === "未分类" ? null : module,
+          platform: "zentao",
+          issueKey: "#20774",
+          issueUrl,
+        },
+      },
+    });
+    expect(item).not.toHaveProperty("context");
+    expect(projectTurnItemForWire(projected)).toBe(projected);
+    const incomplete = { ...item, text: text.slice(0, text.indexOf("## 5. 执行要求")) };
+    expect(projectTurnItemForWire(incomplete)).toBe(incomplete);
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,

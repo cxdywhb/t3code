@@ -23,6 +23,7 @@ import {
   type IssueAutomationGetRemoteIssueDetailInput,
   type IssueAutomationListRemoteIssuesInput,
   type IssueAutomationListRemoteIssuesResult,
+  type IssueAutomationMessageSummary,
   type IssueAutomationModelStrategy,
   type IssueAutomationPolicy,
   type IssueAutomationProfile,
@@ -512,6 +513,7 @@ const make = Effect.gen(function* () {
       readonly modelSelection: ModelSelection;
       readonly workspaceStrategy: ThreadLaunchService.ThreadLaunchWorkspaceStrategy;
       readonly prompt: string;
+      readonly summary: IssueAutomationMessageSummary;
     }) {
       const commandId = CommandId.make(`issue-automation:${NodeCrypto.randomUUID()}`);
       const messageId = MessageId.make(NodeCrypto.randomUUID());
@@ -527,6 +529,7 @@ const make = Effect.gen(function* () {
           messageId,
           text: input.prompt,
           attachments: [],
+          context: { version: 1, records: [], issueAutomation: input.summary },
         },
         createdBy: "user",
         creationSource: "web",
@@ -726,6 +729,14 @@ const make = Effect.gen(function* () {
             downloadedImagePaths: downloadedImages,
             customInstructions: policy.customPromptInstructions,
           });
+          const summary = {
+            mode: policy.actionMode === "diagnose_only" ? "diagnose" : "repair",
+            scopeName: detail.scopeName,
+            moduleName: detail.moduleName,
+            platform: connector.platform,
+            issueKey: detail.displayKey,
+            issueUrl: detail.url,
+          } satisfies IssueAutomationMessageSummary;
 
           const threadTitle = `[自动诊断] ${detail.displayKey} ${detail.title.slice(0, 60)}`;
           let primaryOutcome = yield* Effect.result(
@@ -735,6 +746,7 @@ const make = Effect.gen(function* () {
               modelSelection: chosenPrimaryModel,
               workspaceStrategy,
               prompt,
+              summary,
             }),
           );
 
@@ -774,6 +786,7 @@ const make = Effect.gen(function* () {
                 modelSelection: models.fallbackModel,
                 workspaceStrategy: fallbackWorkspace,
                 prompt,
+                summary,
               }),
             );
           }
@@ -861,6 +874,7 @@ const make = Effect.gen(function* () {
                   detail,
                   diagnosisReport: solved.reportText,
                 }),
+                summary: { ...summary, mode: "review" },
               }),
             );
 

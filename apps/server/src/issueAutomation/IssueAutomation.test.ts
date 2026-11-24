@@ -171,6 +171,16 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
     const finishPoll = yield* Deferred.make<void>();
     const cancellableTaskStarted = yield* Deferred.make<void>();
     const outbound: Array<{ readonly url: string; readonly body: unknown }> = [];
+    const startedMessages: ThreadLaunchService.ThreadLaunchInitialMessage[] = [];
+    const project: OrchestrationProjectShell = {
+      id: ProjectId.make("proj-example"),
+      title: "example-app",
+      workspaceRoot: "/repos/example-app",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
     const webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook";
     const baseUrl = "https://zentao.example.com/zentao";
     const scope = { id: "5", name: "好轻 App" };
@@ -194,7 +204,7 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       createdAt: "2026-11-24T00:00:00.000Z",
       updatedAt: "2026-11-24T00:00:00.000Z",
       stepsHtml: "",
-      stepsMarkdown: "",
+      stepsMarkdown: "打开体重记录页面，查看最新记录。",
       imageUrls: [],
       openedBuild: "",
       availableBuilds: [],
@@ -263,10 +273,22 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issue-feishu-" })),
         Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
       ),
-      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([]) }),
+      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([project]) }),
       Layer.mock(GitWorkflow.GitWorkflowService)({}),
       Layer.mock(ThreadIssueService.ThreadIssueService)({}),
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        launch: (input) => {
+          if (input.initialMessage) startedMessages.push(input.initialMessage);
+          return Effect.fail(
+            new ThreadLaunchService.ThreadLaunchError({
+              operation: "dispatch-message",
+              commandId: input.commandId,
+              projectId: input.projectId,
+              cause: "provider unavailable",
+            }),
+          );
+        },
+      }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
       FetchHttpClient.layer.pipe(
         Layer.provide(
@@ -293,7 +315,7 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
         scopeId: scope.id,
         scopeName: scope.name,
         repositories: {
-          primaryProjectId: ProjectId.make("missing-project"),
+          primaryProjectId: project.id,
           linkedProjectIds: [],
           moduleMappings: [],
         },
@@ -405,6 +427,19 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
           })
           .pipe(Effect.map(({ tasks }) => tasks[0]!.id));
       yield* whenSettled(yield* run("2846"));
+      expect(startedMessages.at(-1)).toMatchObject({
+        text: expect.stringContaining(detail.stepsMarkdown),
+        context: {
+          issueAutomation: {
+            mode: "diagnose",
+            scopeName: scope.name,
+            moduleName: null,
+            platform,
+            issueKey: detail.displayKey,
+            issueUrl: detail.url,
+          },
+        },
+      });
       expect(outbound).toEqual([
         {
           url: webhook,

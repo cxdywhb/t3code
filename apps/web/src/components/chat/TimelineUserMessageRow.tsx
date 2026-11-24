@@ -493,7 +493,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const unknownAttachments = (row.message.attachments ?? []).filter(
     (attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment),
   );
-  const userMessage = resolveUserMessagePresentation(row.message);
+  const userMessage = resolveUserMessagePresentation(row.message, m);
+  const { hasIssueSummary } = userMessage;
   // Messages from other agents fold to one line so the user's own messages stay easy to find.
   const folded = userMessage.attribution === "agent";
   const [expanded, setExpanded] = useState(false);
@@ -873,7 +874,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </TooltipPopup>
       </Tooltip>
       <div className={cn("flex items-center gap-0.5", floatActions && "flex-wrap justify-end")}>
-        {typeof revertTurnCount === "number" && (
+        {!hasIssueSummary && typeof revertTurnCount === "number" && (
           <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
         )}
         {copyText && (
@@ -1102,7 +1103,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                   renderContextReference={renderContextReference}
                   skills={ctx.skills}
                   markdownCwd={ctx.markdownCwd}
-                  collapsible={!folded}
+                  collapsible={!folded && !hasIssueSummary}
                 />
               </div>
             )}

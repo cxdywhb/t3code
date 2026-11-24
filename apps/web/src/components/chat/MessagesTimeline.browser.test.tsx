@@ -530,16 +530,45 @@ describe("MessagesTimeline messages", () => {
     setup();
     const lines = (count: number) =>
       Array.from({ length: count }, (_, index) => `Line ${index}`).join("\n");
+    const issueUrl = "https://zentao.example.com/bug-view-20774.html";
     await using screen = await renderTimeline([
       message(lines(12), {}, "medium"),
       message(lines(60), {}, "long"),
+      message(
+        [
+          "# 企业问题自动诊断与解决任务：#20774 - Example issue",
+          "",
+          "## 1. 外部平台问题元数据",
+          "- **所属产品/项目**: Example Product (#81)",
+          "- **所属模块**: iOS",
+          `- **问题链接**: ${issueUrl}`,
+          "",
+          "Internal diagnosis instructions",
+          lines(60),
+          "",
+          "## 5. 执行要求",
+          "当前运行模式为【只读自动诊断模式】：",
+          "",
+          "## 6. 最终输出报告格式",
+        ].join("\n"),
+        {
+          createdBy: "user",
+          creationSource: "web",
+          inputIntent: "turn_start",
+        },
+        "issue-summary",
+      ),
     ]);
     await vi.waitFor(() => expect(screen.buttons("Show full message")).toHaveLength(1));
-    const [medium, long] = [
+    const [medium, long, summary] = [
       ...screen.container.querySelectorAll<HTMLElement>("[data-user-message-body]"),
     ];
     expect(medium!.dataset.userMessageCollapsible).toBe("false");
     expect(medium!.textContent).toContain("Line 11");
+    expect(summary!.textContent).toContain("Diagnose only · No code changes");
+    expect(summary!.textContent).toContain("Example Product / iOS");
+    expect(summary!.querySelector("a")?.href).toBe(issueUrl);
+    expect(screen.text()).not.toContain("Internal diagnosis instructions");
     const foldedHeight = long!.offsetHeight;
     await click(screen.button("Show full message"));
     expect(long!.offsetHeight).toBeGreaterThanOrEqual(foldedHeight * 2);
