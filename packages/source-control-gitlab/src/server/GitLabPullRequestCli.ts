@@ -1207,7 +1207,10 @@ export const make = Effect.gen(function* () {
           ),
         );
 
-        if (response.status === 401 || response.status === 403) {
+        const isTokenScopeFailure =
+          response.status === 403 &&
+          /\b(?:insufficient_scope|invalid_token|expired_token)\b/iu.test(body);
+        if (response.status === 401 || isTokenScopeFailure) {
           return yield* new GitLabCli.GitLabCliAuthenticationError({
             operation: "execute",
             command: "glab",
@@ -3515,7 +3518,29 @@ export const make = Effect.gen(function* () {
             ? {}
             : // @effect-diagnostics-next-line globalJsonInEffect:off
               { stdin: JSON.stringify({ sha: input.expectedHeadSha }) }),
-        });
+        }).pipe(
+          Effect.catchTags({
+            GitLabCliAuthenticationError: (authError) =>
+              // GitLab's REST /approve answers HTTP 401 when the author tries to self-approve or
+              // the viewer has already approved; confirm the account before blaming the token.
+              viewerUsername(input).pipe(
+                Effect.matchEffect({
+                  onFailure: () => Effect.fail(authError),
+                  onSuccess: () =>
+                    Effect.fail(
+                      new GitLabMutationRefusedError({
+                        command: "glab",
+                        cwd: input.cwd,
+                        operation: "submitReview",
+                        reasons: [
+                          "GitLab refused approval (authors cannot approve their own merge request, or it is already approved)",
+                        ],
+                      }),
+                    ),
+                }),
+              ),
+          }),
+        );
       }
     }),
 

@@ -4,17 +4,30 @@ import {
   PrReviewTaskId,
   ProjectId,
   ProviderInstanceId,
+  PullRequestDetail,
+  PullRequestOperationError,
   SourceControlProviderKind,
   ThreadId,
   TrimmedNonEmptyString,
   type PrReviewPreset,
   type PrReviewTask,
+  type PullRequestSubmitReviewInput,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
+import * as ServerConfig from "../config.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import {
   FUSION_BOT_SIGNATURE,
   buildPrContextDocument,
@@ -26,6 +39,7 @@ import {
   parseSynthesizerOutput,
 } from "./PrReviewPrompts.ts";
 import * as PrReviewRepository from "./PrReviewRepository.ts";
+import * as PrReviewService from "./PrReviewService.ts";
 
 const SAMPLE_DETAIL: Parameters<typeof buildReviewerMessage>[0]["detail"] = {
   provider: SourceControlProviderKind.make("gitlab"),
@@ -343,4 +357,236 @@ it.effect(
       yield* repo.deletePreset(presetA.id);
       assert.strictEqual((yield* repo.listPresets).length, 1);
     }).pipe(Effect.provide(repoLayer)),
+);
+
+it.effect(
+  "writes back formal reviews with resolved diff positions, downgrades unsupported GitLab request-changes and self-reviews without duplicate notes",
+  () =>
+    Effect.gen(function* () {
+      const submittedReviews: PullRequestSubmitReviewInput[] = [];
+      let viewerLogin = "reviewer";
+
+      const samplePatch = [
+        "diff --git a/src/old.ts b/src/new.ts",
+        "--- a/src/old.ts",
+        "+++ b/src/new.ts",
+        "@@ -10,3 +10,4 @@",
+        " const kept = 1;",
+        "+const added = 2;",
+        " const trailing = 3;",
+      ].join("\n");
+
+      const decodeDetail = Schema.decodeUnknownEffect(PullRequestDetail);
+      const prMock = Layer.mock(PullRequestService.PullRequestService)({
+        detail: () =>
+          decodeDetail({
+            ...SAMPLE_DETAIL,
+            projectId: "cloud:gitlab.example.test",
+            projectTitle: "platform/core-api",
+            workspaceRoot: "/tmp",
+            capabilities: {
+              diff: true,
+              comment: true,
+              actions: [],
+              mergeMethods: ["merge"],
+              deleteBranch: false,
+              updateMethods: [],
+              search: true,
+              reactions: true,
+              mentions: true,
+              referenceSigils: ["#", "!"],
+              viewedFiles: "environment",
+              review: {
+                inlineComment: true,
+                rangeComment: true,
+                reply: true,
+                resolve: true,
+                verdicts: ["comment", "approve", "request-changes"],
+              },
+              reviewers: { request: true, listCandidates: true, searchCandidates: true },
+              labels: true,
+            },
+            mergeability: "mergeable",
+            viewerPermissions: {
+              actions: [],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+              requestReviewers: true,
+              maintainerEdits: false,
+              labels: true,
+            },
+            mergedAt: null,
+            closedAt: null,
+            createdAt: "2026-11-21T10:00:00.000Z",
+            updatedAt: "2026-11-21T10:05:00.000Z",
+            reviewers: [],
+            labels: [],
+            checks: [],
+            mergeCapabilities: {
+              merge: true,
+              squash: true,
+              rebase: true,
+            },
+            viewer: viewerLogin,
+          }).pipe(Effect.orDie),
+        diff: () => Effect.succeed({ patch: samplePatch, truncated: false, nextCursor: null }),
+        submitReview: (input) => {
+          submittedReviews.push(input);
+          if (input.verdict === "request-changes") {
+            return Effect.fail(
+              new PullRequestOperationError({
+                operation: "submitReview",
+                detail:
+                  "GitLab refused it: Field 'mergeRequestRequestChanges' doesn't exist on type 'Mutation'",
+              }),
+            );
+          }
+          if (input.verdict === "approve") {
+            return Effect.fail(
+              new PullRequestOperationError({
+                operation: "submitReview",
+                detail: "GitLab refused approval",
+              }),
+            );
+          }
+          return Effect.void;
+        },
+        comment: () => Effect.void,
+      });
+
+      const baseTask: PrReviewTask = {
+        id: PrReviewTaskId.make("task-wb"),
+        presetId: null,
+        presetName: null,
+        provider: SourceControlProviderKind.make("gitlab"),
+        host: TrimmedNonEmptyString.make("gitlab.example.test"),
+        projectId: ProjectId.make("cloud:gitlab.example.test"),
+        projectTitle: "platform/core-api",
+        repository: TrimmedNonEmptyString.make("platform/core-api"),
+        prNumber: PositiveInt.make(42),
+        prTitle: "feat(auth): harden token rotation lock",
+        prUrl: "https://gitlab.example.test/platform/core-api/-/merge_requests/42",
+        prAuthor: "alex",
+        headBranch: "feat/token-lock",
+        baseBranch: "main",
+        headSha: "abcdef123456",
+        mode: "multi_model_fusion",
+        stage: "completed",
+        boundSkillNames: [],
+        reviewerRuns: [],
+        synthesizerModelLabel: "Claude Opus",
+        synthesisThreadId: null,
+        verdict: "request-changes",
+        summaryMarkdown: "## 审查报告\n存在问题。",
+        findings: [
+          {
+            id: TrimmedNonEmptyString.make("f-context"),
+            severity: "major",
+            title: "Context line issue",
+            filePath: "src/new.ts",
+            line: PositiveInt.make(10),
+            description: "Context line in renamed file.",
+            suggestion: null,
+            raisedByModels: ["Claude Opus"],
+          },
+          {
+            id: TrimmedNonEmptyString.make("f-added"),
+            severity: "blocker",
+            title: "Added line issue",
+            filePath: "b/src/new.ts",
+            line: PositiveInt.make(11),
+            description: "Added line with b/ prefix.",
+            suggestion: null,
+            raisedByModels: ["Claude Opus"],
+          },
+          {
+            id: TrimmedNonEmptyString.make("f-outside"),
+            severity: "minor",
+            title: "Out of hunk line",
+            filePath: "src/new.ts",
+            line: PositiveInt.make(99),
+            description: "Outside diff hunk.",
+            suggestion: null,
+            raisedByModels: ["Claude Opus"],
+          },
+        ],
+        commentSyncedAt: null,
+        reviewSyncedAt: null,
+        lastError: null,
+        steps: [],
+        createdAt: "2026-11-21T11:01:00.000Z",
+        updatedAt: "2026-11-21T11:01:00.000Z",
+        completedAt: "2026-11-21T11:05:00.000Z",
+      };
+
+      const baseLayer = Layer.mergeAll(PrReviewRepository.layer, PrReviewService.layer).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            SqlitePersistence.layerMemory,
+            prMock,
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-pr-review-test-" }),
+            Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([]) }),
+            Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+              namedProjectsRoot: "/tmp/projects",
+            }),
+            Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+            Layer.mock(Orchestrator.OrchestratorV2)({}),
+          ),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const repo = yield* PrReviewRepository.PrReviewRepository;
+        const service = yield* PrReviewService.PrReviewService;
+        yield* repo.upsertTask(baseTask);
+
+        // 1. GitLab < 18.9 / CE refuses request-changes -> falls back to comment keeping in-hunk inline comments!
+        const res1 = yield* service.writeBack({
+          taskId: baseTask.id,
+          kind: "review",
+          verdict: "request-changes",
+          body: TrimmedNonEmptyString.make("Formal review summary"),
+          inlineFindingIds: [
+            TrimmedNonEmptyString.make("f-context"),
+            TrimmedNonEmptyString.make("f-added"),
+            TrimmedNonEmptyString.make("f-outside"),
+          ],
+        });
+        assert.isTrue(res1.ok);
+        const commentPass = submittedReviews.find((r) => r.verdict === "comment");
+        assert.isDefined(commentPass);
+        assert.strictEqual(commentPass?.comments.length, 2);
+        assert.deepStrictEqual(commentPass?.comments[0]?.oldPath, "src/old.ts");
+        assert.deepStrictEqual(commentPass?.comments[0]?.position, {
+          kind: "context",
+          oldLine: 10,
+          newLine: 10,
+          side: "right",
+        });
+        assert.deepStrictEqual(commentPass?.comments[1]?.path, "src/new.ts");
+        assert.deepStrictEqual(commentPass?.comments[1]?.position, {
+          kind: "added",
+          newLine: 11,
+        });
+
+        // 2. Self-review with approve verdict -> downgrades to comment before posting, zero duplicate bodies!
+        submittedReviews.length = 0;
+        viewerLogin = "alex";
+        const res2 = yield* service.writeBack({
+          taskId: baseTask.id,
+          kind: "review",
+          verdict: "approve",
+          body: TrimmedNonEmptyString.make("Self review summary"),
+          inlineFindingIds: [],
+        });
+        assert.isTrue(res2.ok);
+        const nonEmptyBodies = submittedReviews.filter((r) => r.body.trim().length > 0);
+        assert.strictEqual(nonEmptyBodies.length, 1);
+        assert.strictEqual(nonEmptyBodies[0]?.verdict, "comment");
+      }).pipe(Effect.provide(baseLayer));
+    }).pipe(Effect.scoped),
 );

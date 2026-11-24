@@ -1907,6 +1907,67 @@ layer("GitLabPullRequestCli.layer", (it) => {
       expect(requestChanges.variables).toEqual(target);
       assert.strictEqual(error._tag, "GitLabMutationRefusedError");
       expect(error.detail).toBe("GitLab refused it: Merge request is locked");
+
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "bilal" }))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(JSON.stringify({ data: { mergeRequestSetReviewers: { errors: [] } } })),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              JSON.stringify({
+                errors: [
+                  {
+                    message: "Field 'mergeRequestRequestChanges' doesn't exist on type 'Mutation'",
+                  },
+                ],
+              }),
+            ),
+          ),
+        );
+
+      const legacyError = yield* Effect.flip(
+        cli.submitReview({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          verdict: "request-changes",
+          body: "Needs work",
+          comments: [],
+        }),
+      );
+
+      assert.strictEqual(legacyError._tag, "GitLabMutationRefusedError");
+      expect(legacyError.detail).toContain("mergeRequestRequestChanges");
+
+      // REST /approve answers HTTP 401 on self-approval or duplicate approval; an authenticated viewer reports refusal, not unauthenticated CLI.
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.fail(
+            new GitLabCli.GitLabCliAuthenticationError({
+              operation: "execute",
+              command: "glab",
+              cwd: "/w",
+              cause: new Error("GitLab HTTP 401: Unauthorized"),
+            }),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "bilal" }))));
+
+      const approveRefused = yield* Effect.flip(
+        cli.submitReview({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          verdict: "approve",
+          body: "",
+          comments: [],
+        }),
+      );
+      assert.strictEqual(approveRefused._tag, "GitLabMutationRefusedError");
     }),
   );
 

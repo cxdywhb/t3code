@@ -1923,26 +1923,45 @@ export function decodeGraphqlListSupportJson(raw: string): Result.Result<boolean
   return Result.succeed(major > 17 || (major === 17 && minor >= 9));
 }
 
-const decodeMutationPayloads = decodeJsonResult(
-  Schema.Struct({
-    data: Schema.Record(
-      Schema.String,
-      Schema.NullOr(
-        Schema.Struct({ errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))) }),
-      ),
-    ),
-  }),
+const RawGraphqlMutationErrorSchema = Schema.Struct({
+  message: TrimmedNonEmptyString,
+});
+
+const RawMutationPayloadRecord = Schema.Record(
+  Schema.String,
+  Schema.NullOr(
+    Schema.Struct({ errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))) }),
+  ),
 );
 
-/** GitLab answers a refused mutation with HTTP 200 and the reasons in each payload's `errors`. */
+const decodeMutationPayloads = decodeJsonResult(
+  Schema.Union([
+    Schema.Struct({
+      data: RawMutationPayloadRecord,
+      errors: Schema.optional(Schema.NullOr(Schema.Array(RawGraphqlMutationErrorSchema))),
+    }),
+    Schema.Struct({
+      data: Schema.optional(Schema.NullOr(RawMutationPayloadRecord)),
+      errors: Schema.NonEmptyArray(RawGraphqlMutationErrorSchema),
+    }),
+  ]),
+);
+
+/**
+ * GitLab answers a refused mutation with HTTP 200 and the reasons in each payload's `errors` or,
+ * when the schema or authorization layer rejects it before running the field, in top-level
+ * GraphQL `errors` (with `data` omitted or nulled).
+ */
 export function decodeMutationErrorsJson(
   raw: string,
 ): Result.Result<ReadonlyArray<string>, DecodeFailure> {
   const decoded = decodeMutationPayloads(raw);
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
-  return Result.succeed(
-    Object.values(decoded.success.data).flatMap((payload) => payload?.errors ?? []),
+  const topLevel = (decoded.success.errors ?? []).map((entry) => entry.message);
+  const payloadErrors = Object.values(decoded.success.data ?? {}).flatMap(
+    (payload) => payload?.errors?.map((reason) => reason.trim()).filter(Boolean) ?? [],
   );
+  return Result.succeed([...topLevel, ...payloadErrors]);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { reviewPositionInPatch } from "./pullRequestReviewPosition.ts";
+import { locateReviewCommentInPatch, reviewPositionInPatch } from "./pullRequestReviewPosition.ts";
 
 const patch = [
   "diff --git a/src/a.ts b/src/a.ts",
@@ -51,5 +51,35 @@ describe("reviewPositionInPatch", () => {
     ["a line of a file the patch lacks", "src/b.ts", 11, "new", null],
   ] as const)("places %s", (_name, path, line, side, expected) => {
     expect(reviewPositionInPatch(patch, path, line, side)).toEqual(expected);
+  });
+});
+
+describe("locateReviewCommentInPatch", () => {
+  const renamedPatch = [
+    "diff --git a/src/oldName.ts b/src/newName.ts",
+    "--- a/src/oldName.ts",
+    "+++ b/src/newName.ts",
+    "@@ -5,2 +8,3 @@",
+    " unchanged",
+    "+inserted",
+    " after",
+  ].join("\n");
+
+  it("normalizes paths, carries oldPath on renames, resolves context counters, and drops out-of-hunk lines", () => {
+    expect(locateReviewCommentInPatch(renamedPatch, "./src/newName.ts", 8)).toEqual({
+      path: "src/newName.ts",
+      oldPath: "src/oldName.ts",
+      position: { kind: "context", oldLine: 5, newLine: 8, side: "right" },
+    });
+    expect(locateReviewCommentInPatch(renamedPatch, "`b/src/newName.ts`", 9)).toEqual({
+      path: "src/newName.ts",
+      oldPath: "src/oldName.ts",
+      position: { kind: "added", newLine: 9 },
+    });
+    expect(locateReviewCommentInPatch(patch, "gone.ts", 1)).toEqual({
+      path: "gone.ts",
+      position: { kind: "deleted", oldLine: 1 },
+    });
+    expect(locateReviewCommentInPatch(renamedPatch, "src/newName.ts", 50)).toBeNull();
   });
 });

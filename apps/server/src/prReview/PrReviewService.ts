@@ -31,8 +31,11 @@ import {
   type PrReviewWriteBackMode,
   type PrReviewWriteBackResult,
   type ProjectId,
+  type PullRequestOperationError,
   type PullRequestRef,
   type PullRequestReviewCommentDraft,
+  type PullRequestReviewPosition,
+  type PullRequestReviewVerdict,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -55,6 +58,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import { locateReviewCommentInPatch } from "../pullRequest/pullRequestReviewPosition.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
   buildPrContextDocument,
@@ -74,6 +78,17 @@ const isPrReviewError = Schema.is(PrReviewError);
 
 function formatModelLabel(selection: ModelSelection): string {
   return `${selection.instanceId}:${selection.model}`;
+}
+
+function reviewPositionKey(path: string, position: PullRequestReviewPosition): string {
+  switch (position.kind) {
+    case "added":
+      return `${path}\0added:${position.newLine}`;
+    case "deleted":
+      return `${path}\0deleted:${position.oldLine}`;
+    case "context":
+      return `${path}\0context:${position.side}:${position.oldLine}:${position.newLine}`;
+  }
 }
 
 function isTerminalStage(stage: PrReviewStage): boolean {
@@ -445,10 +460,39 @@ const make = Effect.gen(function* () {
       return syncedAt;
     }
 
-    const chosenVerdict = input.verdict ?? input.task.verdict ?? "comment";
+    const chosenVerdict: PullRequestReviewVerdict =
+      input.verdict ?? input.task.verdict ?? "comment";
     const selectedIds = new Set(input.inlineFindingIds ?? []);
-    const inlineComments: PullRequestReviewCommentDraft[] = input.task.findings.flatMap((f) => {
-      if (!selectedIds.has(f.id) || !f.filePath || f.line === null || f.line <= 0) return [];
+    const readCachedPatch = Effect.sync(() => {
+      try {
+        const diffFilePath = NodePath.join(
+          config.stateDir,
+          "pr-review-assets",
+          input.task.id,
+          "diff.patch",
+        );
+        return NodeFS.existsSync(diffFilePath) ? NodeFS.readFileSync(diffFilePath, "utf8") : "";
+      } catch {
+        return "";
+      }
+    });
+
+    const [detail, patch] = yield* Effect.all(
+      [
+        pullRequests.detail(ref).pipe(Effect.orElseSucceed(() => null)),
+        selectedIds.size > 0
+          ? fetchCompletePatch(ref).pipe(
+              Effect.catch(() => readCachedPatch),
+              Effect.orElseSucceed(() => ""),
+            )
+          : Effect.succeed(""),
+      ],
+      { concurrency: 2 },
+    );
+
+    const inlineByPositionKey = new Map<string, PullRequestReviewCommentDraft>();
+    for (const f of input.task.findings) {
+      if (!selectedIds.has(f.id) || !f.filePath || f.line === null || f.line <= 0) continue;
       const bodyLines = [
         `**[${f.severity.toUpperCase()}] ${f.title}**`,
         "",
@@ -456,40 +500,183 @@ const make = Effect.gen(function* () {
         ...(f.suggestion ? ["", "**建议修改：**", f.suggestion] : []),
         ...(f.raisedByModels.length > 0 ? ["", `_命中模型：${f.raisedByModels.join(", ")}_`] : []),
       ];
-      return [
-        {
-          path: f.filePath,
-          body: bodyLines.join("\n"),
-          position: {
-            kind: "added" as const,
-            newLine: PositiveInt.make(f.line),
-          },
-        },
-      ];
-    });
+      const commentBody = bodyLines.join("\n");
 
-    const submit = (comments: ReadonlyArray<PullRequestReviewCommentDraft>) =>
+      let draft: PullRequestReviewCommentDraft | null = null;
+      if (patch.length > 0) {
+        const located = locateReviewCommentInPatch(patch, f.filePath, f.line);
+        if (located !== null) {
+          draft = {
+            path: located.path,
+            ...(located.oldPath === undefined ? {} : { oldPath: located.oldPath }),
+            body: commentBody,
+            position: located.position,
+          };
+        }
+      } else {
+        const cleanedPath = f.filePath
+          .trim()
+          .replace(/^[`"']+|[`"']+$/gu, "")
+          .replace(/^(?:\.\/+|\/+|(?:a|b)\/)/u, "");
+        if (cleanedPath.length > 0) {
+          draft = {
+            path: cleanedPath,
+            body: commentBody,
+            position: {
+              kind: "added",
+              newLine: PositiveInt.make(f.line),
+            },
+          };
+        }
+      }
+      if (draft === null) continue;
+
+      const posKey = reviewPositionKey(draft.path, draft.position);
+      const existing = inlineByPositionKey.get(posKey);
+      inlineByPositionKey.set(
+        posKey,
+        existing === undefined
+          ? draft
+          : { ...existing, body: `${existing.body}\n\n---\n\n${draft.body}` },
+      );
+    }
+    const inlineComments = [...inlineByPositionKey.values()];
+
+    const authorLogin = detail?.author?.login ?? input.task.prAuthor;
+    const isSelfReview =
+      Boolean(detail?.viewer) &&
+      Boolean(authorLogin) &&
+      detail!.viewer!.toLowerCase() === authorLogin!.toLowerCase();
+    const isNonOpen = detail !== null && detail.state !== "open";
+    // Hosts refuse approve / request-changes on self-authored or closed/merged PRs/MRs.
+    let effectiveVerdict: PullRequestReviewVerdict =
+      chosenVerdict !== "comment" && (isSelfReview || isNonOpen) ? "comment" : chosenVerdict;
+    let downgradedNote: string | null =
+      effectiveVerdict !== chosenVerdict
+        ? isSelfReview
+          ? "当前登录账号为 PR/MR 作者，已自动以评论模式回写评审意见"
+          : "目标 PR/MR 已关闭或合并，已自动以评论模式回写评审意见"
+        : null;
+
+    const isRecoverableReviewError = (
+      err: PullRequestService.PullRequestError,
+    ): err is PullRequestOperationError =>
+      err._tag === "PullRequestOperationError" && err.reason !== "not-found";
+
+    const submit = (
+      verdict: PullRequestReviewVerdict,
+      comments: ReadonlyArray<PullRequestReviewCommentDraft>,
+      body: string = input.body,
+    ) =>
       pullRequests.submitReview({
         ...ref,
-        verdict: chosenVerdict,
-        body: input.body,
+        verdict,
+        body,
         comments,
       });
 
-    yield* submit(inlineComments).pipe(
-      // If a host rejects an inline line position outside the diff hunk, fall back to summary review.
-      Effect.catchIf(
-        () => inlineComments.length > 0,
-        () => submit([]),
-      ),
-      Effect.mapError(mapErr("writeBackReview")),
-    );
+    const submitAsCommentWithFallback = (comments: ReadonlyArray<PullRequestReviewCommentDraft>) =>
+      submit("comment", comments).pipe(
+        Effect.catchIf(
+          (err) => comments.length > 0 && isRecoverableReviewError(err),
+          () => submit("comment", []),
+        ),
+        Effect.catchIf(isRecoverableReviewError, () =>
+          pullRequests.comment({
+            ...ref,
+            body: input.body,
+          }),
+        ),
+      );
+
+    const providerKind = detail?.provider ?? input.task.provider;
+    if (providerKind === "gitlab") {
+      // GitLab has no atomic review endpoint: discussions, summary note, and verdict run as
+      // separate requests. Avoid ever re-running summary/discussion writes when a verdict fails.
+      if (effectiveVerdict === "approve") {
+        yield* submitAsCommentWithFallback(inlineComments).pipe(
+          Effect.mapError(mapErr("writeBackReview")),
+        );
+        yield* submit("approve", [], "").pipe(
+          Effect.catchIf(isRecoverableReviewError, () =>
+            Effect.sync(() => {
+              effectiveVerdict = "comment";
+              downgradedNote = "远端拒绝变更 Approve 状态，已保留回写的评审报告与行内批注";
+            }),
+          ),
+          Effect.mapError(mapErr("writeBackReview")),
+        );
+      } else if (effectiveVerdict === "request-changes") {
+        yield* submit("request-changes", inlineComments).pipe(
+          Effect.catchIf(isRecoverableReviewError, (err) => {
+            const verdictRefusedBeforeComments =
+              err._tag === "PullRequestOperationError" && err.detail.includes("GitLab refused it:");
+            effectiveVerdict = "comment";
+            downgradedNote =
+              "当前 GitLab 实例或权限不支持 Request Changes 状态，已自动降级为评审评论回写";
+            return submitAsCommentWithFallback(verdictRefusedBeforeComments ? inlineComments : []);
+          }),
+          Effect.mapError(mapErr("writeBackReview")),
+        );
+      } else {
+        yield* submitAsCommentWithFallback(inlineComments).pipe(
+          Effect.mapError(mapErr("writeBackReview")),
+        );
+      }
+    } else {
+      yield* submit(effectiveVerdict, inlineComments).pipe(
+        Effect.catchIf(
+          (err) => effectiveVerdict !== "comment" && isRecoverableReviewError(err),
+          () =>
+            Effect.sync(() => {
+              effectiveVerdict = "comment";
+              downgradedNote = `远端拒绝 ${chosenVerdict} 状态，已自动降级为评审评论回写`;
+            }).pipe(Effect.andThen(submit("comment", inlineComments))),
+        ),
+        Effect.catchIf(
+          (err) => inlineComments.length > 0 && isRecoverableReviewError(err),
+          () =>
+            submit(effectiveVerdict, []).pipe(
+              Effect.catchIf(
+                (err2) => effectiveVerdict !== "comment" && isRecoverableReviewError(err2),
+                () =>
+                  Effect.sync(() => {
+                    effectiveVerdict = "comment";
+                    downgradedNote = `远端拒绝 ${chosenVerdict} 状态与部分行号定位，已降级为汇总评论回写`;
+                  }).pipe(Effect.andThen(submit("comment", []))),
+              ),
+            ),
+        ),
+        Effect.catchIf(isRecoverableReviewError, () =>
+          Effect.sync(() => {
+            effectiveVerdict = "comment";
+          }).pipe(
+            Effect.andThen(
+              pullRequests.comment({
+                ...ref,
+                body: input.body,
+              }),
+            ),
+          ),
+        ),
+        Effect.mapError(mapErr("writeBackReview")),
+      );
+    }
 
     const syncedAt = yield* nowIso;
     yield* updateTask(
       input.task,
-      { reviewSyncedAt: syncedAt },
-      { message: `已作为正式代码评审（${chosenVerdict}）回写至远端仓库` },
+      {
+        reviewSyncedAt: syncedAt,
+        ...(effectiveVerdict === "comment" && chosenVerdict !== "comment"
+          ? { commentSyncedAt: syncedAt }
+          : {}),
+      },
+      {
+        message: downgradedNote
+          ? `已回写至远端仓库（${downgradedNote}）`
+          : `已作为正式代码评审（${effectiveVerdict}）回写至远端仓库`,
+      },
     );
     return syncedAt;
   });
