@@ -157,6 +157,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.issueAutomationGetState]: AuthOrchestrationReadScope,
   [WS_METHODS.issueAutomationSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.issueAutomationListRemoteIssues]: AuthOrchestrationReadScope,
+  [WS_METHODS.issueAutomationScanProfileIssues]: AuthOrchestrationReadScope,
   [WS_METHODS.issueAutomationGetRemoteIssueDetail]: AuthOrchestrationReadScope,
   [WS_METHODS.issueAutomationSaveConnector]: AuthSettingsWriteScope,
   [WS_METHODS.issueAutomationDeleteConnector]: AuthSettingsWriteScope,

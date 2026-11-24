@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import { request } from "@t3tools/client-runtime/rpc";
 import {
   createAtomCommandScheduler,
+  createEnvironmentQueryAtomFamily,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
@@ -8,8 +10,10 @@ import {
 import {
   WS_METHODS,
   type EnvironmentId,
+  type IssueAutomationProfile,
   type IssueAutomationStateSnapshot,
 } from "@t3tools/contracts";
+import { scanIssueAutomationPage } from "@t3tools/shared/issueAutomationScan";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -45,6 +49,36 @@ function createIssueAutomationAtoms() {
     tag: WS_METHODS.issueAutomationGetRemoteIssueDetail,
   });
 
+  const remoteScanProfileIssues = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+    label: "environment-data:issue-automation:scan-profile-issues",
+    tag: WS_METHODS.issueAutomationScanProfileIssues,
+  });
+
+  const scanWithIssueList = createEnvironmentQueryAtomFamily(connectionAtomRuntime, {
+    label: "environment-data:issue-automation:scan-with-issue-list",
+    execute: Effect.fn("IssueAutomation.scanWithIssueList")(function* (input: {
+      readonly connectorId: IssueAutomationProfile["connectorId"];
+      readonly scopeId: string;
+      readonly filter: IssueAutomationProfile["filter"];
+      readonly page: number;
+    }) {
+      const { items, hasNextPage } = yield* scanIssueAutomationPage(
+        input.page,
+        input.filter,
+        (page, pageSize) =>
+          request(WS_METHODS.issueAutomationListRemoteIssues, {
+            connectorId: input.connectorId,
+            scopeId: input.scopeId,
+            browseType: input.filter.browseType,
+            ...(input.filter.keyword === null ? {} : { keyword: input.filter.keyword }),
+            page,
+            pageSize,
+          }).pipe(Effect.map(({ issues, total }) => ({ items: issues, total }))),
+      );
+      return { issues: items, hasNextPage };
+    }),
+  });
+
   const refreshState = (environmentId: EnvironmentId) => stateQuery({ environmentId, input: {} });
 
   return {
@@ -52,6 +86,28 @@ function createIssueAutomationAtoms() {
     stateStream,
     remoteIssues,
     remoteIssueDetail,
+    scanProfileIssues: ({
+      environmentId,
+      profile,
+      page,
+      supportsRuleScan,
+    }: {
+      readonly environmentId: EnvironmentId;
+      readonly profile: IssueAutomationProfile;
+      readonly page: number;
+      readonly supportsRuleScan: boolean;
+    }) =>
+      supportsRuleScan
+        ? remoteScanProfileIssues({ environmentId, input: { profileId: profile.id, page } })
+        : scanWithIssueList({
+            environmentId,
+            input: {
+              connectorId: profile.connectorId,
+              scopeId: profile.scopeId,
+              filter: profile.filter,
+              page,
+            },
+          }),
     saveConnector: createEnvironmentRpcCommand(connectionAtomRuntime, {
       label: "issue-automation:save-connector",
       tag: WS_METHODS.issueAutomationSaveConnector,
@@ -97,13 +153,6 @@ function createIssueAutomationAtoms() {
       tag: WS_METHODS.issueAutomationSetProfileEnabled,
       scheduler,
       concurrency: serialPerEnvironment,
-      onSettled: (target, registry) =>
-        Effect.sync(() => registry.refresh(refreshState(target.environmentId))),
-    }),
-    triggerPoll: createEnvironmentRpcCommand(connectionAtomRuntime, {
-      label: "issue-automation:trigger-poll",
-      tag: WS_METHODS.issueAutomationTriggerPoll,
-      scheduler,
       onSettled: (target, registry) =>
         Effect.sync(() => registry.refresh(refreshState(target.environmentId))),
     }),

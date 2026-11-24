@@ -834,8 +834,11 @@ export function ProfileModal({
   });
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const canCreateProject = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const projectBaseDirectory =
-    useEnvironment(environmentId)?.serverConfig?.settings.addProjectBaseDirectory;
+  const serverConfig = useEnvironment(environmentId)?.serverConfig;
+  const projectBaseDirectory = serverConfig?.settings.addProjectBaseDirectory;
+  const supportsFeishuNotifications =
+    serverConfig?.environment.capabilities.issueAutomationFeishuNotifications === true ||
+    initial?.feishuNotification !== undefined;
   const folderPicker = useEnvironmentFolderPicker(environmentId);
   const catalog = useOfficialModelCatalog(environmentId);
 
@@ -1053,7 +1056,11 @@ export function ProfileModal({
     }
 
     const webhook = notifyFeishu ? feishuWebhook.trim() : "";
-    if (notifyFeishu && (webhook ? !isIssueAutomationFeishuWebhook(webhook) : !hasFeishuWebhook)) {
+    if (
+      supportsFeishuNotifications &&
+      notifyFeishu &&
+      (webhook ? !isIssueAutomationFeishuWebhook(webhook) : !hasFeishuWebhook)
+    ) {
       setFeishuWebhookInvalid(true);
       focusRuleField(feishuWebhookField.current);
       return;
@@ -1061,6 +1068,9 @@ export function ProfileModal({
 
     const scopeObj = activeConnector.scopes.find((s) => s.id === scopeId);
     const scopeName = scopeObj?.name ?? scopeId;
+    const notification = supportsFeishuNotifications
+      ? { enabled: notifyFeishu, ...(webhook ? { webhook: Redacted.make(webhook) } : {}) }
+      : undefined;
     setBusy(true);
     setErrorText(null);
     const res = await saveProfile({
@@ -1099,16 +1109,22 @@ export function ProfileModal({
           baseBranch: baseBranch.trim() || null,
           customPromptInstructions: customPromptInstructions.trim() || null,
         },
-        feishuNotification: {
-          enabled: notifyFeishu,
-          ...(webhook ? { webhook: Redacted.make(webhook) } : {}),
-        },
+        ...(notification ? { feishuNotification: notification } : {}),
       },
     });
     setBusy(false);
     if (res._tag === "Failure") {
       const err = squashAtomCommandFailure(res);
       setErrorText(err instanceof Error ? err.message : gt("Failed to save automation profile."));
+      return;
+    }
+    const savedNotification = res.value.feishuNotification;
+    if (
+      notification &&
+      (savedNotification?.enabled !== notification.enabled ||
+        (notification.enabled && !savedNotification?.hasWebhook))
+    ) {
+      setErrorText(gt("The server did not confirm saving the Feishu notification settings."));
       return;
     }
     onOpenChange(false);
@@ -1521,7 +1537,13 @@ export function ProfileModal({
             </RuleSection>
             <RuleSection
               title={gt("Feishu notifications")}
-              summary={notifyFeishu ? gt("Enabled") : gt("Disabled")}
+              summary={
+                supportsFeishuNotifications
+                  ? notifyFeishu
+                    ? gt("Enabled")
+                    : gt("Disabled")
+                  : gt("Unavailable")
+              }
             >
               <div className="flex items-center justify-between gap-3">
                 <Label htmlFor="issue-rule-notify-feishu" id="issue-rule-notify-feishu-label">
@@ -1531,6 +1553,10 @@ export function ProfileModal({
                   id="issue-rule-notify-feishu"
                   size="sm"
                   aria-labelledby="issue-rule-notify-feishu-label"
+                  aria-describedby={
+                    supportsFeishuNotifications ? undefined : "issue-rule-feishu-unavailable"
+                  }
+                  disabled={!supportsFeishuNotifications}
                   checked={notifyFeishu}
                   onCheckedChange={(checked) => {
                     setNotifyFeishu(checked);
@@ -1538,7 +1564,12 @@ export function ProfileModal({
                   }}
                 />
               </div>
-              {notifyFeishu && (
+              {!supportsFeishuNotifications && (
+                <p id="issue-rule-feishu-unavailable" className="text-xs text-muted-foreground">
+                  {gt("Update the server to configure Feishu notifications.")}
+                </p>
+              )}
+              {supportsFeishuNotifications && notifyFeishu && (
                 <div ref={feishuWebhookField} className="space-y-1.5">
                   <Label htmlFor="issue-rule-feishu-webhook">{gt("Group bot webhook")}</Label>
                   <SecretInput

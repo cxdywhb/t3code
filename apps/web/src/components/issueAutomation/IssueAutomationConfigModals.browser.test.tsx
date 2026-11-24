@@ -69,19 +69,27 @@ it("focuses the masked webhook field when saving a rule with an invalid Feishu a
     lastPollError: null,
     updatedAt,
   };
-  await using _screen = await render(
+  const modal = (initial: IssueAutomationProfile) => (
     <ProfileModal
       open
       onOpenChange={() => {}}
       environmentId={ENVIRONMENT_ID}
       connectors={[connector]}
       projects={[{ id: projectId, title: "Example App", workspaceRoot: "/projects/example" }]}
-      initial={rule}
-    />,
+      initial={initial}
+    />
   );
+  await using screen = await render(modal(rule));
 
   const toggle = page.getByRole("switch", { name: "Notify Feishu when a task ends" });
   const webhook = page.getByLabelText("Group bot webhook");
+  await expect.element(toggle).toBeDisabled();
+  await expect
+    .element(page.getByText("Update the server to configure Feishu notifications."))
+    .toBeVisible();
+  await screen.rerender(
+    modal({ ...rule, feishuNotification: { enabled: false, hasWebhook: false } }),
+  );
   await expect.element(toggle).not.toBeChecked();
   await expect.element(webhook).not.toBeInTheDocument();
   await toggle.click();

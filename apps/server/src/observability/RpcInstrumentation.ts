@@ -172,6 +172,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.issueAutomationDeleteConnector]: "issues",
   [WS_METHODS.issueAutomationRefreshScopes]: "issues",
   [WS_METHODS.issueAutomationListRemoteIssues]: "issues",
+  [WS_METHODS.issueAutomationScanProfileIssues]: "issues",
   [WS_METHODS.issueAutomationGetRemoteIssueDetail]: "issues",
   [WS_METHODS.issueAutomationSaveProfile]: "issues",
   [WS_METHODS.issueAutomationDeleteProfile]: "issues",

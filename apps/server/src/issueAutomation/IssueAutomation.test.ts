@@ -17,7 +17,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient } from "effect/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -34,6 +34,7 @@ import {
   sortZenTaoScopesDesc,
   zenTaoHtmlToMarkdown,
 } from "./connectors/zentao/ZenTaoClient.ts";
+import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
 import * as IssueAutomationRepository from "./IssueAutomationRepository.ts";
 import * as IssueAutomationService from "./IssueAutomationService.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
@@ -219,11 +220,32 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
           serverVersion: null,
           scopes: [scope],
         }),
-      listIssues: () =>
-        Deferred.succeed(pollStarted, undefined).pipe(
+      listIssues: ({ page, pageSize, browseType, keyword, scopeId }) => {
+        if (browseType === "all") {
+          expect({ keyword, scopeId }).toEqual({ keyword: "体重", scopeId: scope.id });
+          const matched = { ...detail, severity: 1, confirmed: false, assignee: "Chen (chen)" };
+          return Effect.succeed({
+            items:
+              page === 1
+                ? [
+                    { ...matched, confirmed: true },
+                    { ...matched, severity: 3 },
+                    { ...matched, assignee: "Someone else" },
+                  ]
+                : Array.from({ length: 26 }, (_, index) => ({
+                    ...matched,
+                    key: String(3000 + index),
+                  })),
+            total: pageSize + 26,
+            page,
+            pageSize,
+          });
+        }
+        return Deferred.succeed(pollStarted, undefined).pipe(
           Effect.andThen(Deferred.await(finishPoll)),
           Effect.as({ items: [{ ...detail, status: "active" }], total: 1, page: 1, pageSize: 30 }),
-        ),
+        );
+      },
       getIssueDetail: ({ issueKey }) =>
         issueKey === "2847"
           ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
@@ -300,6 +322,31 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       } satisfies IssueAutomationSaveProfileInput;
       const rule = yield* service.saveProfile(input);
       expect(rule.feishuNotification).toEqual({ enabled: false, hasWebhook: false });
+      const scanRule = yield* service.saveProfile({
+        ...input,
+        filter: {
+          ...input.filter,
+          browseType: "all",
+          keyword: "体重",
+          onlyUnconfirmed: true,
+          assignedToAccount: " chen ",
+          maxSeverity: 2,
+        },
+      });
+      const firstPage = yield* service.scanProfileIssues({ profileId: scanRule.id });
+      expect(firstPage.issues.map((issue) => issue.key)).toEqual(
+        Array.from({ length: 25 }, (_, index) => String(3000 + index)),
+      );
+      expect(firstPage.hasNextPage).toBe(true);
+      const lastPage = yield* service.scanProfileIssues({ profileId: scanRule.id, page: 2 });
+      expect(lastPage.issues.map((issue) => issue.key)).toEqual(["3025"]);
+      expect(lastPage.hasNextPage).toBe(false);
+      const afterScan = yield* service.getState;
+      expect(afterScan.tasks).toEqual([]);
+      expect(
+        afterScan.profiles.find((profile) => profile.id === scanRule.id)?.lastPolledAt,
+      ).toBeNull();
+      yield* service.deleteProfile({ profileId: scanRule.id });
       const missing = yield* service
         .saveProfile({
           ...input,
@@ -316,6 +363,9 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       });
       expect(configured.feishuNotification).toEqual({ enabled: true, hasWebhook: true });
       expect(JSON.stringify(configured)).not.toMatch(/test-webhook|feishuWebhookSecretId/);
+      const reopened = (yield* service.getState).profiles.find((profile) => profile.id === rule.id);
+      expect(reopened?.feishuNotification).toEqual({ enabled: true, hasWebhook: true });
+      expect(JSON.stringify(reopened)).not.toMatch(/test-webhook|feishuWebhookSecretId/);
 
       const snapshots = yield* Stream.toQueue(service.subscribe, { capacity: "unbounded" });
       yield* Queue.take(snapshots);
@@ -363,8 +413,9 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
             content: {
               post: {
                 zh_cn: {
+                  title: "T3 Code · 禅道问题自动分析",
                   content: [
-                    [{ tag: "text", text: "任务状态：失败" }],
+                    [{ tag: "text", text: "任务状态：诊断失败" }],
                     [
                       { tag: "text", text: "禅道 Bug：" },
                       { tag: "a", text: "#2846 体重记录未刷新", href: detail.url },
@@ -394,4 +445,69 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       expect(outbound).toHaveLength(2);
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provide(dependencies))));
   }),
+);
+
+it.effect.each([
+  {
+    actionMode: "diagnose_only",
+    stage: "completed",
+    hasConfirmedRepair: false,
+    expectedStatus: "诊断完成",
+  },
+  {
+    actionMode: "fix_worktree_review",
+    stage: "completed",
+    hasConfirmedRepair: true,
+    expectedStatus: "修复完成",
+  },
+  {
+    actionMode: "auto_resolve",
+    stage: "completed",
+    hasConfirmedRepair: false,
+    expectedStatus: "修复任务结束，待确认",
+  },
+  {
+    actionMode: "fix_worktree_review",
+    stage: "needs_human",
+    hasConfirmedRepair: true,
+    expectedStatus: "修复待人工复核",
+  },
+  {
+    actionMode: "auto_resolve",
+    stage: "failed",
+    hasConfirmedRepair: false,
+    expectedStatus: "修复任务失败",
+  },
+] as const)(
+  "formats the Feishu result for $actionMode / $stage / repair evidence $hasConfirmedRepair",
+  ({ actionMode, stage, hasConfirmedRepair, expectedStatus }) =>
+    Effect.gen(function* () {
+      const http = yield* HttpClient.HttpClient;
+      const sent = yield* sendFeishuTaskNotification(
+        http,
+        Effect.succeed("https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook"),
+        {
+          platform: IssueAutomationPlatformKind.make("zentao"),
+          stage,
+          actionMode,
+          displayKey: "#2846",
+          issueTitle: "Pairing screen stays blank",
+          issueUrl: "https://zentao.example.com/bug-view-2846.html",
+          issueStatus: "active",
+          scopeName: "Example App",
+          assignee: null,
+        },
+        { appDisplayName: "Example T3 (Dev)", hasConfirmedRepair },
+      ).pipe(
+        Effect.provideService(FetchHttpClient.Fetch, async (_url, init) => {
+          const payload = JSON.parse(String(init?.body));
+          expect(payload.content.post.zh_cn.title).toBe("Example T3 (Dev) · 禅道问题自动分析");
+          expect(payload.content.post.zh_cn.content[0]).toEqual([
+            { tag: "text", text: `任务状态：${expectedStatus}` },
+          ]);
+          return Response.json({ code: 0 });
+        }),
+      );
+      expect(sent).toBe(true);
+    }).pipe(Effect.provide(FetchHttpClient.layer)),
 );

@@ -236,6 +236,8 @@ import {
   IssueAutomationRemoteIssueDetail,
   IssueAutomationSaveConnectorInput,
   IssueAutomationSaveProfileInput,
+  IssueAutomationScanProfileIssuesInput,
+  IssueAutomationScanProfileIssuesResult,
   IssueAutomationSetProfileEnabledInput,
   IssueAutomationStateSnapshot,
   IssueAutomationTriggerPollInput,
@@ -728,6 +730,7 @@ export const WS_METHODS = {
   issueAutomationDeleteConnector: "issueAutomation.deleteConnector",
   issueAutomationRefreshScopes: "issueAutomation.refreshScopes",
   issueAutomationListRemoteIssues: "issueAutomation.listRemoteIssues",
+  issueAutomationScanProfileIssues: "issueAutomation.scanProfileIssues",
   issueAutomationGetRemoteIssueDetail: "issueAutomation.getRemoteIssueDetail",
   issueAutomationSaveProfile: "issueAutomation.saveProfile",
   issueAutomationDeleteProfile: "issueAutomation.deleteProfile",
@@ -1608,6 +1611,15 @@ const WsIssueAutomationListRemoteIssuesRpc = Rpc.make(WS_METHODS.issueAutomation
   success: IssueAutomationListRemoteIssuesResult,
   error: IssueAutomationRpcError,
 });
+
+const WsIssueAutomationScanProfileIssuesRpc = Rpc.make(
+  WS_METHODS.issueAutomationScanProfileIssues,
+  {
+    payload: IssueAutomationScanProfileIssuesInput,
+    success: IssueAutomationScanProfileIssuesResult,
+    error: IssueAutomationRpcError,
+  },
+);
 
 const WsIssueAutomationGetRemoteIssueDetailRpc = Rpc.make(
   WS_METHODS.issueAutomationGetRemoteIssueDetail,
@@ -2842,6 +2854,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssueAutomationDeleteConnectorRpc,
   WsIssueAutomationRefreshScopesRpc,
   WsIssueAutomationListRemoteIssuesRpc,
+  WsIssueAutomationScanProfileIssuesRpc,
   WsIssueAutomationGetRemoteIssueDetailRpc,
   WsIssueAutomationSaveProfileRpc,
   WsIssueAutomationDeleteProfileRpc,

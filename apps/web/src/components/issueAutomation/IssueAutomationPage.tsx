@@ -1,19 +1,22 @@
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   IssueAutomationActionMode,
   IssueAutomationBrowseFilter,
   IssueAutomationConnector,
+  IssueAutomationListRemoteIssuesResult,
   IssueAutomationProfile,
+  IssueAutomationScanProfileIssuesResult,
   IssueAutomationTask,
   ModelSelection,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import { issueAutomationWorkbenchTitleZh } from "@t3tools/shared/issueAutomationTitle";
 import { useNavigate } from "@tanstack/react-router";
-import { T, useGT } from "gt-react";
+import { T, useGT, useLocale } from "gt-react";
 import {
   BarChart3Icon,
   BotIcon,
@@ -56,10 +59,11 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useProjects } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
 import { issueAutomationEnvironment, useIssueAutomationLiveState } from "~/state/issueAutomation";
-import { useEnvironmentQuery } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -175,10 +179,16 @@ function TaskDurationBadge({
 
 export function IssueAutomationPage() {
   const gt = useGT();
+  const locale = useLocale();
+  const pageTitle =
+    locale === "zh" ? issueAutomationWorkbenchTitleZh : gt("ZenTao Issue Auto-Analysis");
   const navigate = useNavigate();
   const actionModeLabel = useActionModeLabel();
   const isWideDesktop = useMediaQuery("(min-width: 1024px)");
   const environmentId = usePrimaryEnvironmentId();
+  const supportsRuleScan =
+    useEnvironment(environmentId)?.serverConfig?.environment.capabilities
+      .issueAutomationRuleScan === true;
   const { snapshot } = useIssueAutomationLiveState(environmentId);
 
   const storageKey = `t3code:issue-automation:prefs:v1:${environmentId ?? "default"}`;
@@ -235,6 +245,13 @@ export function IssueAutomationPage() {
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const [runQuery, setRunQuery] = useState("");
+  const [scanningProfileId, setScanningProfileId] = useState<IssueAutomationProfile["id"] | null>(
+    null,
+  );
+  const [scanSelection, setScanSelection] = useState<{
+    environmentId: EnvironmentId;
+    profileId: IssueAutomationProfile["id"];
+  } | null>(null);
 
   const [selectedIssueKey, setSelectedIssueKey] = useState<string | null>(null);
   const [checkedIssueKeys, setCheckedIssueKeys] = useState<ReadonlyArray<string>>([]);
@@ -249,12 +266,22 @@ export function IssueAutomationPage() {
 
   const scopePrefKey = makeScopePrefKey(activeConnector?.id, effectiveScopeId);
 
+  const scannedProfile =
+    scanSelection && scanSelection.environmentId === environmentId
+      ? (snapshot.profiles.find(
+          (profile) =>
+            profile.id === scanSelection.profileId &&
+            profile.connectorId === activeConnector?.id &&
+            profile.scopeId === effectiveScopeId,
+        ) ?? null)
+      : null;
   const matchedScopeProfile =
-    activeConnector && effectiveScopeId
+    scannedProfile ??
+    (activeConnector && effectiveScopeId
       ? (snapshot.profiles.find(
           (p) => p.connectorId === activeConnector.id && p.scopeId === effectiveScopeId,
         ) ?? null)
-      : null;
+      : null);
 
   const validProjectIds = envProjects.map((p) => p.id);
 
@@ -280,14 +307,23 @@ export function IssueAutomationPage() {
   });
   const resolvedActionMode = resolvedTargets.actionMode;
 
+  const clearIssueSelection = () => {
+    setSelectedIssueKey(null);
+    setCheckedIssueKeys([]);
+    setPage(1);
+  };
+
+  const clearScan = () => {
+    setScanSelection(null);
+    clearIssueSelection();
+  };
+
   const handleSelectConnector = (nextConnectorId: string) => {
     setPrefs((prev) => ({
       ...prev,
       selectedConnectorId: nextConnectorId,
     }));
-    setSelectedIssueKey(null);
-    setCheckedIssueKeys([]);
-    setPage(1);
+    clearScan();
   };
 
   const handleSelectScope = (nextScopeId: string) => {
@@ -300,9 +336,7 @@ export function IssueAutomationPage() {
         [activeConnector.id]: nextScopeId,
       },
     }));
-    setSelectedIssueKey(null);
-    setCheckedIssueKeys([]);
-    setPage(1);
+    clearScan();
   };
 
   const handleSelectBrowseType = (nextBrowseType: IssueAutomationBrowseFilter) => {
@@ -373,19 +407,29 @@ export function IssueAutomationPage() {
     setPrefs((prev) => ({ ...prev, analyticsScopeMode: nextMode }));
   };
 
-  const remoteIssuesQuery = useEnvironmentQuery(
+  const remoteIssuesQuery = useEnvironmentQuery<
+    IssueAutomationListRemoteIssuesResult | IssueAutomationScanProfileIssuesResult,
+    unknown
+  >(
     environmentId !== null && activeConnector !== null && effectiveScopeId.length > 0
-      ? issueAutomationEnvironment.remoteIssues({
-          environmentId,
-          input: {
-            connectorId: activeConnector.id,
-            scopeId: effectiveScopeId,
-            browseType,
-            ...(keyword.trim() ? { keyword: keyword.trim() } : {}),
+      ? scannedProfile
+        ? issueAutomationEnvironment.scanProfileIssues({
+            environmentId,
+            profile: scannedProfile,
             page,
-            pageSize: 25,
-          },
-        })
+            supportsRuleScan,
+          })
+        : issueAutomationEnvironment.remoteIssues({
+            environmentId,
+            input: {
+              connectorId: activeConnector.id,
+              scopeId: effectiveScopeId,
+              browseType,
+              ...(keyword.trim() ? { keyword: keyword.trim() } : {}),
+              page,
+              pageSize: 25,
+            },
+          })
       : null,
   );
 
@@ -427,14 +471,28 @@ export function IssueAutomationPage() {
   const deleteProfileCmd = useAtomCommand(issueAutomationEnvironment.deleteProfile, {
     reportFailure: false,
   });
-  const triggerPollCmd = useAtomCommand(issueAutomationEnvironment.triggerPoll, {
-    reportFailure: false,
-  });
-
   const [dispatching, setDispatching] = useState(false);
   const [writingBack, setWritingBack] = useState(false);
 
   const issues = remoteIssuesQuery.data?.issues ?? [];
+  const issuePage = remoteIssuesQuery.data;
+  const hasNextIssuesPage =
+    issuePage && ("hasNextPage" in issuePage ? issuePage.hasNextPage : issues.length >= 25);
+  const changeIssuePage = (next: number) => {
+    if (scannedProfile !== null && environmentId !== null) {
+      const query = issueAutomationEnvironment.scanProfileIssues({
+        environmentId,
+        profile: scannedProfile,
+        page: next,
+        supportsRuleScan,
+      });
+      const cached = query.initialValueTarget ?? query;
+      if (appAtomRegistry.getNodes().has(cached) && !appAtomRegistry.get(cached).waiting) {
+        appAtomRegistry.refresh(query);
+      }
+    }
+    setPage(next);
+  };
   const selectedIssueSummary =
     selectedIssueKey !== null ? (issues.find((i) => i.key === selectedIssueKey) ?? null) : null;
   const selectedDetail = remoteDetailQuery.data;
@@ -516,6 +574,41 @@ export function IssueAutomationPage() {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  };
+
+  const handleScanProfile = async (profile: IssueAutomationProfile) => {
+    if (!environmentId || scanningProfileId !== null) return;
+    setScanningProfileId(profile.id);
+    const query = issueAutomationEnvironment.scanProfileIssues({
+      environmentId,
+      profile,
+      page: 1,
+      supportsRuleScan,
+    });
+    const result = await executeAtomQuery(appAtomRegistry, query, {
+      refresh: appAtomRegistry.getNodes().has(query.initialValueTarget ?? query),
+      reportFailure: false,
+    });
+    setScanningProfileId(null);
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: gt("Could not scan issues"),
+        description: formatEnvironmentQueryError(result.cause),
+      });
+      return;
+    }
+
+    clearIssueSelection();
+    setSelectedTaskId(null);
+    setInspectorOpen(false);
+    setScanSelection({ environmentId, profileId: profile.id });
+    setPrefs((prev) => ({
+      ...prev,
+      activeTab: "issues",
+      selectedConnectorId: profile.connectorId,
+      scopeByConnector: { ...prev.scopeByConnector, [profile.connectorId]: profile.scopeId },
+    }));
   };
 
   const handleDispatchIssues = async (keysToRun: ReadonlyArray<string>) => {
@@ -700,11 +793,9 @@ export function IssueAutomationPage() {
             reserveNativeControls={!desktopInspectorVisible}
             className="relative shrink-0 border-b border-border/50 bg-background"
           >
-            <WorkspaceBreadcrumb ariaLabel={gt("ZenTao Issue Auto-Analysis")}>
+            <WorkspaceBreadcrumb ariaLabel={pageTitle}>
               <WorkspaceBreadcrumbItem current>
-                <h1 className="truncate font-semibold">
-                  <T>ZenTao Issue Auto-Analysis</T>
-                </h1>
+                <h1 className="truncate font-semibold">{pageTitle}</h1>
               </WorkspaceBreadcrumbItem>
             </WorkspaceBreadcrumb>
 
@@ -873,22 +964,32 @@ export function IssueAutomationPage() {
               {/* Fixed Non-Scrolling Issues Toolbar */}
               <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-2.5 sm:px-7">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="min-w-48 flex-1">
-                    <PullRequestSearchInput
-                      value={keyword}
-                      busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
-                      label={gt("Search issues")}
-                      placeholder={gt("Search bug ID, title, or module…")}
-                      onChange={(next) => {
-                        setKeyword(next);
-                        setPage(1);
-                      }}
-                      onSubmit={(next) => {
-                        setKeyword(next);
-                        setPage(1);
-                      }}
-                    />
-                  </div>
+                  {scannedProfile ? (
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="min-w-0 wrap-anywhere text-sm">{scannedProfile.name}</span>
+                      <Button size="xs" variant="ghost" onClick={clearScan}>
+                        <XIcon className="size-3" />
+                        <T>Clear rule filter</T>
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="min-w-48 flex-1">
+                      <PullRequestSearchInput
+                        value={keyword}
+                        busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
+                        label={gt("Search issues")}
+                        placeholder={gt("Search bug ID, title, or module…")}
+                        onChange={(next) => {
+                          setKeyword(next);
+                          setPage(1);
+                        }}
+                        onSubmit={(next) => {
+                          setKeyword(next);
+                          setPage(1);
+                        }}
+                      />
+                    </div>
+                  )}
 
                   {snapshot.connectors.length > 1 ? (
                     <Menu>
@@ -933,41 +1034,43 @@ export function IssueAutomationPage() {
                     className="max-w-60"
                   />
 
-                  <Menu>
-                    <MenuTrigger
-                      aria-label={gt("Filter issues")}
-                      render={<Button variant="outline" />}
-                    >
-                      {browseType === "assigntome" || browseType === "openedbyme" ? (
-                        <UserRoundIcon className="size-3.5 text-muted-foreground" />
-                      ) : browseType === "all" ? (
-                        <LayersIcon className="size-3.5 text-muted-foreground" />
-                      ) : (
-                        <CircleDotIcon className="size-3.5 text-muted-foreground" />
-                      )}
-                      <span>{browseFilterLabel(browseType)}</span>
-                      <ChevronDownIcon className="size-3.5 opacity-70" />
-                    </MenuTrigger>
-                    <MenuPopup align="start">
-                      <MenuRadioGroup
-                        value={browseType}
-                        onValueChange={(next) => {
-                          if (next) handleSelectBrowseType(next as IssueAutomationBrowseFilter);
-                        }}
+                  {scannedProfile === null && (
+                    <Menu>
+                      <MenuTrigger
+                        aria-label={gt("Filter issues")}
+                        render={<Button variant="outline" />}
                       >
-                        {(
-                          ["unresolved", "unclosed", "assigntome", "openedbyme", "all"] as const
-                        ).map((opt) => (
-                          <MenuRadioItem key={opt} value={opt} closeOnClick>
-                            <span className="flex items-center gap-2">
-                              <span className="flex-1">{browseFilterLabel(opt)}</span>
-                              <MenuRadioItemIndicator />
-                            </span>
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
-                    </MenuPopup>
-                  </Menu>
+                        {browseType === "assigntome" || browseType === "openedbyme" ? (
+                          <UserRoundIcon className="size-3.5 text-muted-foreground" />
+                        ) : browseType === "all" ? (
+                          <LayersIcon className="size-3.5 text-muted-foreground" />
+                        ) : (
+                          <CircleDotIcon className="size-3.5 text-muted-foreground" />
+                        )}
+                        <span>{browseFilterLabel(browseType)}</span>
+                        <ChevronDownIcon className="size-3.5 opacity-70" />
+                      </MenuTrigger>
+                      <MenuPopup align="start">
+                        <MenuRadioGroup
+                          value={browseType}
+                          onValueChange={(next) => {
+                            if (next) handleSelectBrowseType(next as IssueAutomationBrowseFilter);
+                          }}
+                        >
+                          {(
+                            ["unresolved", "unclosed", "assigntome", "openedbyme", "all"] as const
+                          ).map((opt) => (
+                            <MenuRadioItem key={opt} value={opt} closeOnClick>
+                              <span className="flex items-center gap-2">
+                                <span className="flex-1">{browseFilterLabel(opt)}</span>
+                                <MenuRadioItemIndicator />
+                              </span>
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuPopup>
+                    </Menu>
+                  )}
 
                   {envProjects.length > 0 ? (
                     <SearchableProjectMenu
@@ -1035,7 +1138,17 @@ export function IssueAutomationPage() {
                     />
                     <span>
                       <strong className="font-medium text-foreground">{effectiveScopeName}</strong>{" "}
-                      · <T>Total</T> {remoteIssuesQuery.data?.total ?? 0}
+                      {scannedProfile ? (
+                        <>
+                          {" "}
+                          · {gt("Matches on this page")} {issues.length}
+                        </>
+                      ) : (
+                        <>
+                          {" "}
+                          · <T>Total</T> {issuePage && "total" in issuePage ? issuePage.total : 0}
+                        </>
+                      )}
                     </span>
                     {matchedScopeProfile ? (
                       <Badge variant="secondary" size="sm">
@@ -1054,7 +1167,7 @@ export function IssueAutomationPage() {
                       variant="ghost"
                       aria-label={gt("Previous page")}
                       disabled={page <= 1 || remoteIssuesQuery.isPending}
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      onClick={() => changeIssuePage(page - 1)}
                     >
                       <ChevronLeftIcon className="size-3.5" />
                     </Button>
@@ -1065,8 +1178,8 @@ export function IssueAutomationPage() {
                       size="icon-xs"
                       variant="ghost"
                       aria-label={gt("Next page")}
-                      disabled={issues.length < 25 || remoteIssuesQuery.isPending}
-                      onClick={() => setPage((p) => p + 1)}
+                      disabled={!hasNextIssuesPage || remoteIssuesQuery.isPending}
+                      onClick={() => changeIssuePage(page + 1)}
                     >
                       <ChevronRightIcon className="size-3.5" />
                     </Button>
@@ -1101,7 +1214,13 @@ export function IssueAutomationPage() {
                         <T>No matching issues</T>
                       </EmptyTitle>
                       <EmptyDescription>
-                        <T>Try switching the product or status filter above.</T>
+                        {scannedProfile ? (
+                          <T>
+                            Check the rule filters or clear the rule filter to see other issues.
+                          </T>
+                        ) : (
+                          <T>Try switching the product or status filter above.</T>
+                        )}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -1559,18 +1678,8 @@ export function IssueAutomationPage() {
                     input: { profileId, enabled },
                   });
                 }}
-                onTriggerPoll={(profileId) => {
-                  if (!environmentId) return;
-                  void triggerPollCmd({ environmentId, input: { profileId } }).then((r) => {
-                    if (r._tag === "Success") {
-                      toastManager.add({
-                        type: "success",
-                        title: gt("Poll completed"),
-                        description: `${String(r.value.enqueuedCount)} enqueued`,
-                      });
-                    }
-                  });
-                }}
+                onScanProfile={(profile) => void handleScanProfile(profile)}
+                scanningProfileId={scanningProfileId}
                 onDeleteProfile={(profileId) => {
                   if (!environmentId) return;
                   void deleteProfileCmd({ environmentId, input: { profileId } });

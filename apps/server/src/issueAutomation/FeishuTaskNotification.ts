@@ -1,15 +1,39 @@
 import { isIssueAutomationFeishuWebhook, type IssueAutomationTask } from "@t3tools/contracts";
+import { issueAutomationWorkbenchTitleZh } from "@t3tools/shared/issueAutomationTitle";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { zenTaoBugStatusLabel } from "./connectors/zentao/ZenTaoClient.ts";
 
-const notifiedStages = {
-  completed: "已完成",
-  needs_human: "待人工复核",
-  failed: "失败",
-};
+type FeishuTask = Pick<
+  IssueAutomationTask,
+  | "actionMode"
+  | "assignee"
+  | "displayKey"
+  | "issueStatus"
+  | "issueTitle"
+  | "issueUrl"
+  | "platform"
+  | "scopeName"
+  | "stage"
+>;
+
+function formatTaskStatus(
+  stage: "completed" | "needs_human" | "failed",
+  diagnosisOnly: boolean,
+  hasConfirmedRepair: boolean,
+): string {
+  switch (stage) {
+    case "needs_human":
+      return "修复待人工复核";
+    case "failed":
+      return diagnosisOnly ? "诊断失败" : "修复任务失败";
+    case "completed":
+      if (diagnosisOnly) return "诊断完成";
+      return hasConfirmedRepair ? "修复完成" : "修复任务结束，待确认";
+  }
+}
 
 const FeishuResponse = Schema.Union([
   Schema.Struct({ code: Schema.Number }),
@@ -20,7 +44,8 @@ export const sendFeishuTaskNotification = Effect.fn("IssueAutomation.sendFeishuT
   function* <E>(
     httpClient: HttpClient.HttpClient,
     getWebhook: Effect.Effect<string | undefined, E>,
-    task: IssueAutomationTask,
+    task: FeishuTask,
+    result: { readonly appDisplayName: string; readonly hasConfirmedRepair: boolean },
   ) {
     if (
       task.platform !== "zentao" ||
@@ -32,6 +57,11 @@ export const sendFeishuTaskNotification = Effect.fn("IssueAutomation.sendFeishuT
     if (webhook === undefined) return true;
     if (!isIssueAutomationFeishuWebhook(webhook)) return false;
 
+    const status = formatTaskStatus(
+      task.stage,
+      task.actionMode === "diagnose_only",
+      result.hasConfirmedRepair,
+    );
     const text = (value: string) => ({ tag: "text", text: value });
     const request = yield* HttpClientRequest.post(webhook).pipe(
       HttpClientRequest.bodyJson({
@@ -39,8 +69,9 @@ export const sendFeishuTaskNotification = Effect.fn("IssueAutomation.sendFeishuT
         content: {
           post: {
             zh_cn: {
+              title: `${result.appDisplayName} · ${issueAutomationWorkbenchTitleZh}`,
               content: [
-                [text(`任务状态：${notifiedStages[task.stage]}`)],
+                [text(`任务状态：${status}`)],
                 [
                   text("禅道 Bug："),
                   { tag: "a", text: `${task.displayKey} ${task.issueTitle}`, href: task.issueUrl },

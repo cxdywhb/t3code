@@ -2021,6 +2021,8 @@ export const layerWsRpc = (
         [WS_METHODS.issueAutomationRefreshScopes]: (input) => issueAutomation.refreshScopes(input),
         [WS_METHODS.issueAutomationListRemoteIssues]: (input) =>
           issueAutomation.listRemoteIssues(input),
+        [WS_METHODS.issueAutomationScanProfileIssues]: (input) =>
+          issueAutomation.scanProfileIssues(input),
         [WS_METHODS.issueAutomationGetRemoteIssueDetail]: (input) =>
           issueAutomation.getRemoteIssueDetail(input),
         [WS_METHODS.issueAutomationSaveProfile]: (input) => issueAutomation.saveProfile(input),

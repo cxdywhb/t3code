@@ -338,6 +338,20 @@ export const IssueAutomationListRemoteIssuesResult = Schema.Struct({
 export type IssueAutomationListRemoteIssuesResult =
   typeof IssueAutomationListRemoteIssuesResult.Type;
 
+export const IssueAutomationScanProfileIssuesInput = Schema.Struct({
+  profileId: IssueAutomationProfileId,
+  page: Schema.optional(PositiveInt),
+});
+export type IssueAutomationScanProfileIssuesInput =
+  typeof IssueAutomationScanProfileIssuesInput.Type;
+
+export const IssueAutomationScanProfileIssuesResult = Schema.Struct({
+  issues: Schema.Array(IssueAutomationRemoteIssue),
+  hasNextPage: Schema.Boolean,
+});
+export type IssueAutomationScanProfileIssuesResult =
+  typeof IssueAutomationScanProfileIssuesResult.Type;
+
 export const IssueAutomationGetRemoteIssueDetailInput = Schema.Struct({
   connectorId: IssueAutomationConnectorId,
   scopeId: TrimmedNonEmptyString,

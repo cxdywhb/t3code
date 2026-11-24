@@ -11,6 +11,14 @@
       "types": "./src/pullRequestAnchor.ts",
       "import": "./src/pullRequestAnchor.ts"
     },
+    "./issueAutomationScan": {
+      "types": "./src/issueAutomationScan.ts",
+      "import": "./src/issueAutomationScan.ts"
+    },
+    "./issueAutomationTitle": {
+      "types": "./src/issueAutomationTitle.ts",
+      "import": "./src/issueAutomationTitle.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

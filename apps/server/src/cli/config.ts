@@ -528,6 +528,9 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     desktopTelemetryFd,
     desktopTelemetryControlFd,
     ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
+    ...(bootstrap?.appDisplayName === undefined
+      ? {}
+      : { desktopAppDisplayName: bootstrap.appDisplayName }),
     desktopBrowserFd,
     desktopBrowserControlFd,
     resourceMonitorPath,

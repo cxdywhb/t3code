@@ -12,6 +12,7 @@ import {
   IssueAutomationTaskId,
   IssueTrackerKind,
   MessageId,
+  T3_APP_BASE_NAME,
   type IssueAutomationActionMode,
   type IssueAutomationAnalyzeIssuesInput,
   type IssueAutomationAnalyzeIssuesResult,
@@ -31,6 +32,8 @@ import {
   type IssueAutomationRepoBinding,
   type IssueAutomationSaveConnectorInput,
   type IssueAutomationSaveProfileInput,
+  type IssueAutomationScanProfileIssuesInput,
+  type IssueAutomationScanProfileIssuesResult,
   type IssueAutomationSetProfileEnabledInput,
   type IssueAutomationStage,
   type IssueAutomationStateSnapshot,
@@ -45,6 +48,10 @@ import {
   type ProjectId,
   type ThreadId,
 } from "@t3tools/contracts";
+import {
+  matchesIssueAutomationFilter,
+  scanIssueAutomationPage,
+} from "@t3tools/shared/issueAutomationScan";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -268,6 +275,9 @@ export class IssueAutomationService extends Context.Service<
     readonly listRemoteIssues: (
       input: IssueAutomationListRemoteIssuesInput,
     ) => Effect.Effect<IssueAutomationListRemoteIssuesResult, IssueAutomationError>;
+    readonly scanProfileIssues: (
+      input: IssueAutomationScanProfileIssuesInput,
+    ) => Effect.Effect<IssueAutomationScanProfileIssuesResult, IssueAutomationError>;
     readonly getRemoteIssueDetail: (
       input: IssueAutomationGetRemoteIssueDetailInput,
     ) => Effect.Effect<IssueAutomationRemoteIssueDetail, IssueAutomationError>;
@@ -402,6 +412,7 @@ const make = Effect.gen(function* () {
 
   const notifyTaskEnded = Effect.fn("IssueAutomationService.notifyTaskEnded")(function* (
     task: IssueAutomationTask,
+    hasConfirmedRepair: boolean,
   ) {
     if (!task.profileId) return;
     const profileId = task.profileId;
@@ -417,7 +428,10 @@ const make = Effect.gen(function* () {
       const webhook = yield* secrets.get(profile.feishuWebhookSecretId);
       return Option.isSome(webhook) ? decoder.decode(webhook.value) : "";
     }).pipe(profileWrites.withPermits(1));
-    const delivered = yield* sendFeishuTaskNotification(httpClient, getWebhook, task);
+    const delivered = yield* sendFeishuTaskNotification(httpClient, getWebhook, task, {
+      appDisplayName: config.desktopAppDisplayName ?? T3_APP_BASE_NAME,
+      hasConfirmedRepair,
+    });
     if (!delivered) {
       yield* repo
         .appendTaskStep(task.id, {
@@ -555,6 +569,14 @@ const make = Effect.gen(function* () {
         worktreePath: projection.thread.worktreePath,
         branch: projection.thread.branch,
         reportText: latestText || "（模型已完成运行，请点击关联会话查看详细操作记录）",
+        hasConfirmedChanges:
+          terminalRun?.status === "completed" &&
+          projection.checkpoints.some(
+            (checkpoint) =>
+              checkpoint.runId === terminalRun.id &&
+              checkpoint.status === "ready" &&
+              (checkpoint.filesTotal?.count ?? checkpoint.files.length) > 0,
+          ),
       };
     },
   );
@@ -572,6 +594,7 @@ const make = Effect.gen(function* () {
     );
 
     let current = initialTask;
+    let hasConfirmedRepair = false;
     const withGlobalPermit = globalSemaphore.withPermits(1);
     const finishedTask = yield* withGlobalPermit(
       profileSem.withPermits(1)(
@@ -768,6 +791,10 @@ const make = Effect.gen(function* () {
           }
 
           const solved = primaryOutcome.success;
+          hasConfirmedRepair =
+            policy.actionMode !== "diagnose_only" &&
+            solved.worktreePath !== null &&
+            solved.hasConfirmedChanges;
 
           // Link issue to the T3 Thread for seamless cross-navigation in native UI
           yield* threadIssues
@@ -971,7 +998,7 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-    if (Option.isSome(finishedTask)) yield* notifyTaskEnded(finishedTask.value);
+    if (Option.isSome(finishedTask)) yield* notifyTaskEnded(finishedTask.value, hasConfirmedRepair);
   });
 
   const spawnTaskExecution = Effect.fn("IssueAutomationService.spawnTaskExecution")(function* (
@@ -1089,25 +1116,7 @@ const make = Effect.gen(function* () {
         skippedCount += 1;
         continue;
       }
-      if (profile.filter.onlyUnconfirmed && item.confirmed) {
-        skippedCount += 1;
-        continue;
-      }
-      if (
-        profile.filter.maxSeverity !== null &&
-        item.severity !== null &&
-        item.severity > profile.filter.maxSeverity
-      ) {
-        skippedCount += 1;
-        continue;
-      }
-      if (
-        profile.filter.assignedToAccount &&
-        profile.filter.assignedToAccount.trim().length > 0 &&
-        !(item.assignee ?? "")
-          .toLowerCase()
-          .includes(profile.filter.assignedToAccount.trim().toLowerCase())
-      ) {
+      if (!matchesIssueAutomationFilter(item, profile.filter)) {
         skippedCount += 1;
         continue;
       }
@@ -1341,6 +1350,39 @@ const make = Effect.gen(function* () {
       total: page.total,
       page: page.page,
       pageSize: page.pageSize,
+    };
+  });
+
+  const scanProfileIssues: IssueAutomationService["Service"]["scanProfileIssues"] = Effect.fn(
+    "IssueAutomationService.scanProfileIssues",
+  )(function* (input) {
+    const profile = yield* repo
+      .getProfile(input.profileId)
+      .pipe(Effect.mapError(mapRepoErr("getProfile")));
+    if (!profile) {
+      return yield* new IssueAutomationError({
+        operation: "scanProfileIssues",
+        detail: "未找到对应的自动分析策略配置",
+      });
+    }
+    const { connector, plugin, credentials } = yield* readConnectorCredentials(profile.connectorId);
+    const { items, hasNextPage } = yield* scanIssueAutomationPage(
+      input.page ?? 1,
+      profile.filter,
+      (page, pageSize) =>
+        plugin.listIssues({
+          credentials,
+          scopeId: profile.scopeId,
+          browseType: profile.filter.browseType,
+          keyword: profile.filter.keyword ?? undefined,
+          page,
+          pageSize,
+        }),
+    );
+    const tasks = yield* repo.listTasks(250).pipe(Effect.orElseSucceed(() => []));
+    return {
+      issues: enrichRemoteIssuesWithTasks(connector.id, connector.platform, items, tasks),
+      hasNextPage,
     };
   });
 
@@ -1660,6 +1702,7 @@ const make = Effect.gen(function* () {
     deleteConnector,
     refreshScopes,
     listRemoteIssues,
+    scanProfileIssues,
     getRemoteIssueDetail,
     saveProfile,
     deleteProfile,

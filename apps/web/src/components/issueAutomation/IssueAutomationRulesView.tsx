@@ -9,9 +9,8 @@ import {
   FolderGit2Icon,
   MoreHorizontalIcon,
   PencilIcon,
-  PlayIcon,
-  Plug2Icon,
   PlusIcon,
+  SearchIcon,
   Trash2Icon,
 } from "lucide-react";
 
@@ -46,7 +45,8 @@ export function IssueAutomationRulesView({
   onAddProfile,
   onEditProfile,
   onToggleProfile,
-  onTriggerPoll,
+  onScanProfile,
+  scanningProfileId,
   onDeleteProfile,
 }: {
   readonly environmentId: EnvironmentId | null;
@@ -61,7 +61,8 @@ export function IssueAutomationRulesView({
   readonly onAddProfile: () => void;
   readonly onEditProfile: (profile: IssueAutomationProfile) => void;
   readonly onToggleProfile: (profileId: IssueAutomationProfile["id"], enabled: boolean) => void;
-  readonly onTriggerPoll: (profileId: IssueAutomationProfile["id"]) => void;
+  readonly onScanProfile: (profile: IssueAutomationProfile) => void;
+  readonly scanningProfileId: IssueAutomationProfile["id"] | null;
   readonly onDeleteProfile: (profileId: IssueAutomationProfile["id"]) => void;
 }) {
   const gt = useGT();
@@ -264,9 +265,14 @@ export function IssueAutomationRulesView({
                 control={
                   <div className="flex items-center gap-2">
                     {environmentId ? (
-                      <Button size="xs" variant="outline" onClick={() => onTriggerPoll(prof.id)}>
-                        <PlayIcon className="size-3" />
-                        <T>Poll now</T>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={scanningProfileId !== null}
+                        onClick={() => onScanProfile(prof)}
+                      >
+                        <SearchIcon className="size-3" />
+                        {scanningProfileId === prof.id ? <T>Scanning issues…</T> : <T>Scan now</T>}
                       </Button>
                     ) : null}
                     <Button size="xs" variant="ghost" onClick={() => onEditProfile(prof)}>
@@ -297,15 +303,6 @@ export function IssueAutomationRulesView({
                           <MoreHorizontalIcon className="size-4" />
                         </MenuTrigger>
                         <MenuPopup align="end">
-                          <MenuItem onClick={() => onEditProfile(prof)}>
-                            <PencilIcon />
-                            <T>Edit rule</T>
-                          </MenuItem>
-                          <MenuItem onClick={() => onTriggerPoll(prof.id)}>
-                            <Plug2Icon />
-                            <T>Poll issues now</T>
-                          </MenuItem>
-                          <MenuSeparator />
                           <MenuItem variant="destructive" onClick={() => onDeleteProfile(prof.id)}>
                             <Trash2Icon />
                             <T>Delete rule</T>
