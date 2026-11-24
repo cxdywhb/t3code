@@ -26,7 +26,6 @@ import { useIssuesSupported, usePullRequestsSupported } from "../../state/enviro
 import { useIssueAutomationSupported } from "../../state/issueAutomation";
 import { usePrReviewSupported } from "../../state/prReview";
 import { APP_BASE_NAME } from "../../branding";
-import { CodeMark } from "../CodeMark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -195,15 +194,18 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium tracking-tight">
-      <CodeMark aria-hidden className="size-4 shrink-0" />
+    <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
+      <span aria-hidden className="shrink-0 font-black italic">
+        {"X"}
+      </span>
       <span
         className={cn(
           "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        {APP_BASE_NAME}
+        {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product wordmark */}
+        {"Code"}
       </span>
     </span>
   );
