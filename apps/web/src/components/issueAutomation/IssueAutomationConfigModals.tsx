@@ -414,7 +414,7 @@ export function SearchableProjectMenu({
                     {!isCollapsed ? (
                       <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
                         {group.projects.map((proj) => (
-                          <MenuRadioItem key={proj.id} value={proj.id}>
+                          <MenuRadioItem key={proj.id} value={proj.id} closeOnClick>
                             <span className="flex min-w-0 items-center gap-2">
                               <span className="min-w-0 flex-1 truncate">{proj.title}</span>
                               <MenuRadioItemIndicator />

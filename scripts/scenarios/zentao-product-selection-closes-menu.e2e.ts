@@ -33,6 +33,7 @@ test(
     if (address === null || typeof address === "string") throw new Error("No fixture port");
 
     await t3.project("demo");
+    await t3.project("target-repo");
     await runPromise(
       Effect.gen(function* () {
         const client = yield* rpcClient(T3_HOME, app.baseUrl ?? "");
@@ -52,6 +53,18 @@ test(
 
         yield* Effect.promise(async () => {
           await t3.open("/issue-automation");
+          const filter = screen.getByRole("button", "Filter issues");
+          await filter.tap();
+          await screen.getByRole("menuitemradio", "Assigned to me").tap();
+          await expect(filter).toContainText("Assigned to me");
+          await expect(filter).toHaveAttribute("aria-expanded", "false");
+
+          const repository = screen.getByRole("button", "Default target repository");
+          await repository.tap();
+          await screen.getByRole("menuitemradio", "target-repo", { exact: true }).tap();
+          await expect(repository).toContainText("target-repo");
+          await expect(repository).toHaveAttribute("aria-expanded", "false");
+
           await screen.getByRole("button", "Unattended rule", { exact: true }).tap();
           const ruleName = screen.getByPlaceholder("Auto-diagnosis rule");
           await ruleName.fill("Custom rule");

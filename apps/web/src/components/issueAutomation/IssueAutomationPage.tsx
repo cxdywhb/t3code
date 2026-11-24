@@ -958,7 +958,7 @@ export function IssueAutomationPage() {
                         {(
                           ["unresolved", "unclosed", "assigntome", "openedbyme", "all"] as const
                         ).map((opt) => (
-                          <MenuRadioItem key={opt} value={opt}>
+                          <MenuRadioItem key={opt} value={opt} closeOnClick>
                             <span className="flex items-center gap-2">
                               <span className="flex-1">{browseFilterLabel(opt)}</span>
                               <MenuRadioItemIndicator />
