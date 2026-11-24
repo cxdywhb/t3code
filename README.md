@@ -15,101 +15,36 @@
   <a href="./docs/README.md">文档</a>
 </p>
 
-## 上游项目文档
+## 安装 Code
 
-T3 Code runs the coding agents on your machine and gives them one fast interface. Start a thread at your desk, then approve the next step from your phone.
+1. 在[最新发布页](https://github.com/cxdywhb/t3code/releases/latest)下载适用于 Apple 芯片 Mac 的 `arm64.dmg`。
+2. 如果正在使用旧版，先退出应用。打开安装包，把 **Code** 拖入「应用程序」文件夹，再从那里启动。
+3. 在本机安装并登录至少一个编码智能体。例如，安装 Codex CLI 后运行 `codex login`，或安装 Claude Code 后运行 `claude auth login`。
+4. 打开 Code，选择项目目录，新建会话并输入任务。
 
-It works with Claude Code, Codex, Cursor, OpenCode, Grok Build, Antigravity, Kiro, Pi, Muse Code, fx, and any [ACP](./docs/user/providers-acp.md) agent. If an agent is set up on your computer, T3 Code can control it.
+## 可以用它做什么
 
-## What you get
+- **并行处理任务。** 为不同任务建立独立会话，选择各自的智能体和模型。需要隔离代码改动时，可以为会话创建独立的 Git 工作树。
+- **查看和提交代码。** 在应用内查看差异、提交改动、推送分支及创建拉取请求。
+- **从其他设备继续工作。** 通过局域网、Tailscale 或 T3 Connect 连接运行智能体的电脑，查看同一组会话并处理授权请求。
+- **沿用已有账号。** Code 调用你在本机登录的智能体，模型用量和费用由对应服务商管理。
 
-- **Your subscriptions.** T3 Code does not resell tokens. It drives the agents you are already signed in to.
-- **Every agent in one place.** Change models in the middle of a thread. Let Claude hand a task to Codex.
-- **Desktop, web, and phone.** One server, and every client shows the same threads. There are apps for iOS and Android.
-- **Remote ready.** Run agents on any machine. Connect over your local network, Tailscale, or [T3 Connect](./docs/user/remote-access.md).
-- **Git built in.** Each thread can work in its own worktree. Review the diff, then commit, push, and open a pull request with one button.
-- **Fast.** Performance is a feature here. We measure it, and we treat a dropped frame as a bug.
-- **Open.** Source code is MIT licensed. If you don't like something, fork it under your own branding (see [Trademarks and forks](#trademarks-and-forks)).
+## 使用文档
 
-## Install
+- [安装与首次运行](./docs/user/install.md)
+- [接入支持 ACP 的智能体](./docs/user/providers-acp.md)
+- [从手机或其他电脑远程连接](./docs/user/remote-access.md)
+- [设置权限模式](./docs/user/permission-modes.md)
+- [使用版本控制](./docs/user/source-control.md)
+- [通过 MCP 连接外部智能体](./docs/user/outside-agents.md)
+- [常见问题](./docs/user/faq.md) · [完整文档目录](./docs/README.md)
 
-### Desktop app
+## 开发与上游项目
 
-[Download T3 Code](https://t3.codes/download) for macOS, Windows, or Linux. You can also use a package manager:
+本仓库的发布页提供 Code 桌面安装包。上游 T3 Code 的桌面版、移动端、命令行工具和包管理器安装方式见[上游项目](https://github.com/pingdotgg/t3code)。
 
-| Platform       | Command                                                              |
-| -------------- | -------------------------------------------------------------------- |
-| macOS          | `brew install --cask t3-code`                                        |
-| Windows        | `winget install T3Tools.T3Code` or `scoop install extras/t3code`     |
-| Arch Linux     | `yay -S t3code-bin`                                                  |
-| Nix            | `nix profile add github:NixOS/nixpkgs/nixos-unstable#t3code`         |
-| Debian, Ubuntu | `.deb` from [Releases](https://github.com/pingdotgg/t3code/releases) |
+从源码运行请参阅[开发指南](./docs/operations/00_development.md#first-checkout)和[架构概览](./docs/internals/01_architecture.md)。向上游提交改动前，请阅读[贡献指南](./CONTRIBUTING.md)。
 
-### Command line
+## 许可证与商标
 
-This installs the `t3` command. Run `t3` to start the server and open the web app.
-
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
-
-On Windows, in PowerShell:
-
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
-
-To try it once without an install, run `npx t3@latest`.
-
-### Phone
-
-Get the app from the [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or [Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code). Then follow [remote access](./docs/user/remote-access.md) to connect it to your computer.
-
-### Sign in to an agent
-
-T3 Code needs one agent that is installed and signed in. For example, install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`, or install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`.
-
-[Provider setup](./docs/user/install.md#providers) has the steps for each agent. [Install T3 Code](./docs/user/install.md) covers nightly builds, AppImage, WSL, and NixOS.
-
-## "Wait, what are you selling me?"
-
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
-
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork the source code and build the tool that you want, under your own name and branding.
-
-## Documentation
-
-- [Install and first run](./docs/user/install.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Source control](./docs/user/source-control.md)
-- [Connect outside agents over MCP](./docs/user/outside-agents.md)
-- [FAQ](./docs/user/faq.md)
-
-[All docs](./docs/README.md) has the full list.
-
-## Contributing
-
-We have limited review capacity. Small, focused fixes are the most likely to be merged. Features need an approved discussion first.
-
-- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before you report a bug or open a pull request.
-- Put feature requests in [Ideas](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-- Build from source with the [development runbook](./docs/operations/00_development.md#first-checkout). The [architecture overview](./docs/internals/01_architecture.md) explains how it works.
-- Get help in [Discord](https://discord.gg/jn4EGJjrvv).
-
-## License
-
-The source code in this repository is licensed under the [MIT License](./LICENSE).
-
-## Trademarks and forks
-
-The MIT license applies **only to the source code**. It does not grant any rights to T3 Tools, Inc.'s trademarks, branding, or trade dress, including the **T3 Code** name, wordmark, logos, and application icons.
-
-If you fork, redistribute, or build on T3 Code's source code:
-
-- **Use your own branding.** Replace the T3 Code name, wordmark, logos, and application icons in any public fork, redistributed build, website, package, or app store listing.
-- **Be explicitly clear that your project is unofficial.** Do not use the T3 Code name, wordmark, logo, or branding in your own projects without making it unmistakably clear that your project is unofficial and not affiliated with or endorsed by T3 Tools, Inc.
-
-Using our name, wordmark, logo, or branding in a way that suggests official status or affiliation is trademark infringement and unlawful. **Any project indicating or implying that it is an official version of T3 Code when it is not will be pursued to the full extent of the law.**
-
-See [TRADEMARK.md](./TRADEMARK.md) for the full trademark and branding policy.
+源代码采用 [MIT 许可证](./LICENSE)。T3 Code 的名称、标志和应用图标受上游[商标与品牌政策](./TRADEMARK.md)约束。公开分发衍生版本时须使用独立品牌，并清楚标明非官方身份。
