@@ -261,6 +261,7 @@ export function showBootError(error: unknown) {
   console.error("T3 Code failed to start.", error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
+  delete bootShell.dataset.closing;
 
   const bridge = window.desktopBridge;
   const environment = readEnvironment(bridge);

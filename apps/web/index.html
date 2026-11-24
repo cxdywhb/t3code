@@ -414,35 +414,198 @@
       }
 
       #boot-shell {
-        position: relative;
+        --boot-veil-top: rgba(255, 255, 255, 0.52);
+        --boot-veil-bottom: rgba(255, 255, 255, 0.84);
+        --boot-emblem-shadow:
+          0 0 0 1px rgba(17, 18, 21, 0.08), 0 18px 36px -14px rgba(17, 18, 21, 0.22);
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
         overflow: hidden;
         display: flex;
-        min-height: 100%;
         align-items: center;
         justify-content: center;
         background: inherit;
         color: inherit;
+        opacity: 1;
+        transform: scale(1);
+        transition: opacity 160ms ease-out;
+        user-select: none;
+      }
+
+      html.dark #boot-shell {
+        --boot-veil-top: rgba(0, 0, 0, 0.58);
+        --boot-veil-bottom: rgba(0, 0, 0, 0.9);
+        --boot-emblem-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
       }
 
       html[data-theme-selected="true"] #boot-shell {
+        --boot-veil-top: color-mix(in srgb, var(--boot-background) 56%, transparent);
+        --boot-veil-bottom: color-mix(in srgb, var(--boot-background) 88%, transparent);
         background: var(--boot-background);
         color: var(--boot-foreground);
+      }
+
+      #boot-shell[data-closing="true"] {
+        opacity: 0;
+        pointer-events: none;
       }
 
       #boot-shell-card {
         position: relative;
         z-index: 1;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
+        gap: 24px;
+      }
+
+      #boot-shell-stage {
+        perspective: 900px;
+        display: grid;
+        place-items: center;
+      }
+
+      #boot-shell-emblem {
+        position: relative;
         width: 96px;
         height: 96px;
+        border-radius: 23px;
+        overflow: hidden;
+        clip-path: inset(0 round 23px);
+        isolation: isolate;
+        box-shadow: var(--boot-emblem-shadow);
       }
 
       #boot-shell-logo {
-        width: 64px;
-        height: 64px;
+        width: 100%;
+        height: 100%;
+        display: block;
         object-fit: contain;
+      }
+
+      #boot-shell-veil {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(155deg, var(--boot-veil-top) 0%, var(--boot-veil-bottom) 100%);
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #boot-shell-sheen {
+        position: absolute;
+        inset: -40%;
+        background: linear-gradient(
+          124deg,
+          transparent 38%,
+          rgba(255, 255, 255, 0.04) 44%,
+          rgba(255, 255, 255, 0.34) 50%,
+          rgba(255, 255, 255, 0.04) 56%,
+          transparent 62%
+        );
+        transform: translateX(-118%);
+        mix-blend-mode: screen;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #boot-shell-wordmark {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        line-height: 1;
+      }
+
+      #boot-shell-wordmark .boot-wm-x {
+        font-size: 17px;
+        font-weight: 900;
+        font-style: italic;
+        letter-spacing: -0.02em;
+        color: currentColor;
+      }
+
+      #boot-shell-wordmark .boot-wm-code {
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.32em;
+        color: color-mix(in srgb, currentColor 48%, transparent);
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        #boot-shell {
+          transition:
+            opacity 420ms cubic-bezier(0.22, 1, 0.36, 1),
+            transform 480ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        #boot-shell[data-closing="true"] {
+          transform: scale(1.06);
+        }
+
+        #boot-shell-emblem {
+          animation: bootDepthPull 860ms cubic-bezier(0.12, 1, 0.22, 1) 40ms both;
+        }
+
+        #boot-shell-veil {
+          animation: bootVeilLift 740ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
+        }
+
+        #boot-shell-sheen {
+          animation: bootSheenPass 780ms cubic-bezier(0.22, 1, 0.36, 1) 420ms both;
+        }
+
+        #boot-shell-wordmark {
+          animation: bootWordmarkLock 640ms cubic-bezier(0.22, 1, 0.36, 1) 520ms both;
+        }
+      }
+
+      @keyframes bootDepthPull {
+        0% {
+          opacity: 0;
+          transform: translateZ(0) scale(2.45) rotateX(18deg) rotateY(-8deg);
+        }
+        22% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 1;
+          transform: translateZ(0) scale(1) rotateX(0deg) rotateY(0deg);
+        }
+      }
+
+      @keyframes bootVeilLift {
+        0% {
+          opacity: 0.85;
+        }
+        100% {
+          opacity: 0;
+        }
+      }
+
+      @keyframes bootSheenPass {
+        0% {
+          opacity: 1;
+          transform: translateX(-118%);
+        }
+        99% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translateX(135%);
+        }
+      }
+
+      @keyframes bootWordmarkLock {
+        0% {
+          opacity: 0;
+          transform: translateY(6px) scale(1.04);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
       }
 
       /* App CSS locks body and #root scrolling once main loads, so the error screen scrolls itself. */
@@ -450,6 +613,7 @@
         height: 100%;
         overflow-x: hidden;
         overflow-y: auto;
+        user-select: text;
       }
 
       #boot-error {
@@ -684,10 +848,24 @@
     <title>X Code</title>
   </head>
   <body>
-    <div id="root">
-      <div id="boot-shell">
-        <div id="boot-shell-card" aria-label="X Code splash screen">
-          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="X Code" />
+    <div id="root"></div>
+    <div id="boot-shell">
+      <div id="boot-shell-card" aria-label="X Code splash screen">
+        <div id="boot-shell-stage">
+          <div id="boot-shell-emblem">
+            <img
+              id="boot-shell-logo"
+              src="/apple-touch-icon.png"
+              alt="X Code"
+              fetchpriority="high"
+            />
+            <div id="boot-shell-veil" aria-hidden="true"></div>
+            <div id="boot-shell-sheen" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div id="boot-shell-wordmark" aria-hidden="true">
+          <span class="boot-wm-x">X</span>
+          <span class="boot-wm-code">CODE</span>
         </div>
       </div>
     </div>
