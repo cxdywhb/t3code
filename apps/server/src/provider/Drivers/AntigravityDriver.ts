@@ -2,6 +2,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import {
   AntigravitySettings,
   ProviderDriverKind,
+  ProviderInstanceId,
   ProviderSetupError,
   RuntimeMode,
   settingsSecretLiteral,
@@ -580,6 +581,7 @@ export const AntigravityDriver: ProviderDriver<
       profileDirectory,
       authMethod: auth.authMethod,
       environment: processEnvironment,
+      allowKeyringFallback: instanceId === ProviderInstanceId.make(DRIVER),
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),

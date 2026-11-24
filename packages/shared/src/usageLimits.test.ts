@@ -1375,6 +1375,29 @@ describe("pooled account columns", () => {
     );
     expect(keys(pool!)).toEqual([["b", "a"]]);
   });
+
+  it("splits Antigravity accounts into separate pools in dashboard view while keeping pooled view combined", () => {
+    const first = {
+      ...account("ag-a", [{ ...window, id: "gemini-5h" }]),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Antigravity",
+    };
+    const second = {
+      ...account("ag-b", [{ ...window, id: "gemini-5h", usedPercent: 60 }]),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Work",
+    };
+    const pooled = collectLimitPools([first, second], now, "pooled");
+    expect(pooled).toHaveLength(1);
+    expect(pooled[0]?.accounts.map((member) => member.key)).toEqual(["ag-a", "ag-b"]);
+
+    const dashboard = collectLimitPools([first, second], now, "dashboard");
+    expect(dashboard).toHaveLength(2);
+    expect(dashboard.map((pool) => pool.accounts.map((member) => member.key))).toEqual([
+      ["ag-a"],
+      ["ag-b"],
+    ]);
+  });
 });
 
 describe("/usage-limits", () => {

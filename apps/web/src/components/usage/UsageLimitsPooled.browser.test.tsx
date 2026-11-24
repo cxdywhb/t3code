@@ -134,3 +134,69 @@ it("shows each Codex account's own remaining quota and reset time", async () => 
     work.element().getBoundingClientRect().bottom,
   );
 });
+
+function antigravityAccount(
+  instanceId: string,
+  displayName: string,
+  credentialFingerprint: string,
+  usedPercent: number,
+  resetsAt: string,
+): ServerProvider {
+  return {
+    ...account(instanceId, usedPercent, resetsAt),
+    driver: ProviderDriverKind.make("antigravity"),
+    displayName,
+    usageLimits: {
+      checkedAt,
+      credentialFingerprint,
+      windows: [
+        {
+          id: "gemini-5h",
+          label: "Gemini · 5-hour",
+          kind: "session",
+          usedPercent,
+          resetsAt,
+        },
+      ],
+    },
+  };
+}
+
+it("shows each Antigravity account's own remaining quota and reset time", async () => {
+  const presentations = new Map([
+    [
+      EnvironmentId.make("desk"),
+      {
+        entry: { target: { label: "Desk" } },
+        serverConfig: {
+          providers: [
+            antigravityAccount(
+              "antigravity",
+              "Antigravity",
+              "fp-account-1",
+              15,
+              "2026-10-25T17:00:00.000Z",
+            ),
+            antigravityAccount(
+              "antigravity_work",
+              "Work",
+              "fp-account-2",
+              55,
+              "2026-10-25T18:00:00.000Z",
+            ),
+          ],
+        },
+      },
+    ],
+  ]);
+  await using screen = await render(
+    <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
+  );
+  const primary = screen.getByRole("region", { name: "Antigravity #1" });
+  const work = screen.getByRole("region", { name: "Antigravity · Work" });
+  await expect.element(primary.getByRole("button", { name: /85% left.*1h/ })).toBeVisible();
+  await expect.element(work.getByRole("button", { name: /45% left.*2h/ })).toBeVisible();
+  expect(work.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    primary.element().getBoundingClientRect().bottom,
+  );
+});

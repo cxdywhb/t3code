@@ -330,6 +330,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   readonly profileDirectory: string;
   readonly authMethod: AntigravitySettings["authMethod"];
   readonly environment: NodeJS.ProcessEnv;
+  readonly allowKeyringFallback?: boolean;
   readonly readKeyringSecret?: Effect.Effect<string | undefined, AntigravityKeyringError>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -397,12 +398,15 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     let projectId: string | undefined;
     if (!(yield* fs.exists(tokenPath))) {
       cached = undefined;
-      // Google account instances bypass the keyring, whose one entry every profile shares.
+      // Isolated personal instances read their own file; the default instance also falls back
+      // to a pre-isolation or CLI keyring sign-in so already signed-in accounts keep limits.
       const stored = (yield* fs.exists(cliTokenPath))
         ? yield* fs.readFileString(cliTokenPath)
         : input.authMethod === "oauth-business"
           ? yield* readKeyringSecret
-          : undefined;
+          : input.allowKeyringFallback
+            ? yield* readKeyringSecret.pipe(Effect.orElseSucceed(() => undefined))
+            : undefined;
       if (stored === undefined) {
         return makeUnavailableUsageLimits({
           checkedAt,

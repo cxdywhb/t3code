@@ -561,6 +561,10 @@ const WINDOW_KIND_ORDER: Record<ServerProviderUsageWindow["kind"], number> = {
   other: 3,
 };
 
+export function isPerAccountDashboardDriver(driver: ServerProvider["driver"]): boolean {
+  return driver === "codex" || driver === "antigravity";
+}
+
 export function collectLimitPools(
   accounts: readonly LimitAccount[],
   now: number,
@@ -569,7 +573,9 @@ export function collectLimitPools(
   const groups = new Map<string, LimitAccount[]>();
   for (const account of accounts) {
     const key =
-      view === "dashboard" && account.driver === "codex" ? `codex:${account.key}` : account.driver;
+      view === "dashboard" && isPerAccountDashboardDriver(account.driver)
+        ? `${account.driver}:${account.key}`
+        : account.driver;
     const list = groups.get(key);
     if (list) list.push(account);
     else groups.set(key, [account]);

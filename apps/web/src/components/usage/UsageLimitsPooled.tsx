@@ -3,6 +3,7 @@ import {
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
+  isPerAccountDashboardDriver,
   type LimitAccount,
   type LimitPool,
   type LimitPoolMember,
@@ -646,7 +647,7 @@ function PoolSection({
 }) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
-  const account = pool.driver === "codex" ? pool.accounts[0] : undefined;
+  const account = isPerAccountDashboardDriver(pool.driver) ? pool.accounts[0] : undefined;
   const title =
     account?.displayName && account.displayName !== label
       ? `${label} · ${account.displayName}`
@@ -697,7 +698,13 @@ export function UsageLimitsPooled({
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
   const pools = collectLimitPools(collectLimitAccounts(presentations), now, "dashboard");
-  const codex = pools.filter((pool) => pool.driver === "codex");
+  const splitPoolsByDriver = new Map<LimitPool["driver"], LimitPool[]>();
+  for (const pool of pools) {
+    if (!isPerAccountDashboardDriver(pool.driver)) continue;
+    const list = splitPoolsByDriver.get(pool.driver);
+    if (list) list.push(pool);
+    else splitPoolsByDriver.set(pool.driver, [pool]);
+  }
   const notices = collectLimitNotices(presentations, m);
   const externalLinks = collectDashboardUsageLinks(presentations, m);
   return (
@@ -708,16 +715,20 @@ export function UsageLimitsPooled({
         </p>
       ) : null}
       <SegmentPopoverContext value={segmentPopover}>
-        {pools.map((pool) => (
-          <PoolSection
-            key={pool.driver === "codex" ? pool.accounts[0]!.key : pool.driver}
-            pool={pool}
-            now={now}
-            accountNumber={
-              pool.driver === "codex" && codex.length > 1 ? codex.indexOf(pool) + 1 : undefined
-            }
-          />
-        ))}
+        {pools.map((pool) => {
+          const split = isPerAccountDashboardDriver(pool.driver);
+          const driverPools = splitPoolsByDriver.get(pool.driver);
+          return (
+            <PoolSection
+              key={split ? pool.accounts[0]!.key : pool.driver}
+              pool={pool}
+              now={now}
+              accountNumber={
+                driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined
+              }
+            />
+          );
+        })}
       </SegmentPopoverContext>
       <Popover handle={segmentPopover} actionsRef={segmentPopoverActions}>
         {({ payload }) =>

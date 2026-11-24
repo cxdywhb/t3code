@@ -7,9 +7,11 @@ import {
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
+  isPerAccountDashboardDriver,
   paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
+  type LimitPool,
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
 import {
@@ -482,6 +484,13 @@ export function UsageLimitsSection({
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
   const pools = collectLimitPools(collectLimitAccounts(selected), now, "dashboard");
+  const splitPoolsByDriver = new Map<LimitPool["driver"], LimitPool[]>();
+  for (const pool of pools) {
+    if (!isPerAccountDashboardDriver(pool.driver)) continue;
+    const list = splitPoolsByDriver.get(pool.driver);
+    if (list) list.push(pool);
+    else splitPoolsByDriver.set(pool.driver, [pool]);
+  }
   const m = useMessages();
   const notices = collectLimitNotices(selected, m);
   const externalLinks = collectDashboardUsageLinks(selected, m);
@@ -501,16 +510,26 @@ export function UsageLimitsSection({
       ) : null}
       {pools.map((pool) => {
         const windows = displayLimitWindows(pool);
-        const codex = pool.driver === "codex" ? pool.accounts[0] : undefined;
+        const splitAccount = isPerAccountDashboardDriver(pool.driver)
+          ? pool.accounts[0]
+          : undefined;
+        const driverPools = splitPoolsByDriver.get(pool.driver);
+        const accountNumber =
+          driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined;
+        const providerLabel = providerClients.get(pool.driver)?.label ?? pool.driver;
+        const accountLabel = splitAccount ? accountName(splitAccount, m) : null;
+        const title =
+          accountLabel && accountLabel !== providerLabel
+            ? `${providerLabel} · ${accountLabel}`
+            : accountNumber
+              ? `${providerLabel} #${accountNumber}`
+              : providerLabel;
         return (
-          <Fragment key={codex?.key ?? pool.driver}>
+          <Fragment key={splitAccount?.key ?? pool.driver}>
             <View className="gap-3">
               <View className="flex-row items-center gap-2 px-1">
                 <ProviderIcon provider={pool.driver} size={18} />
-                <Text className="text-base font-t3-medium text-foreground">
-                  {providerClients.get(pool.driver)?.label ?? pool.driver}
-                  {codex ? ` · ${accountName(codex, m)}` : ""}
-                </Text>
+                <Text className="text-base font-t3-medium text-foreground">{title}</Text>
               </View>
               {windows.map((window) => {
                 const details =
