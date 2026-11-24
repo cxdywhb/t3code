@@ -893,6 +893,25 @@ export function ProfileModal({
     }
   };
 
+  function writeBackDescription(): string {
+    switch (actionMode) {
+      case "fix_worktree_review":
+        return autoWriteComment
+          ? gt("Post the diagnosis and repair report as a bug comment.")
+          : gt("The fix stays in the worktree. The ZenTao bug stays unchanged.");
+      case "diagnose_only":
+        return autoWriteComment
+          ? gt("Post the root cause report as a bug comment.")
+          : gt("The report stays in T3 Code. The ZenTao bug stays unchanged.");
+      case "auto_resolve":
+        return autoWriteComment
+          ? gt("Post the repair report as a bug comment and try to mark the bug as resolved.")
+          : gt(
+              "The fix still runs in the worktree. No comment is posted and the bug is not marked as resolved.",
+            );
+    }
+  }
+
   const browseFilterLabel = (val: IssueAutomationBrowseFilter): string => {
     switch (val) {
       case "unresolved":
@@ -1404,13 +1423,19 @@ export function ProfileModal({
               />
 
               <SettingsRow
-                title={gt("Auto-post diagnosis comment to ZenTao")}
+                title={gt("Automatically write back to ZenTao")}
+                description={
+                  <span id="issue-rule-write-back-description" aria-live="polite">
+                    {writeBackDescription()}
+                  </span>
+                }
                 control={
                   <Switch
                     size="sm"
                     checked={autoWriteComment}
                     onCheckedChange={setAutoWriteComment}
-                    aria-label={gt("Auto-post diagnosis comment")}
+                    aria-label={gt("Automatically write back to ZenTao")}
+                    aria-describedby="issue-rule-write-back-description"
                   />
                 }
               />

@@ -240,11 +240,11 @@ export function useActionModeLabel() {
   return (mode: IssueAutomationActionMode): string => {
     switch (mode) {
       case "diagnose_only":
-        return gt("Diagnose only + Comment");
+        return gt("Diagnose the root cause only");
       case "fix_worktree_review":
-        return gt("Worktree fix + Comment");
+        return gt("Fix in an isolated worktree");
       case "auto_resolve":
-        return gt("Auto fix + Mark resolved");
+        return gt("Fix in an isolated worktree and mark as resolved");
     }
   };
 }
