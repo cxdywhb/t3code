@@ -1,3 +1,4 @@
+import { asLaunchingThread } from "@t3tools/client-runtime/state/thread-inbox";
 import appCss from "../index.css?inline";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -263,6 +264,39 @@ function threadShell(projectId: ProjectId, index: number): EnvironmentThreadShel
     title: `Thread ${index}`,
   });
 }
+
+it("keeps the newest thread first when a turn starts and finishes", async () => {
+  using stack = new DisposableStack();
+  const previous = getClientSettings();
+  stack.defer(() => __setClientSettingsForTests(previous));
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, sidebarFixedCreationOrder: true });
+  const group = project("fixed");
+  const older = { ...threadShell(group.id, 0), createdAt: "2026-01-01T00:00:00.000Z" };
+  const newer = { ...threadShell(group.id, 1), createdAt: "2026-01-02T00:00:00.000Z" };
+  vi.mocked(useProjects).mockReturnValue([group]);
+  vi.mocked(useQuietThreadShells).mockReturnValue([older, newer]);
+  const tree = () => (
+    <SidebarProvider>
+      <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+    </SidebarProvider>
+  );
+  await using screen = await render(tree());
+  const order = () =>
+    Array.from(screen.container.querySelectorAll("[data-thread-item]"), (row) =>
+      row.getAttribute("data-thread-item"),
+    );
+  const expected = [newer, older].map((thread) => `${thread.environmentId}:${thread.id}`);
+  expect(order()).toEqual(expected);
+  vi.mocked(useQuietThreadShells).mockReturnValue([asLaunchingThread(older), newer]);
+  await screen.rerender(tree());
+  expect(order()).toEqual(expected);
+  vi.mocked(useQuietThreadShells).mockReturnValue([
+    { ...older, updatedAt: "2026-01-03T00:00:00.000Z" },
+    newer,
+  ]);
+  await screen.rerender(tree());
+  expect(order()).toEqual(expected);
+});
 
 describe("sidebar render isolation", () => {
   // regression: #33100 Cmd+J re-rendered every sidebar row, which took hundreds of ms with many threads

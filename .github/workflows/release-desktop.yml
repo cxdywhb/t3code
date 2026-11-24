@@ -309,16 +309,10 @@ jobs:
           chmod +x "$dir/jsign"
           echo "T3CODE_JSIGN=$dir/jsign" >> "$GITHUB_ENV"
 
-      # The desktop build applies the same branding to apps/server/dist/client
-      # (resolveDesktopWebAssetBrand in scripts/build-desktop-artifact.ts); the
-      # CLI archive below ships that client and is now built first.
       - name: Apply web client branding
         if: inputs.cli_archive
         shell: bash
-        run: |
-          brand=production
-          if [[ "${{ inputs.version }}" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then brand=nightly; fi
-          node scripts/apply-web-brand-assets.ts "$brand" apps/server/dist/client
+        run: node scripts/apply-web-brand-assets.ts code apps/server/dist/client
 
       - name: Resolve target Node.js for the CLI executable
         id: target_node

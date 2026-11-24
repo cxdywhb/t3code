@@ -8,7 +8,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Argument, Command, Flag } from "effect/cli";
 import {
-  resolveWebAssetBrandForChannel,
   resolveWebIconOverrides,
   WEB_ASSET_CHANNELS,
   type WebAssetBrand,
@@ -53,14 +52,9 @@ export const applyWebBrandAssetsCommand = Command.make(
       Argument.optional,
     ),
   },
-  ({ brand, channel, targetDirectory }) =>
+  ({ brand, targetDirectory }) =>
     applyWebBrandAssets(
-      Option.getOrElse(brand, () =>
-        Option.match(channel, {
-          onNone: () => "production" as const,
-          onSome: resolveWebAssetBrandForChannel,
-        }),
-      ),
+      Option.getOrElse(brand, () => "code" as const),
       Option.getOrElse(targetDirectory, () => "apps/web/dist"),
     ),
 ).pipe(Command.withDescription("Copy web brand assets into a built hosted web app."));

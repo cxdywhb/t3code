@@ -501,6 +501,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("usage quota rate limit reset recover continue")],
   },
   {
+    id: "fixed-creation-order",
+    title: msg("Keep threads in creation order"),
+    to: "/settings/general",
+    searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
+  },
+  {
     id: "working-shelf",
     title: msg("Working section"),
     to: "/settings/general",

@@ -17,7 +17,6 @@ import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/prov
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
 import {
   createContext,
-  Fragment,
   type ReactNode,
   type RefObject,
   use,
@@ -39,7 +38,7 @@ import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { PaceIcon, ResetCreditDialog, barColor, usePaceMark, useResetCredit } from "./UsageLimits";
 import {
-  collectExternalUsageLinks,
+  collectDashboardUsageLinks,
   collectLimitNotices,
   cursorUsageWindowDetails,
   formatResetsIn,
@@ -91,7 +90,7 @@ function AccountAvatar({
           String(account.driver)
         }
         accentColor={account.accentColor}
-        showBadge={Boolean(account.displayName)}
+        showBadge={account.driver !== "codex" && Boolean(account.displayName)}
         indicatorBackground="var(--popover)"
         className={cn("size-5", className)}
         iconClassName="size-4 text-foreground/80"
@@ -636,13 +635,28 @@ function PoolWindowCard({
   );
 }
 
-function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+function PoolSection({
+  pool,
+  now,
+  accountNumber,
+}: {
+  readonly pool: LimitPool;
+  readonly now: number;
+  readonly accountNumber?: number | undefined;
+}) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
+  const account = pool.driver === "codex" ? pool.accounts[0] : undefined;
+  const title =
+    account?.displayName && account.displayName !== label
+      ? `${label} · ${account.displayName}`
+      : accountNumber
+        ? `${label} #${accountNumber}`
+        : label;
   const windows = displayLimitWindows(pool);
   const m = useMessages();
   return (
-    <section className="flex flex-col gap-3">
+    <section aria-label={title} className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
         <ProviderInstanceIcon
           driverKind={pool.driver}
@@ -651,7 +665,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
           className="size-5"
           iconClassName="size-4 text-foreground/80"
         />
-        {label}
+        {title}
       </h2>
       {windows.map((window) => {
         const details =
@@ -682,9 +696,10 @@ export function UsageLimitsPooled({
   const m = useMessages();
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
-  const pools = collectLimitPools(collectLimitAccounts(presentations), now);
+  const pools = collectLimitPools(collectLimitAccounts(presentations), now, "dashboard");
+  const codex = pools.filter((pool) => pool.driver === "codex");
   const notices = collectLimitNotices(presentations, m);
-  const externalLinks = collectExternalUsageLinks(presentations, m);
+  const externalLinks = collectDashboardUsageLinks(presentations, m);
   return (
     <div className="flex flex-col gap-8">
       {pools.length === 0 && notices.length === 0 && externalLinks.length === 0 ? (
@@ -694,9 +709,14 @@ export function UsageLimitsPooled({
       ) : null}
       <SegmentPopoverContext value={segmentPopover}>
         {pools.map((pool) => (
-          <Fragment key={pool.driver}>
-            <PoolSection pool={pool} now={now} />
-          </Fragment>
+          <PoolSection
+            key={pool.driver === "codex" ? pool.accounts[0]!.key : pool.driver}
+            pool={pool}
+            now={now}
+            accountNumber={
+              pool.driver === "codex" && codex.length > 1 ? codex.indexOf(pool) + 1 : undefined
+            }
+          />
         ))}
       </SegmentPopoverContext>
       <Popover handle={segmentPopover} actionsRef={segmentPopoverActions}>
@@ -714,7 +734,7 @@ export function UsageLimitsPooled({
       </Popover>
       {externalLinks.map((link) => (
         <section
-          key={link.url}
+          key={link.key}
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4"
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">

@@ -13,7 +13,7 @@ import {
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
 import {
-  collectExternalUsageLinks,
+  collectDashboardUsageLinks,
   collectLimitNotices,
   cursorUsageWindowDetails,
 } from "@t3tools/shared/usageLimitsCopy";
@@ -481,10 +481,10 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const pools = collectLimitPools(collectLimitAccounts(selected), now);
+  const pools = collectLimitPools(collectLimitAccounts(selected), now, "dashboard");
   const m = useMessages();
   const notices = collectLimitNotices(selected, m);
-  const externalLinks = collectExternalUsageLinks(selected, m);
+  const externalLinks = collectDashboardUsageLinks(selected, m);
   const colors = useProviderColors();
   const gt = useGT();
   return (
@@ -501,13 +501,15 @@ export function UsageLimitsSection({
       ) : null}
       {pools.map((pool) => {
         const windows = displayLimitWindows(pool);
+        const codex = pool.driver === "codex" ? pool.accounts[0] : undefined;
         return (
-          <Fragment key={pool.driver}>
+          <Fragment key={codex?.key ?? pool.driver}>
             <View className="gap-3">
               <View className="flex-row items-center gap-2 px-1">
                 <ProviderIcon provider={pool.driver} size={18} />
                 <Text className="text-base font-t3-medium text-foreground">
                   {providerClients.get(pool.driver)?.label ?? pool.driver}
+                  {codex ? ` · ${accountName(codex, m)}` : ""}
                 </Text>
               </View>
               {windows.map((window) => {
@@ -535,7 +537,7 @@ export function UsageLimitsSection({
         );
       })}
       {externalLinks.map((link) => (
-        <View key={link.url} className="gap-3 rounded-xl border border-border-subtle p-4">
+        <View key={link.key} className="gap-3 rounded-xl border border-border-subtle p-4">
           <Text className="text-base font-t3-medium text-foreground">{link.label}</Text>
           <Text className="text-xs text-foreground-muted">{link.accounts.join(", ")}</Text>
           {link.message ? (
@@ -605,8 +607,8 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
       : new Map([...presentations].filter(([id]) => selectedIds.has(id)));
   const accounts = collectLimitAccounts(selected);
   const account = accounts.find((candidate) => candidate.key === accountKey);
-  const pool = collectLimitPools(accounts, now)
-    .find((candidate) => candidate.driver === account?.driver)
+  const pool = collectLimitPools(accounts, now, "dashboard")
+    .find((candidate) => candidate.accounts.some((member) => member.key === accountKey))
     ?.windows.find((candidate) => candidate.id === windowId && candidate.kind === windowKind);
   const window = pool?.members.find((member) => member.account.key === accountKey)?.window;
   const evenPace = window ? paceRemainingPercent(window, now) : null;

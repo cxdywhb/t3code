@@ -57,26 +57,25 @@ describe("UsageLimitsPooled ChatGPT usage card", () => {
       <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
     );
 
+    await expect.element(screen.getByText("ChatGPT Work on Desk", { exact: true })).toBeVisible();
     await expect
-      .element(screen.getByText("ChatGPT Work on Desk, ChatGPT Personal on Desk"))
-      .toBeVisible();
-    await expect
-      .element(screen.getByText("View usage in ChatGPT with your connected account."))
+      .element(screen.getByText("ChatGPT Personal on Desk", { exact: true }))
       .toBeVisible();
   });
 });
 
+function account(instanceId: string, usedPercent: number, resetsAt: string): ServerProvider {
+  return {
+    ...managedChatGpt(instanceId, instanceId),
+    usageLimits: {
+      checkedAt,
+      windows: [{ id: "weekly", label: "Weekly", kind: "weekly", usedPercent, resetsAt }],
+    },
+  };
+}
+
 describe("UsageLimitsPooled next refill", () => {
   it("skips elapsed resets while waiting for refreshed account data", async () => {
-    function account(instanceId: string, usedPercent: number, resetsAt: string): ServerProvider {
-      return {
-        ...managedChatGpt(instanceId, instanceId),
-        usageLimits: {
-          checkedAt,
-          windows: [{ id: "weekly", label: "Weekly", kind: "weekly", usedPercent, resetsAt }],
-        },
-      };
-    }
     const presentations = new Map([
       [
         EnvironmentId.make("desk"),
@@ -84,8 +83,14 @@ describe("UsageLimitsPooled next refill", () => {
           entry: { target: { label: "Desk" } },
           serverConfig: {
             providers: [
-              account("Work", 20, "2026-10-25T17:00:00.000Z"),
-              account("Personal", 60, "2026-10-25T18:00:00.000Z"),
+              {
+                ...account("Work", 20, "2026-10-25T17:00:00.000Z"),
+                driver: ProviderDriverKind.make("claudeAgent"),
+              },
+              {
+                ...account("Personal", 60, "2026-10-25T18:00:00.000Z"),
+                driver: ProviderDriverKind.make("claudeAgent"),
+              },
             ],
           },
         },
@@ -101,4 +106,31 @@ describe("UsageLimitsPooled next refill", () => {
     );
     await expect.element(screen.getByText(/^↻ \+\d+%$/)).not.toBeInTheDocument();
   });
+});
+
+it("shows each Codex account's own remaining quota and reset time", async () => {
+  const presentations = new Map([
+    [
+      EnvironmentId.make("desk"),
+      {
+        entry: { target: { label: "Desk" } },
+        serverConfig: {
+          providers: [
+            account("Work", 20, "2026-10-25T17:00:00.000Z"),
+            account("Personal", 60, "2026-10-25T18:00:00.000Z"),
+          ],
+        },
+      },
+    ],
+  ]);
+  await using screen = await render(
+    <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
+  );
+  const work = screen.getByRole("region", { name: "Codex · Work" });
+  const personal = screen.getByRole("region", { name: "Codex · Personal" });
+  await expect.element(work.getByRole("button", { name: /80% left.*1h/ })).toBeVisible();
+  await expect.element(personal.getByRole("button", { name: /40% left.*2h/ })).toBeVisible();
+  expect(personal.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    work.element().getBoundingClientRect().bottom,
+  );
 });

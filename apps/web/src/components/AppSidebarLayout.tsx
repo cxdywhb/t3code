@@ -388,6 +388,8 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
       ref={appShellCommandsRef}
       className={cn(
         "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
+        isElectron &&
+          "md:ml-0 md:left-[max(var(--workspace-controls-left),calc(anchor(--main-sidebar-gap_right,0px)-var(--workspace-titlebar-control-size)-(--spacing(2))-1px))]",
         mobileSidebarSheetMounted && "hidden",
       )}
       data-sidebar-control=""
@@ -397,7 +399,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
           <TooltipTrigger
             render={
               <SidebarTrigger
-                variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
+                variant="ghost"
                 className={cn(
                   "pointer-events-auto",
                   isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
@@ -468,7 +470,7 @@ export function AppSidebarLayout({
   return (
     <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
       <SidebarProvider
-        className="h-dvh! min-h-0!"
+        className="h-dvh! min-h-0! [&>[data-slot=sidebar]>[data-slot=sidebar-gap]]:[anchor-name:--main-sidebar-gap]"
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
         storageKey="chat_thread_sidebar_open"
         style={sidebarProviderStyle}

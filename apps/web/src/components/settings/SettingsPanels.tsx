@@ -544,6 +544,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
       ? [gt("Project order")]
       : []),
+    ...(settings.sidebarFixedCreationOrder ? [gt("Keep threads in creation order")] : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
@@ -738,6 +739,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
+      sidebarFixedCreationOrder: DEFAULT_UNIFIED_SETTINGS.sidebarFixedCreationOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
@@ -955,6 +957,21 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
+          {...setting("fixed-creation-order")}
+          description={gt(
+            "List newest threads first. Starting or finishing a turn keeps the thread in place.",
+          )}
+          control={
+            <Switch
+              checked={settings.sidebarFixedCreationOrder}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarFixedCreationOrder: Boolean(checked) })
+              }
+              aria-label={gt("Keep threads in creation order")}
+            />
+          }
+        />
+        <SettingsRow
           {...setting("working-shelf")}
           description={
             <T>
@@ -977,7 +994,8 @@ export function GeneralSettingsPanel() {
           }
           control={
             <Switch
-              checked={settings.sidebarWorkingShelfEnabled}
+              checked={!settings.sidebarFixedCreationOrder && settings.sidebarWorkingShelfEnabled}
+              disabled={settings.sidebarFixedCreationOrder}
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }

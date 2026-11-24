@@ -117,9 +117,9 @@ setting removes it from `settings.json`.
 
 ## Track subscription limits
 
-**Usage → Limits** pools every subscription account it can see per provider, so with several Codex
-or Claude accounts across your enabled environments and hubs you read one number per window rather than a
-list. Each window card shows how much of the pool is left and a bar with one segment per account,
+在 **用量 → 限额** 中，每个 Codex 账号单独显示剩余配额和重置时间。同一账号在多台机器或配额中心重复上报时只显示一次。其他提供方仍按提供方合并展示。
+
+Each window card shows how much of the pool is left and a bar with one segment per account,
 kept in the same column across windows. Accounts are ordered by their next 5-hour refill, soonest
 first. For an account with no weekly quota left, this is when its session becomes usable again.
 The first available window is used when no account reports a 5-hour limit. A gap means the

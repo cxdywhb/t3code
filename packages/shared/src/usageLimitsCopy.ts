@@ -8,6 +8,7 @@ import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
 import {
+  CHATGPT_USAGE_URL,
   collectExternalUsageLinks as collectExternalUsageLinksWith,
   cursorUsageWindowDetails as cursorUsageWindowDetailsBase,
   type LimitPool,
@@ -62,6 +63,21 @@ export function collectExternalUsageLinks(
 ) {
   return collectExternalUsageLinksWith(presentations, (provider, environment) =>
     resolve(msg("{provider} on {environment}", { provider, environment })),
+  );
+}
+
+export function collectDashboardUsageLinks(
+  presentations: LimitPresentations,
+  resolve: MFunctionType,
+) {
+  return collectExternalUsageLinks(presentations, resolve).flatMap((link) =>
+    link.url === CHATGPT_USAGE_URL
+      ? link.accounts.map((account) => ({
+          ...link,
+          accounts: [account],
+          key: JSON.stringify([link.url, account]),
+        }))
+      : [{ ...link, key: link.url }],
   );
 }
 

@@ -224,7 +224,11 @@ import {
   ComposerQueuedAttachmentRow,
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
-import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import {
+  CollapsedComposerStopAction,
+  ComposerPrimaryActions,
+  composerSendButtonClassName,
+} from "./ComposerPrimaryActions";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
@@ -252,7 +256,7 @@ import { observeResize } from "~/lib/observeResize";
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
 import { toastManager } from "../ui/toast";
 import { m as resolveMessage } from "../../i18n/messages";
-import { BuildingIcon, PlayIcon, ReplyIcon } from "lucide-react";
+import { ArrowRightIcon, BuildingIcon, PlayIcon, ReplyIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { assistantCitationLabel } from "@t3tools/shared/assistantCitations";
 import { assistantCitationNavigation } from "../../lib/assistantCitationNavigation";
@@ -3788,7 +3792,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <button
                     type="button"
                     data-chat-composer-transition-actions="true"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-64"
+                    className={cn(composerSendButtonClassName, "size-8")}
                     disabled={collapsedComposerPrimaryActionDisabled}
                     aria-label={collapsedComposerPrimaryActionLabel}
                     aria-busy={composerSendHeld || isSendBusy || undefined}
@@ -3804,23 +3808,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     {composerSendHeld || isSendBusy ? (
                       <Spinner size="sm" aria-hidden="true" />
                     ) : showResumeAction ? (
-                      <PlayIcon className="size-4 fill-current" aria-hidden="true" />
+                      <PlayIcon className="size-3 fill-current" aria-hidden="true" />
                     ) : (
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M8 3L8 13M8 3L4 7M8 3L12 7"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
+                      <ArrowRightIcon className="size-3.5" aria-hidden="true" />
                     )}
                   </button>
                 </CollapsedComposerStopAction>

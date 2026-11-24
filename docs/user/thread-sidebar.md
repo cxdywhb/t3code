@@ -134,6 +134,8 @@ rename a thread, regenerate its title, or link and unlink a pull request. These 
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
 
+在桌面版或网页版，打开 **设置 → 通用 → 按创建顺序固定会话**，普通会话按创建时间从新到旧排列。运行、完成和等待回复只更新状态。按项目分组时，新创建的文件夹也排在前面。置顶、稍后处理和已收起的会话仍可单独管理。
+
 ### Fold working threads (beta)
 
 Threads that are working or waiting on work they will resume from move into a collapsed
