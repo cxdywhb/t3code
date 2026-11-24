@@ -40,8 +40,6 @@ import {
   useEnvironmentFolderPicker,
 } from "~/components/repositories/FolderPickerDialog";
 import { SecretInput } from "~/components/settings/SecretInput";
-import { SettingsGroup } from "~/components/settings/SettingsGroup";
-import { SettingsRow } from "~/components/settings/settingsLayout";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn, newProjectId } from "~/lib/utils";
 import { waitForProject } from "~/state/entities";
@@ -53,6 +51,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogAction,
@@ -759,6 +758,53 @@ export function ConnectorModal({
   );
 }
 
+function RuleSection({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="min-w-0 border-t border-border/60" open>
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground in-[details[open]>summary]:rotate-90"
+        />
+        <span className="max-w-[65%] shrink-0">{title}</span>
+        {summary && (
+          <span className="ms-auto min-w-0 truncate text-right text-xs font-normal text-muted-foreground">
+            {summary}
+          </span>
+        )}
+      </summary>
+      <div className="min-w-0 space-y-3 pb-4 sm:ps-5">{children}</div>
+    </details>
+  );
+}
+
+function RuleField({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-sm font-medium">{title}</span>
+      {children}
+    </div>
+  );
+}
+
+function focusRuleField(container: HTMLDivElement | null) {
+  if (!container) return;
+  const section = container.closest("details");
+  if (section) section.open = true;
+  (
+    container.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)") ??
+    section?.querySelector("summary")
+  )?.focus();
+}
+
 export function ProfileModal({
   open,
   onOpenChange,
@@ -927,6 +973,48 @@ export function ProfileModal({
     }
   };
 
+  const modelField = useRef<HTMLDivElement>(null);
+  const repoField = useRef<HTMLDivElement>(null);
+  const backupField = useRef<HTMLDivElement>(null);
+  const pollingSummary = enabled
+    ? gt("Every {minutes} min", { minutes: pollIntervalMinutes })
+    : gt("Polling off");
+  const executionSummary = [
+    actionMode === "diagnose_only" ? gt("Read-only diagnosis") : gt("Worktree fix"),
+    !autoWriteComment
+      ? gt("No write-back")
+      : actionMode === "auto_resolve"
+        ? gt("Comment and try to mark resolved")
+        : gt("Comment only"),
+  ].join(" · ");
+  const primaryModelName =
+    catalog.instanceEntries
+      .find((entry) => entry.instanceId === primaryModel?.instanceId)
+      ?.models.find((model) => model.slug === primaryModel?.model)?.name ?? primaryModel?.model;
+  const modelSummary = [
+    primaryModelName ?? gt("Select a model…"),
+    highSeverityModel && gt("S1/S2"),
+    reviewModel && actionMode !== "diagnose_only" && gt("Cross-review model"),
+    retryWithBackup && gt("Retry once with a backup model"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const repoSummary = [
+    primaryProject?.title ?? gt("Select repository"),
+    linkedProjectIds.length > 0 && gt("Linked: {count}", { count: linkedProjectIds.length }),
+    moduleMappings.length > 0 && gt("Routes: {count}", { count: moduleMappings.length }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const filterSummary = [
+    browseFilterLabel(browseType),
+    assignedToAccount.trim(),
+    onlyUnconfirmed && gt("Unconfirmed bugs only"),
+    pollingSummary,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   const selectProduct = (product: IssueAutomationRemoteScope | undefined) => {
     setScopeId(product?.id ?? "");
     setName(product?.name ?? "");
@@ -945,11 +1033,14 @@ export function ProfileModal({
     e.preventDefault();
     const resolvedPrimaryModel = primaryModel ?? catalog.firstAvailableSelection;
     if (!activeConnector || !scopeId || !primaryProject || !resolvedPrimaryModel) {
+      if (!primaryProject) focusRuleField(repoField.current);
+      else if (!resolvedPrimaryModel) focusRuleField(modelField.current);
       setErrorText(gt("Please select a product, local repository, and primary model."));
       return;
     }
 
     if (retryWithBackup && !fallbackModel) {
+      focusRuleField(backupField.current);
       setErrorText(gt("Choose a backup model to retry the task."));
       return;
     }
@@ -983,9 +1074,9 @@ export function ProfileModal({
           browseType,
           onlyUnconfirmed,
           assignedToAccount: assignedToAccount.trim() || null,
-          maxSeverity: null,
-          keyword: null,
-          pollIntervalMinutes: Math.max(1, pollIntervalMinutes),
+          maxSeverity: initial?.filter.maxSeverity ?? null,
+          keyword: initial?.filter.keyword ?? null,
+          pollIntervalMinutes: Math.max(1, Math.min(1440, pollIntervalMinutes)),
           maxConcurrency: Math.max(1, Math.min(8, maxConcurrency)),
         },
         policy: {
@@ -1028,9 +1119,9 @@ export function ProfileModal({
       >
         <DialogHeader className="shrink-0">
           <DialogTitle>
-            {initial ? <T>Edit unattended rule</T> : <T>New unattended automation rule</T>}
+            {initial ? <T>Edit unattended rule</T> : <T>New unattended rule</T>}
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             <T>
               Configure product scope, multi-codebase routing, multi-model orchestration, and ZenTao
               write-back policy.
@@ -1041,13 +1132,15 @@ export function ProfileModal({
         <DialogPanel>
           <form
             id="issue-automation-profile-form"
-            className="min-w-0 space-y-5"
+            className="min-w-0"
             onSubmit={(e) => void handleSubmit(e)}
           >
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Platform connection")}
-                control={
+            <section className="space-y-3 pb-4">
+              <h3 className="text-sm font-semibold">
+                <T>Monitoring target</T>
+              </h3>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <RuleField title={gt("Platform connection")}>
                   <Select
                     value={connectorId}
                     onValueChange={(next) => {
@@ -1069,13 +1162,8 @@ export function ProfileModal({
                       ))}
                     </SelectPopup>
                   </Select>
-                }
-              />
-
-              <SettingsRow
-                title={gt("ZenTao product")}
-                description={gt("Choose which product's bug list this rule monitors.")}
-                control={
+                </RuleField>
+                <RuleField title={gt("ZenTao product")}>
                   <SearchableScopeMenu
                     scopes={activeConnector?.scopes ?? []}
                     value={scopeId}
@@ -1084,179 +1172,158 @@ export function ProfileModal({
                         selectProduct(activeSortedScopes.find((s) => s.id === next));
                     }}
                     ariaLabel={gt("Select ZenTao product")}
-                    className="max-w-60"
+                    className="w-full min-w-0"
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Rule name")}
-                control={
+                </RuleField>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="issue-rule-name">{gt("Rule name")}</Label>
+                <Input
+                  size="sm"
+                  id="issue-rule-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={gt("Auto-diagnosis rule")}
+                />
+              </div>
+            </section>
+            <RuleSection title={gt("Filters and schedule")} summary={filterSummary}>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <RuleField title={gt("Fetch scope")}>
+                  <Select
+                    value={browseType}
+                    onValueChange={(next) => {
+                      if (next) setBrowseType(next as IssueAutomationBrowseFilter);
+                    }}
+                  >
+                    <SelectTrigger size="sm" aria-label={gt("Scope")}>
+                      <SelectValue>{browseFilterLabel(browseType)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value="unresolved">{browseFilterLabel("unresolved")}</SelectItem>
+                      <SelectItem value="unclosed">{browseFilterLabel("unclosed")}</SelectItem>
+                      <SelectItem value="assigntome">{browseFilterLabel("assigntome")}</SelectItem>
+                      <SelectItem value="openedbyme">{browseFilterLabel("openedbyme")}</SelectItem>
+                      <SelectItem value="all">{browseFilterLabel("all")}</SelectItem>
+                    </SelectPopup>
+                  </Select>
+                </RuleField>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="issue-rule-account">{gt("Further filter by assignee")}</Label>
+                  <Input
+                    id="issue-rule-account"
+                    size="sm"
+                    placeholder={gt("Account (optional)")}
+                    value={assignedToAccount}
+                    onChange={(e) => setAssignedToAccount(e.target.value)}
+                  />
+                </div>
+              </div>
+              <Label>
+                <Checkbox checked={onlyUnconfirmed} onCheckedChange={setOnlyUnconfirmed} />
+                {gt("Unconfirmed bugs only")}
+              </Label>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="issue-rule-poll">{gt("Enable background polling")}</Label>
+                <Switch
+                  id="issue-rule-poll"
+                  size="sm"
+                  checked={enabled}
+                  onCheckedChange={setEnabled}
+                  aria-label={gt("Enable background polling")}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-md bg-muted/50 p-3">
+                <label className="flex items-center gap-2 text-sm has-disabled:text-muted-foreground">
+                  {gt("Check every")}
                   <Input
                     size="sm"
-                    className="w-56"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder={gt("Auto-diagnosis rule")}
+                    type="number"
+                    className="w-16"
+                    min={1}
+                    max={1440}
+                    disabled={!enabled}
+                    aria-label={gt("Poll interval minutes")}
+                    value={String(pollIntervalMinutes)}
+                    onChange={(e) => setPollIntervalMinutes(Number(e.target.value) || 5)}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Enable background polling")}
-                description={gt("Unattended daemon polls ZenTao on schedule and skips seen bugs.")}
-                control={
-                  <Switch
+                  {gt("minutes")}
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  {gt("Run up to")}
+                  <Input
                     size="sm"
-                    checked={enabled}
-                    onCheckedChange={setEnabled}
-                    aria-label={gt("Enable background polling")}
+                    type="number"
+                    className="w-16"
+                    min={1}
+                    max={8}
+                    aria-label={gt("Max concurrency")}
+                    value={String(maxConcurrency)}
+                    onChange={(e) => setMaxConcurrency(Number(e.target.value) || 2)}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Filter & schedule")}
-                description={gt("Scope filter, interval in minutes, and max parallel runs.")}
-                control={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Select
-                      value={browseType}
-                      onValueChange={(next) => {
-                        if (next) setBrowseType(next as IssueAutomationBrowseFilter);
-                      }}
-                    >
-                      <SelectTrigger size="sm" className="min-w-32" aria-label={gt("Scope")}>
-                        <SelectValue>{browseFilterLabel(browseType)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup>
-                        <SelectItem value="unresolved">
-                          {browseFilterLabel("unresolved")}
-                        </SelectItem>
-                        <SelectItem value="unclosed">{browseFilterLabel("unclosed")}</SelectItem>
-                        <SelectItem value="assigntome">
-                          {browseFilterLabel("assigntome")}
-                        </SelectItem>
-                        <SelectItem value="openedbyme">
-                          {browseFilterLabel("openedbyme")}
-                        </SelectItem>
-                        <SelectItem value="all">{browseFilterLabel("all")}</SelectItem>
-                      </SelectPopup>
-                    </Select>
-                    <Input
-                      size="sm"
-                      type="number"
-                      min={1}
-                      max={1440}
-                      className="w-20"
-                      aria-label={gt("Poll interval minutes")}
-                      value={String(pollIntervalMinutes)}
-                      onChange={(e) => setPollIntervalMinutes(Number(e.target.value) || 5)}
-                    />
-                    <Input
-                      size="sm"
-                      type="number"
-                      min={1}
-                      max={8}
-                      className="w-16"
-                      aria-label={gt("Max concurrency")}
-                      value={String(maxConcurrency)}
-                      onChange={(e) => setMaxConcurrency(Number(e.target.value) || 2)}
-                    />
-                  </div>
-                }
-              />
-
-              <SettingsRow
-                title={gt("Assignee filter & unconfirmed only")}
-                description={gt("Optional account filter or restrict to unconfirmed bugs.")}
-                control={
-                  <div className="flex items-center gap-3">
-                    <Input
-                      size="sm"
-                      className="w-40"
-                      value={assignedToAccount}
-                      onChange={(e) => setAssignedToAccount(e.target.value)}
-                      placeholder={gt("Any assignee")}
-                    />
-                    <Switch
-                      size="sm"
-                      checked={onlyUnconfirmed}
-                      onCheckedChange={setOnlyUnconfirmed}
-                      aria-label={gt("Unconfirmed bugs only")}
-                    />
-                  </div>
-                }
-              />
-            </SettingsGroup>
-
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Primary local codebase")}
-                description={
-                  projects.length === 0
-                    ? gt("Add a project before saving this rule.")
-                    : gt("Default repository where isolated Worktrees launch.")
-                }
-                control={
-                  projects.length === 0 || addingProject ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={addingProject || !canCreateProject || !folderPicker.canPickFolder}
-                      onClick={() =>
-                        void folderPicker.openFolderPicker({
-                          ...(projectBaseDirectory ? { initialPath: projectBaseDirectory } : {}),
-                          onSelect: (workspaceRoot) => void addProject(workspaceRoot),
-                        })
-                      }
-                    >
-                      <PlusIcon />
-                      {addingProject ? gt("Adding…") : gt("Add project")}
-                    </Button>
-                  ) : (
-                    <SearchableProjectMenu
-                      projects={projects}
-                      value={primaryProjectId}
-                      onChange={(next) => {
-                        setPrimaryProjectId(next);
-                        setLinkedProjectIds((ids) => ids.filter((id) => id !== next));
-                      }}
-                      ariaLabel={gt("Primary local codebase")}
-                      leadingIcon={<FolderGit2Icon className="size-3.5 shrink-0 opacity-70" />}
-                    />
-                  )
-                }
-              >
-                {projectError ? (
-                  <p role="alert" className="pt-2 text-xs text-destructive">
-                    {projectError}
-                  </p>
-                ) : null}
-              </SettingsRow>
-
-              <SettingsRow
-                title={gt("Linked sibling codebases")}
-                description={gt(
-                  "Associate multiple local repos so cross-service context is mounted together.",
-                )}
-                control={
+                  {gt("bugs at once")}
+                </label>
+              </div>
+            </RuleSection>
+            <RuleSection title={gt("Code repositories")} summary={repoSummary}>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div ref={repoField}>
+                  <RuleField title={gt("Primary local codebase")}>
+                    {projects.length === 0 || addingProject ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={addingProject || !canCreateProject || !folderPicker.canPickFolder}
+                        onClick={() =>
+                          void folderPicker.openFolderPicker({
+                            ...(projectBaseDirectory ? { initialPath: projectBaseDirectory } : {}),
+                            onSelect: (workspaceRoot) => void addProject(workspaceRoot),
+                          })
+                        }
+                      >
+                        <PlusIcon />
+                        {addingProject ? gt("Adding…") : gt("Add project")}
+                      </Button>
+                    ) : (
+                      <SearchableProjectMenu
+                        projects={projects}
+                        value={primaryProjectId}
+                        onChange={(next) => {
+                          setPrimaryProjectId(next);
+                          setLinkedProjectIds((ids) => ids.filter((id) => id !== next));
+                        }}
+                        ariaLabel={gt("Primary local codebase")}
+                        leadingIcon={<FolderGit2Icon className="size-3.5 shrink-0 opacity-70" />}
+                      />
+                    )}
+                  </RuleField>
+                </div>
+                <RuleField title={gt("Linked sibling codebases")}>
                   <SearchableMultiProjectMenu
                     projects={projects.filter((project) => project.id !== primaryProjectId)}
                     selectedIds={linkedProjectIds}
                     onChange={setLinkedProjectIds}
                     ariaLabel={gt("Linked sibling codebases")}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Module & keyword routing")}
-                description={gt(
-                  "Route matching ZenTao modules or title keywords to a specific repo.",
+                </RuleField>
+              </div>
+              {!projects.length && (
+                <p className="text-xs text-muted-foreground">
+                  {gt("Add a project before saving this rule.")}
+                </p>
+              )}
+              {projectError && (
+                <p role="alert" className="text-xs text-destructive">
+                  {projectError}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {gt(
+                  "First match module or keyword rules, then look for a repository name in the issue. If nothing matches, use the default repository.",
                 )}
-              >
+              </p>
+              <RuleSection title={gt("Module & keyword routing")}>
                 <div className="mt-2 space-y-2 pb-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <Input
@@ -1302,26 +1369,21 @@ export function ProfileModal({
                     </div>
                   ) : null}
                 </div>
-              </SettingsRow>
-            </SettingsGroup>
-
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Primary diagnosis & fix model")}
-                control={
-                  <OfficialModelPicker
-                    environmentId={environmentId}
-                    value={primaryModel}
-                    onChange={setPrimaryModel}
-                    ariaLabel={gt("Primary model")}
-                  />
-                }
-              />
-
-              <SettingsRow
-                title={gt("S1/S2 high-severity escalation model")}
-                description={gt("Automatically upgrade model for critical bugs.")}
-                control={
+              </RuleSection>
+            </RuleSection>
+            <RuleSection title={gt("Models")} summary={modelSummary}>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div ref={modelField}>
+                  <RuleField title={gt("Primary diagnosis & fix model")}>
+                    <OfficialModelPicker
+                      environmentId={environmentId}
+                      value={primaryModel}
+                      onChange={setPrimaryModel}
+                      ariaLabel={gt("Primary model")}
+                    />
+                  </RuleField>
+                </div>
+                <RuleField title={gt("S1/S2 high-severity escalation model")}>
                   <OfficialModelPicker
                     environmentId={environmentId}
                     value={highSeverityModel}
@@ -1329,35 +1391,23 @@ export function ProfileModal({
                     ariaLabel={gt("High-severity model")}
                     emptyOptionLabel={gt("Same as primary")}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Heterogeneous cross-review model")}
-                description={gt(
-                  "Only in fix modes. A second model reviews changes and test results before writing back to ZenTao.",
-                )}
-                control={
+                </RuleField>
+                <RuleField title={gt("Cross-review model")}>
                   <OfficialModelPicker
                     environmentId={environmentId}
                     value={reviewModel}
+                    disabled={actionMode === "diagnose_only"}
                     onChange={setReviewModel}
                     ariaLabel={gt("Cross-review model")}
                     emptyOptionLabel={gt("Disabled")}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Repository selection")}
-                description={gt(
-                  "First match module or keyword rules, then look for a repository name in the issue. If nothing matches, use the default repository.",
-                )}
-              />
-
-              <SettingsRow
-                title={gt("If the primary model fails")}
-                control={
+                  <p className="text-xs text-muted-foreground">
+                    {gt(
+                      "Only in fix modes. A second model reviews changes and test results before writing back to ZenTao.",
+                    )}
+                  </p>
+                </RuleField>
+                <RuleField title={gt("If the primary model fails")}>
                   <Select
                     value={retryWithBackup ? "retry" : "stop"}
                     onValueChange={(next) => {
@@ -1376,122 +1426,116 @@ export function ProfileModal({
                       <SelectItem value="retry">{gt("Retry once with a backup model")}</SelectItem>
                     </SelectPopup>
                   </Select>
-                }
-              />
-              {retryWithBackup && (
-                <SettingsRow
-                  title={gt("Backup model")}
-                  control={
-                    <OfficialModelPicker
-                      environmentId={environmentId}
-                      value={fallbackModel}
-                      onChange={setFallbackModel}
-                      ariaLabel={gt("Backup model")}
-                      emptyOptionLabel={fallbackModel ? undefined : gt("Select a model…")}
-                    />
-                  }
+                </RuleField>
+                {retryWithBackup && (
+                  <div ref={backupField}>
+                    <RuleField title={gt("Backup model")}>
+                      <OfficialModelPicker
+                        environmentId={environmentId}
+                        value={fallbackModel}
+                        onChange={setFallbackModel}
+                        ariaLabel={gt("Backup model")}
+                        emptyOptionLabel={fallbackModel ? undefined : gt("Select a model…")}
+                      />
+                    </RuleField>
+                  </div>
+                )}
+              </div>
+            </RuleSection>
+            <RuleSection title={gt("Execution and write-back")} summary={executionSummary}>
+              <RuleField title={gt("Execution mode")}>
+                <Select
+                  value={actionMode}
+                  onValueChange={(next) => {
+                    if (next) setActionMode(next as IssueAutomationActionMode);
+                  }}
+                >
+                  <SelectTrigger size="sm" aria-label={gt("Execution mode")}>
+                    <SelectValue>{actionModeLabel(actionMode)}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="fix_worktree_review">
+                      {actionModeLabel("fix_worktree_review")}
+                    </SelectItem>
+                    <SelectItem value="diagnose_only">
+                      {actionModeLabel("diagnose_only")}
+                    </SelectItem>
+                    <SelectItem value="auto_resolve">{actionModeLabel("auto_resolve")}</SelectItem>
+                  </SelectPopup>
+                </Select>
+              </RuleField>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="issue-rule-write">{gt("Automatically write back to ZenTao")}</Label>
+                <Switch
+                  id="issue-rule-write"
+                  size="sm"
+                  checked={autoWriteComment}
+                  onCheckedChange={setAutoWriteComment}
+                  aria-label={gt("Automatically write back to ZenTao")}
+                  aria-describedby="issue-rule-write-back-description"
                 />
-              )}
-            </SettingsGroup>
-
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Execution mode")}
-                control={
-                  <Select
-                    value={actionMode}
-                    onValueChange={(next) => {
-                      if (next) setActionMode(next as IssueAutomationActionMode);
-                    }}
-                  >
-                    <SelectTrigger size="sm" aria-label={gt("Execution mode")}>
-                      <SelectValue>{actionModeLabel(actionMode)}</SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup>
-                      <SelectItem value="fix_worktree_review">
-                        {actionModeLabel("fix_worktree_review")}
-                      </SelectItem>
-                      <SelectItem value="diagnose_only">
-                        {actionModeLabel("diagnose_only")}
-                      </SelectItem>
-                      <SelectItem value="auto_resolve">
-                        {actionModeLabel("auto_resolve")}
-                      </SelectItem>
-                    </SelectPopup>
-                  </Select>
-                }
-              />
-
-              <SettingsRow
-                title={gt("Automatically write back to ZenTao")}
-                description={
-                  <span id="issue-rule-write-back-description" aria-live="polite">
-                    {writeBackDescription()}
-                  </span>
-                }
-                control={
-                  <Switch
-                    size="sm"
-                    checked={autoWriteComment}
-                    onCheckedChange={setAutoWriteComment}
-                    aria-label={gt("Automatically write back to ZenTao")}
-                    aria-describedby="issue-rule-write-back-description"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Worktree base branch")}
-                control={
+              </div>
+              <p id="issue-rule-write-back-description" className="text-xs text-muted-foreground">
+                {writeBackDescription()}
+              </p>
+              <RuleSection title={gt("More execution settings")}>
+                <RuleField title={gt("Worktree base branch")}>
                   <Input
                     size="sm"
-                    className="w-48"
+                    aria-label={gt("Worktree base branch")}
                     value={baseBranch}
                     onChange={(e) => setBaseBranch(e.target.value)}
                     placeholder={gt("Default HEAD")}
                   />
-                }
-              />
-
-              <SettingsRow title={gt("Custom team prompt instructions")}>
-                <div className="mt-2 pb-2">
+                </RuleField>
+                <RuleField title={gt("Custom team prompt instructions")}>
                   <Textarea
                     rows={2}
+                    aria-label={gt("Custom team prompt instructions")}
                     value={customPromptInstructions}
                     onChange={(e) => setCustomPromptInstructions(e.target.value)}
                     placeholder={gt(
                       "e.g. Run unit tests before finishing and list affected API routes.",
                     )}
                   />
-                </div>
-              </SettingsRow>
-            </SettingsGroup>
+                </RuleField>
+              </RuleSection>
+            </RuleSection>
+          </form>
+        </DialogPanel>
 
+        <DialogFooter className="shrink-0">
+          <div className="flex w-full flex-col gap-2">
             {errorText ? (
               <Alert variant="error">
                 <AlertTitle>{gt("Could not save rule")}</AlertTitle>
                 <AlertDescription>{errorText}</AlertDescription>
               </Alert>
             ) : null}
-          </form>
-        </DialogPanel>
-
-        <DialogFooter className="shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onOpenChange(false)}
-          >
-            <T>Cancel</T>
-          </Button>
-          <DialogAction
-            form="issue-automation-profile-form"
-            type="submit"
-            disabled={busy || addingProject || !primaryProject}
-          >
-            {busy ? <T>Saving…</T> : <T>Save rule</T>}
-          </DialogAction>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <p
+                aria-live="polite"
+                className="me-auto min-w-0 basis-full text-xs text-muted-foreground sm:flex-1 sm:basis-auto"
+              >
+                {pollingSummary} · {executionSummary}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => onOpenChange(false)}
+              >
+                <T>Cancel</T>
+              </Button>
+              <DialogAction
+                form="issue-automation-profile-form"
+                type="submit"
+                disabled={busy || addingProject}
+              >
+                {busy ? <T>Saving…</T> : <T>Save rule</T>}
+              </DialogAction>
+            </div>
+          </div>
         </DialogFooter>
       </DialogPopup>
       {folderPicker.dialogProps ? <FolderPickerDialog {...folderPicker.dialogProps} /> : null}
