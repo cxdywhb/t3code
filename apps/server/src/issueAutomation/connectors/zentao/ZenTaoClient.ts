@@ -86,7 +86,7 @@ function buildZenTaoEndpoint(
   return `${baseUrl}/${moduleName}${fix}${methodName}${suffix}.json?${sidQuery}`;
 }
 
-function buildZenTaoBugWebUrl(baseUrl: string, bugId: string): string {
+export function buildZenTaoBugWebUrl(baseUrl: string, bugId: string): string {
   return `${baseUrl}/bug-view-${encodeURIComponent(bugId)}.html`;
 }
 
@@ -225,7 +225,7 @@ function cleanUserDisplayName(raw: unknown, fallbackAccount: string): string {
   return raw.replace(/^[A-Za-z]:/, "").trim() || fallbackAccount;
 }
 
-function statusLabelOf(status: string): string {
+export function zenTaoBugStatusLabel(status: string): string {
   switch (status) {
     case "active":
       return "激活";
@@ -579,7 +579,7 @@ export class ZenTaoSessionClient {
                 severity: bug.severity !== undefined ? Number(bug.severity) || null : null,
                 priority: bug.pri !== undefined ? Number(bug.pri) || null : null,
                 status,
-                statusLabel: statusLabelOf(status),
+                statusLabel: zenTaoBugStatusLabel(status),
                 confirmed: String(bug.confirmed ?? "0") === "1",
                 author: openedBy ? cleanUserDisplayName(usersMap[openedBy], openedBy) : null,
                 assignee:
@@ -703,7 +703,7 @@ export class ZenTaoSessionClient {
             severity: bug.severity !== undefined ? Number(bug.severity) || null : null,
             priority: bug.pri !== undefined ? Number(bug.pri) || null : null,
             status,
-            statusLabel: statusLabelOf(status),
+            statusLabel: zenTaoBugStatusLabel(status),
             confirmed: String(bug.confirmed ?? "0") === "1",
             author: openedBy ? cleanUserDisplayName(usersMap[openedBy], openedBy) : null,
             assignee: assignedTo

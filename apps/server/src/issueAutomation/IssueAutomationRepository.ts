@@ -33,6 +33,7 @@ const FilterJson = Schema.fromJsonString(IssueAutomationProfile.fields.filter);
 const PolicyJson = Schema.fromJsonString(IssueAutomationProfile.fields.policy);
 const ProjectIdsJson = Schema.fromJsonString(Schema.Array(ProjectId));
 const StepsJson = Schema.fromJsonString(Schema.Array(IssueAutomationStepLog));
+const encodeStep = Schema.encodeEffect(Schema.fromJsonString(IssueAutomationStepLog));
 
 const decodeScopes = Schema.decodeUnknownEffect(ScopesJson);
 const encodeScopes = Schema.encodeEffect(ScopesJson);
@@ -86,10 +87,16 @@ interface ProfileRow {
   readonly models_json: string;
   readonly filter_json: string;
   readonly policy_json: string;
+  readonly feishu_notification_enabled: number;
+  readonly feishu_webhook_secret_id: string | null;
   readonly last_polled_at: string | null;
   readonly last_poll_error: string | null;
   readonly updated_at: string;
 }
+
+export type StoredProfile = IssueAutomationProfile & {
+  readonly feishuWebhookSecretId: string | null;
+};
 
 interface TaskRow {
   readonly task_id: string;
@@ -142,11 +149,19 @@ export class IssueAutomationRepository extends Context.Service<
     ) => Effect.Effect<void, IssueAutomationRepositoryError>;
 
     readonly listProfiles: Effect.Effect<
-      ReadonlyArray<IssueAutomationProfile>,
+      ReadonlyArray<StoredProfile>,
       IssueAutomationRepositoryError
     >;
+    readonly getProfile: (
+      id: IssueAutomationProfileId,
+    ) => Effect.Effect<StoredProfile | undefined, IssueAutomationRepositoryError>;
     readonly upsertProfile: (
-      profile: IssueAutomationProfile,
+      profile: StoredProfile,
+    ) => Effect.Effect<void, IssueAutomationRepositoryError>;
+    readonly recordProfilePoll: (
+      id: IssueAutomationProfileId,
+      at: string,
+      error: string | null,
     ) => Effect.Effect<void, IssueAutomationRepositoryError>;
     readonly deleteProfile: (
       id: IssueAutomationProfileId,
@@ -157,6 +172,10 @@ export class IssueAutomationRepository extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<IssueAutomationTask>, IssueAutomationRepositoryError>;
     readonly upsertTask: (
       task: IssueAutomationTask,
+    ) => Effect.Effect<void, IssueAutomationRepositoryError>;
+    readonly appendTaskStep: (
+      id: IssueAutomationTaskId,
+      step: IssueAutomationStepLog,
     ) => Effect.Effect<void, IssueAutomationRepositoryError>;
   }
 >()("t3/issueAutomation/IssueAutomationRepository") {}
@@ -197,7 +216,7 @@ const make = Effect.gen(function* () {
       decodeFilter(row.filter_json),
       decodePolicy(row.policy_json),
     ]);
-    return yield* decodeProfile({
+    const profile = yield* decodeProfile({
       id: IssueAutomationProfileId.make(row.profile_id),
       connectorId: IssueAutomationConnectorId.make(row.connector_id),
       name: row.name,
@@ -208,10 +227,15 @@ const make = Effect.gen(function* () {
       models,
       filter,
       policy,
+      feishuNotification: {
+        enabled: row.feishu_notification_enabled === 1,
+        hasWebhook: row.feishu_webhook_secret_id !== null,
+      },
       lastPolledAt: row.last_polled_at,
       lastPollError: row.last_poll_error,
       updatedAt: row.updated_at,
     });
+    return { ...profile, feishuWebhookSecretId: row.feishu_webhook_secret_id };
   });
 
   const rowToTask = Effect.fn("IssueAutomationRepository.rowToTask")(function* (row: TaskRow) {
@@ -321,6 +345,16 @@ const make = Effect.gen(function* () {
     Effect.mapError(toRepoError("listIssueAutomationProfiles", "IssueAutomationProfile")),
   );
 
+  const getProfile = Effect.fn("IssueAutomationRepository.getProfile")(
+    function* (id: IssueAutomationProfileId) {
+      const [row] = yield* sql<ProfileRow>`
+        SELECT * FROM issue_automation_profiles WHERE profile_id = ${id}
+      `;
+      return row ? yield* rowToProfile(row) : undefined;
+    },
+    Effect.mapError(toRepoError("getIssueAutomationProfile", "IssueAutomationProfile")),
+  );
+
   const upsertProfile: IssueAutomationRepository["Service"]["upsertProfile"] = Effect.fn(
     "IssueAutomationRepository.upsertProfile",
   )(
@@ -335,11 +369,13 @@ const make = Effect.gen(function* () {
         INSERT INTO issue_automation_profiles (
           profile_id, connector_id, name, enabled, scope_id, scope_name,
           repositories_json, models_json, filter_json, policy_json,
+          feishu_notification_enabled, feishu_webhook_secret_id,
           last_polled_at, last_poll_error, updated_at
         ) VALUES (
           ${profile.id}, ${profile.connectorId}, ${profile.name}, ${profile.enabled ? 1 : 0},
           ${profile.scopeId}, ${profile.scopeName}, ${reposJson}, ${modelsJson},
-          ${filterJson}, ${policyJson}, ${profile.lastPolledAt}, ${profile.lastPollError},
+          ${filterJson}, ${policyJson}, ${profile.feishuNotification?.enabled ? 1 : 0},
+          ${profile.feishuWebhookSecretId}, ${profile.lastPolledAt}, ${profile.lastPollError},
           ${profile.updatedAt}
         )
         ON CONFLICT (profile_id) DO UPDATE SET
@@ -352,12 +388,34 @@ const make = Effect.gen(function* () {
           models_json = excluded.models_json,
           filter_json = excluded.filter_json,
           policy_json = excluded.policy_json,
-          last_polled_at = excluded.last_polled_at,
-          last_poll_error = excluded.last_poll_error,
+          feishu_notification_enabled = excluded.feishu_notification_enabled,
+          feishu_webhook_secret_id = excluded.feishu_webhook_secret_id,
           updated_at = excluded.updated_at
       `;
     },
     Effect.mapError(toRepoError("upsertIssueAutomationProfile", "IssueAutomationProfile")),
+  );
+
+  const recordProfilePoll = Effect.fn("IssueAutomationRepository.recordProfilePoll")(
+    function* (id: IssueAutomationProfileId, at: string, error: string | null) {
+      yield* sql`
+        UPDATE issue_automation_profiles SET last_polled_at = ${at}, last_poll_error = ${error}
+        WHERE profile_id = ${id}
+      `;
+    },
+    Effect.mapError(toRepoError("recordIssueAutomationProfilePoll", "IssueAutomationProfile")),
+  );
+
+  const appendTaskStep = Effect.fn("IssueAutomationRepository.appendTaskStep")(
+    function* (id: IssueAutomationTaskId, step: IssueAutomationStepLog) {
+      const stepJson = yield* encodeStep(step);
+      yield* sql`
+        UPDATE issue_automation_tasks
+        SET steps_json = json_insert(steps_json, '$[#]', json(${stepJson}))
+        WHERE task_id = ${id}
+      `;
+    },
+    Effect.mapError(toRepoError("appendIssueAutomationTaskStep", "IssueAutomationTask")),
   );
 
   const deleteProfile: IssueAutomationRepository["Service"]["deleteProfile"] = Effect.fn(
@@ -444,10 +502,13 @@ const make = Effect.gen(function* () {
     upsertConnector,
     deleteConnector,
     listProfiles,
+    getProfile,
     upsertProfile,
+    recordProfilePoll,
     deleteProfile,
     listTasks,
     upsertTask,
+    appendTaskStep,
   });
 });
 

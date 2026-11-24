@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import {
   CommandId,
+  isIssueAutomationFeishuWebhook,
   IssueAutomationConnectorId,
   IssueAutomationError,
   IssueAutomationProfileId,
@@ -48,17 +49,20 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -67,6 +71,8 @@ import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import { buildZenTaoBugWebUrl } from "./connectors/zentao/ZenTaoClient.ts";
+import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
 import * as IssueAutomationRepository from "./IssueAutomationRepository.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
 import type {
@@ -86,6 +92,13 @@ const decoder = new TextDecoder();
 
 function connectorSecretKey(id: IssueAutomationConnectorId): string {
   return `issue-automation-connector-${id}-secret`;
+}
+
+function profileForClient({
+  feishuWebhookSecretId: _secretId,
+  ...profile
+}: IssueAutomationRepository.StoredProfile): IssueAutomationProfile {
+  return profile;
 }
 
 function formatModelLabel(selection: ModelSelection): string {
@@ -287,6 +300,7 @@ const make = Effect.gen(function* () {
   const repo = yield* IssueAutomationRepository.IssueAutomationRepository;
   const plugins = yield* PluginRegistry.IssuePlatformPluginRegistry;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const httpClient = yield* HttpClient.HttpClient;
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitWorkflow.GitWorkflowService;
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
@@ -299,6 +313,7 @@ const make = Effect.gen(function* () {
     new Map(),
   );
   const globalSemaphore = yield* Semaphore.make(3);
+  const profileWrites = yield* Semaphore.make(1);
   const profileSemaphores = new Map<string, { max: number; sem: Semaphore.Semaphore }>();
 
   const getProfileSemaphore = Effect.fn("IssueAutomationService.getProfileSemaphore")(function* (
@@ -374,7 +389,7 @@ const make = Effect.gen(function* () {
       return {
         platforms: plugins.descriptors,
         connectors,
-        profiles,
+        profiles: profiles.map(profileForClient),
         tasks,
         activeRunCount: runningMap.size,
       };
@@ -384,6 +399,35 @@ const make = Effect.gen(function* () {
     Effect.flatMap((snapshot) => PubSub.publish(updatesPubSub, snapshot)),
     Effect.ignore,
   );
+
+  const notifyTaskEnded = Effect.fn("IssueAutomationService.notifyTaskEnded")(function* (
+    task: IssueAutomationTask,
+  ) {
+    if (!task.profileId) return;
+    const profileId = task.profileId;
+    const getWebhook = Effect.gen(function* () {
+      const profile = yield* repo.getProfile(profileId);
+      if (
+        !profile?.feishuNotification?.enabled ||
+        !profile.feishuWebhookSecretId ||
+        profile.connectorId !== task.connectorId ||
+        profile.scopeId !== task.scopeId
+      )
+        return;
+      const webhook = yield* secrets.get(profile.feishuWebhookSecretId);
+      return Option.isSome(webhook) ? decoder.decode(webhook.value) : "";
+    }).pipe(profileWrites.withPermits(1));
+    const delivered = yield* sendFeishuTaskNotification(httpClient, getWebhook, task);
+    if (!delivered) {
+      yield* repo
+        .appendTaskStep(task.id, {
+          at: yield* nowIso,
+          stage: task.stage,
+          message: "飞书通知发送失败，请检查值守规则中的群机器人 Webhook",
+        })
+        .pipe(Effect.ignore);
+    }
+  });
 
   const updateTaskState = Effect.fn("IssueAutomationService.updateTaskState")(function* (
     task: IssueAutomationTask,
@@ -527,10 +571,12 @@ const make = Effect.gen(function* () {
       maxConcurrency,
     );
 
-    yield* globalSemaphore.withPermits(1)(
+    let current = initialTask;
+    const withGlobalPermit = globalSemaphore.withPermits(1);
+    const finishedTask = yield* withGlobalPermit(
       profileSem.withPermits(1)(
         Effect.gen(function* () {
-          let current = yield* updateTaskState(
+          current = yield* updateTaskState(
             initialTask,
             { stage: "enriching", lastError: null },
             {
@@ -548,6 +594,17 @@ const make = Effect.gen(function* () {
             issueKey: current.issueKey,
           });
 
+          current = {
+            ...current,
+            issueTitle: detail.title,
+            issueUrl: detail.url,
+            moduleName: detail.moduleName,
+            severity: detail.severity,
+            priority: detail.priority,
+            issueStatus: detail.status,
+            assignee: detail.assignee,
+            remoteUpdatedMarker: detail.updatedAt,
+          };
           const downloadedImages = yield* downloadIssueImages(
             plugin,
             credentials,
@@ -558,16 +615,7 @@ const make = Effect.gen(function* () {
           // Step 2: Multi-Repository Routing
           current = yield* updateTaskState(
             current,
-            {
-              stage: "routing",
-              issueTitle: detail.title,
-              moduleName: detail.moduleName,
-              severity: detail.severity,
-              priority: detail.priority,
-              issueStatus: detail.status,
-              assignee: detail.assignee,
-              remoteUpdatedMarker: detail.updatedAt,
-            },
+            { stage: "routing" },
             {
               stage: "routing",
               ...(models.triageModel ? { modelLabel: formatModelLabel(models.triageModel) } : {}),
@@ -592,7 +640,7 @@ const make = Effect.gen(function* () {
 
           const targetProject = allProjects.find((p) => p.id === route.targetProjectId);
           if (!targetProject) {
-            current = yield* updateTaskState(
+            return yield* updateTaskState(
               current,
               {
                 stage: "failed",
@@ -600,7 +648,6 @@ const make = Effect.gen(function* () {
               },
               { stage: "failed", message: "定位本地代码库失败：目标仓库不存在或已移除" },
             );
-            return;
           }
 
           const referenceProjects = route.referenceProjectIds
@@ -713,12 +760,11 @@ const make = Effect.gen(function* () {
               primaryOutcome.failure instanceof Error
                 ? primaryOutcome.failure.message
                 : String(primaryOutcome.failure);
-            current = yield* updateTaskState(
+            return yield* updateTaskState(
               current,
               { stage: "failed", lastError: errMsg },
               { stage: "failed", message: `模型诊断执行失败: ${errMsg}` },
             );
-            return;
           }
 
           const solved = primaryOutcome.success;
@@ -848,7 +894,7 @@ const make = Effect.gen(function* () {
               );
               const syncedAt = yield* nowIso;
               if (wbResult._tag === "Success") {
-                current = yield* updateTaskState(
+                return yield* updateTaskState(
                   current,
                   {
                     stage: "completed",
@@ -861,7 +907,6 @@ const make = Effect.gen(function* () {
                     message: "已自动回写诊断报告并将平台问题状态标记为「已解决」",
                   },
                 );
-                return;
               }
             }
 
@@ -880,7 +925,7 @@ const make = Effect.gen(function* () {
               const finalStage: IssueAutomationStage = needsHumanReview
                 ? "needs_human"
                 : "completed";
-              current = yield* updateTaskState(
+              return yield* updateTaskState(
                 current,
                 { stage: finalStage, commentSyncedAt: syncedAt },
                 {
@@ -890,12 +935,11 @@ const make = Effect.gen(function* () {
                     : "已成功将诊断分析报告自动写回平台评论",
                 },
               );
-              return;
             }
           }
 
           const finalStage: IssueAutomationStage = needsHumanReview ? "needs_human" : "completed";
-          yield* updateTaskState(
+          return yield* updateTaskState(
             current,
             { stage: finalStage },
             {
@@ -907,12 +951,12 @@ const make = Effect.gen(function* () {
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? updateTaskState(
-                  initialTask,
+                  current,
                   { stage: "cancelled" },
                   { stage: "cancelled", message: "任务已被取消" },
-                ).pipe(Effect.asVoid)
+                )
               : updateTaskState(
-                  initialTask,
+                  current,
                   {
                     stage: "failed",
                     lastError: Cause.pretty(cause).slice(0, 400),
@@ -921,12 +965,13 @@ const make = Effect.gen(function* () {
                     stage: "failed",
                     message: `执行过程中发生异常: ${Cause.pretty(cause).slice(0, 200)}`,
                   },
-                ).pipe(Effect.asVoid),
+                ),
           ),
-          Effect.ignore,
+          Effect.option,
         ),
       ),
     );
+    if (Option.isSome(finishedTask)) yield* notifyTaskEnded(finishedTask.value);
   });
 
   const spawnTaskExecution = Effect.fn("IssueAutomationService.spawnTaskExecution")(function* (
@@ -936,7 +981,9 @@ const make = Effect.gen(function* () {
     policy: IssueAutomationPolicy,
     maxConcurrency: number,
   ) {
-    const fiber = yield* executeTaskPipeline(task, binding, models, policy, maxConcurrency).pipe(
+    const registered = yield* Deferred.make<void>();
+    const fiber = yield* Deferred.await(registered).pipe(
+      Effect.andThen(executeTaskPipeline(task, binding, models, policy, maxConcurrency)),
       Effect.ensuring(
         Ref.update(activeTaskFibers, (current) => {
           const next = new Map(current);
@@ -944,6 +991,7 @@ const make = Effect.gen(function* () {
           return next;
         }).pipe(Effect.andThen(publishSnapshot)),
       ),
+      Effect.interruptible,
       Effect.forkIn(serviceScope),
     );
 
@@ -952,8 +1000,9 @@ const make = Effect.gen(function* () {
       next.set(task.id, fiber);
       return next;
     });
+    yield* Deferred.succeed(registered, undefined);
     yield* publishSnapshot;
-  });
+  }, Effect.uninterruptible);
 
   const enrichRemoteIssuesWithTasks = (
     connectorId: IssueAutomationConnectorId,
@@ -1003,12 +1052,7 @@ const make = Effect.gen(function* () {
     const credResult = yield* Effect.result(readConnectorCredentials(profile.connectorId));
     if (credResult._tag === "Failure") {
       yield* repo
-        .upsertProfile({
-          ...profile,
-          lastPolledAt: polledAt,
-          lastPollError: credResult.failure.detail,
-          updatedAt: polledAt,
-        })
+        .recordProfilePoll(profile.id, polledAt, credResult.failure.detail)
         .pipe(Effect.ignore);
       yield* publishSnapshot;
       return { enqueuedCount: 0, skippedCount: 0 };
@@ -1028,25 +1072,13 @@ const make = Effect.gen(function* () {
 
     if (pageResult._tag === "Failure") {
       yield* repo
-        .upsertProfile({
-          ...profile,
-          lastPolledAt: polledAt,
-          lastPollError: pageResult.failure.detail,
-          updatedAt: polledAt,
-        })
+        .recordProfilePoll(profile.id, polledAt, pageResult.failure.detail)
         .pipe(Effect.ignore);
       yield* publishSnapshot;
       return { enqueuedCount: 0, skippedCount: 0 };
     }
 
-    yield* repo
-      .upsertProfile({
-        ...profile,
-        lastPolledAt: polledAt,
-        lastPollError: null,
-        updatedAt: polledAt,
-      })
-      .pipe(Effect.ignore);
+    yield* repo.recordProfilePoll(profile.id, polledAt, null).pipe(Effect.ignore);
 
     const existingTasks = yield* repo.listTasks(300).pipe(Effect.orElseSucceed(() => []));
     let enqueuedCount = 0;
@@ -1239,13 +1271,23 @@ const make = Effect.gen(function* () {
 
   const deleteConnector: IssueAutomationService["Service"]["deleteConnector"] = Effect.fn(
     "IssueAutomationService.deleteConnector",
-  )(function* (input) {
-    yield* secrets.remove(connectorSecretKey(input.connectorId)).pipe(Effect.ignore);
-    yield* repo
-      .deleteConnector(input.connectorId)
-      .pipe(Effect.mapError(mapRepoErr("deleteConnector")));
-    yield* publishSnapshot;
-  });
+  )(
+    function* (input) {
+      const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
+      yield* repo
+        .deleteConnector(input.connectorId)
+        .pipe(Effect.mapError(mapRepoErr("deleteConnector")));
+      yield* secrets.remove(connectorSecretKey(input.connectorId)).pipe(Effect.ignore);
+      for (const profile of profiles) {
+        if (profile.connectorId === input.connectorId && profile.feishuWebhookSecretId) {
+          yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
+        }
+      }
+      yield* publishSnapshot;
+    },
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const refreshScopes: IssueAutomationService["Service"]["refreshScopes"] = Effect.fn(
     "IssueAutomationService.refreshScopes",
@@ -1332,44 +1374,95 @@ const make = Effect.gen(function* () {
 
   const saveProfile: IssueAutomationService["Service"]["saveProfile"] = Effect.fn(
     "IssueAutomationService.saveProfile",
-  )(function* (input) {
-    const existingProfiles = yield* repo.listProfiles.pipe(
-      Effect.mapError(mapRepoErr("listProfiles")),
-    );
-    const prev = input.id ? existingProfiles.find((p) => p.id === input.id) : undefined;
-    const updatedAt = yield* nowIso;
-    const profile: IssueAutomationProfile = {
-      id: input.id ?? IssueAutomationProfileId.make(NodeCrypto.randomUUID()),
-      connectorId: input.connectorId,
-      name: input.name.trim(),
-      enabled: input.enabled,
-      scopeId: input.scopeId,
-      scopeName: input.scopeName,
-      repositories: input.repositories,
-      models: input.models,
-      filter: input.filter,
-      policy: input.policy,
-      lastPolledAt: prev?.lastPolledAt ?? null,
-      lastPollError: prev?.lastPollError ?? null,
-      updatedAt,
-    };
-    yield* repo.upsertProfile(profile).pipe(Effect.mapError(mapRepoErr("saveProfile")));
-    yield* publishSnapshot;
-    return profile;
-  });
+  )(
+    function* (input) {
+      const prev = input.id
+        ? yield* repo.getProfile(input.id).pipe(Effect.mapError(mapRepoErr("getProfile")))
+        : undefined;
+      const prevSecretId = prev?.feishuWebhookSecretId ?? null;
+      const draft = input.feishuNotification?.webhook;
+      const webhook = draft === undefined ? "" : Redacted.value(draft).trim();
+      const notificationEnabled =
+        input.feishuNotification?.enabled ?? prev?.feishuNotification?.enabled ?? false;
+      if (
+        (webhook && !isIssueAutomationFeishuWebhook(webhook)) ||
+        (notificationEnabled && !webhook && !prevSecretId)
+      ) {
+        return yield* new IssueAutomationError({
+          operation: "saveProfile",
+          detail: "请输入有效的飞书群机器人 Webhook",
+        });
+      }
+      const replacementSecretId = webhook
+        ? `issue-automation-feishu-${NodeCrypto.randomUUID()}`
+        : null;
+      const feishuWebhookSecretId = replacementSecretId ?? prevSecretId;
+      const profile: IssueAutomationRepository.StoredProfile = {
+        id: input.id ?? IssueAutomationProfileId.make(NodeCrypto.randomUUID()),
+        connectorId: input.connectorId,
+        name: input.name.trim(),
+        enabled: input.enabled,
+        scopeId: input.scopeId,
+        scopeName: input.scopeName,
+        repositories: input.repositories,
+        models: input.models,
+        filter: input.filter,
+        policy: input.policy,
+        feishuNotification: {
+          enabled: notificationEnabled,
+          hasWebhook: feishuWebhookSecretId !== null,
+        },
+        feishuWebhookSecretId,
+        lastPolledAt: prev?.lastPolledAt ?? null,
+        lastPollError: prev?.lastPollError ?? null,
+        updatedAt: yield* nowIso,
+      };
+      if (replacementSecretId) {
+        yield* secrets
+          .set(replacementSecretId, encoder.encode(webhook))
+          .pipe(Effect.mapError(mapRepoErr("storeFeishuWebhook")));
+      }
+      yield* repo.upsertProfile(profile).pipe(
+        Effect.tapError(() =>
+          replacementSecretId
+            ? secrets.remove(replacementSecretId).pipe(Effect.ignore)
+            : Effect.void,
+        ),
+        Effect.mapError(mapRepoErr("saveProfile")),
+      );
+      if (replacementSecretId && prevSecretId) {
+        yield* secrets.remove(prevSecretId).pipe(Effect.ignore);
+      }
+      yield* publishSnapshot;
+      return profileForClient(profile);
+    },
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const deleteProfile: IssueAutomationService["Service"]["deleteProfile"] = Effect.fn(
     "IssueAutomationService.deleteProfile",
-  )(function* (input) {
-    yield* repo.deleteProfile(input.profileId).pipe(Effect.mapError(mapRepoErr("deleteProfile")));
-    yield* publishSnapshot;
-  });
+  )(
+    function* (input) {
+      const profile = yield* repo
+        .getProfile(input.profileId)
+        .pipe(Effect.mapError(mapRepoErr("getProfile")));
+      yield* repo.deleteProfile(input.profileId).pipe(Effect.mapError(mapRepoErr("deleteProfile")));
+      if (profile?.feishuWebhookSecretId) {
+        yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
+      }
+      yield* publishSnapshot;
+    },
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const setProfileEnabled: IssueAutomationService["Service"]["setProfileEnabled"] = Effect.fn(
     "IssueAutomationService.setProfileEnabled",
   )(function* (input) {
-    const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
-    const found = profiles.find((p) => p.id === input.profileId);
+    const found = yield* repo
+      .getProfile(input.profileId)
+      .pipe(Effect.mapError(mapRepoErr("getProfile")));
     if (!found) {
       return yield* new IssueAutomationError({
         operation: "setProfileEnabled",
@@ -1377,15 +1470,15 @@ const make = Effect.gen(function* () {
       });
     }
     const updatedAt = yield* nowIso;
-    const next: IssueAutomationProfile = {
+    const next = {
       ...found,
       enabled: input.enabled,
       updatedAt,
     };
     yield* repo.upsertProfile(next).pipe(Effect.mapError(mapRepoErr("setProfileEnabled")));
     yield* publishSnapshot;
-    return next;
-  });
+    return profileForClient(next);
+  }, profileWrites.withPermits(1));
 
   const triggerPoll: IssueAutomationService["Service"]["triggerPoll"] = Effect.fn(
     "IssueAutomationService.triggerPoll",
@@ -1420,6 +1513,8 @@ const make = Effect.gen(function* () {
         customPromptInstructions: null,
       };
     const maxConcurrency = matchedProfile?.filter.maxConcurrency ?? 2;
+    const scopeName =
+      connector.scopes.find((scope) => scope.id === input.scopeId)?.name ?? input.scopeName;
 
     if (!repositories || !models) {
       return yield* new IssueAutomationError({
@@ -1438,15 +1533,18 @@ const make = Effect.gen(function* () {
         connectorId: connector.id,
         platform: connector.platform,
         scopeId: input.scopeId,
-        scopeName: input.scopeName,
+        scopeName,
         issueKey,
         displayKey: `#${issueKey}`,
         issueTitle: `问题 #${issueKey}`,
-        issueUrl: connector.baseUrl,
+        issueUrl:
+          connector.platform === "zentao"
+            ? buildZenTaoBugWebUrl(connector.baseUrl, issueKey)
+            : connector.baseUrl,
         moduleName: null,
         severity: null,
         priority: null,
-        issueStatus: "active",
+        issueStatus: "",
         assignee: null,
         trigger: "manual",
         actionMode: policy.actionMode,
@@ -1573,6 +1671,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(IssueAutomationService, make).pipe(
-  Layer.provide(Layer.merge(IssueAutomationRepository.layer, PluginRegistry.layer)),
-);
+export const layer = Layer.effect(IssueAutomationService, make);

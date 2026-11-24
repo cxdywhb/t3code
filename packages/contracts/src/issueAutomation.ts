@@ -170,6 +170,9 @@ export const IssueAutomationProfile = Schema.Struct({
   models: IssueAutomationModelStrategy,
   filter: IssueAutomationIssueFilter,
   policy: IssueAutomationPolicy,
+  feishuNotification: Schema.optionalKey(
+    Schema.Struct({ enabled: Schema.Boolean, hasWebhook: Schema.Boolean }),
+  ),
   lastPolledAt: Schema.NullOr(IsoDateTime),
   lastPollError: Schema.NullOr(Schema.String),
   updatedAt: IsoDateTime,
@@ -354,8 +357,18 @@ export const IssueAutomationSaveProfileInput = Schema.Struct({
   models: IssueAutomationModelStrategy,
   filter: IssueAutomationIssueFilter,
   policy: IssueAutomationPolicy,
+  feishuNotification: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      webhook: Schema.optionalKey(Schema.RedactedFromValue(Schema.String)),
+    }),
+  ),
 });
 export type IssueAutomationSaveProfileInput = typeof IssueAutomationSaveProfileInput.Type;
+
+export const isIssueAutomationFeishuWebhook = (url: string): boolean =>
+  /^https:\/\/open\.feishu\.cn\/open-apis\/bot\/v2\/hook\/[a-zA-Z0-9_-]+$/.test(url) &&
+  url.length <= 512;
 
 export const IssueAutomationDeleteProfileInput = Schema.Struct({
   profileId: IssueAutomationProfileId,

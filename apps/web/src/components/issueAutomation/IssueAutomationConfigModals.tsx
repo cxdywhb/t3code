@@ -3,6 +3,7 @@ import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/project
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
+  isIssueAutomationFeishuWebhook,
   IssueAutomationPlatformKind,
   type EnvironmentId,
   type IssueAutomationActionMode,
@@ -16,6 +17,7 @@ import {
   type ModelSelection,
   type ProjectId,
 } from "@t3tools/contracts";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { T, useGT, Var } from "gt-react";
 import {
@@ -907,6 +909,10 @@ export function ProfileModal({
   const [customPromptInstructions, setCustomPromptInstructions] = useState<string>(
     initial?.policy.customPromptInstructions ?? "",
   );
+  const [notifyFeishu, setNotifyFeishu] = useState(initial?.feishuNotification?.enabled ?? false);
+  const [feishuWebhook, setFeishuWebhook] = useState("");
+  const [feishuWebhookInvalid, setFeishuWebhookInvalid] = useState(false);
+  const hasFeishuWebhook = initial?.feishuNotification?.hasWebhook ?? false;
 
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -976,6 +982,7 @@ export function ProfileModal({
   const modelField = useRef<HTMLDivElement>(null);
   const repoField = useRef<HTMLDivElement>(null);
   const backupField = useRef<HTMLDivElement>(null);
+  const feishuWebhookField = useRef<HTMLDivElement>(null);
   const pollingSummary = enabled
     ? gt("Every {minutes} min", { minutes: pollIntervalMinutes })
     : gt("Polling off");
@@ -1045,6 +1052,13 @@ export function ProfileModal({
       return;
     }
 
+    const webhook = notifyFeishu ? feishuWebhook.trim() : "";
+    if (notifyFeishu && (webhook ? !isIssueAutomationFeishuWebhook(webhook) : !hasFeishuWebhook)) {
+      setFeishuWebhookInvalid(true);
+      focusRuleField(feishuWebhookField.current);
+      return;
+    }
+
     const scopeObj = activeConnector.scopes.find((s) => s.id === scopeId);
     const scopeName = scopeObj?.name ?? scopeId;
     setBusy(true);
@@ -1084,6 +1098,10 @@ export function ProfileModal({
           autoWriteComment,
           baseBranch: baseBranch.trim() || null,
           customPromptInstructions: customPromptInstructions.trim() || null,
+        },
+        feishuNotification: {
+          enabled: notifyFeishu,
+          ...(webhook ? { webhook: Redacted.make(webhook) } : {}),
         },
       },
     });
@@ -1500,6 +1518,56 @@ export function ProfileModal({
                   />
                 </RuleField>
               </RuleSection>
+            </RuleSection>
+            <RuleSection
+              title={gt("Feishu notifications")}
+              summary={notifyFeishu ? gt("Enabled") : gt("Disabled")}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="issue-rule-notify-feishu" id="issue-rule-notify-feishu-label">
+                  {gt("Notify Feishu when a task ends")}
+                </Label>
+                <Switch
+                  id="issue-rule-notify-feishu"
+                  size="sm"
+                  aria-labelledby="issue-rule-notify-feishu-label"
+                  checked={notifyFeishu}
+                  onCheckedChange={(checked) => {
+                    setNotifyFeishu(checked);
+                    setFeishuWebhookInvalid(false);
+                  }}
+                />
+              </div>
+              {notifyFeishu && (
+                <div ref={feishuWebhookField} className="space-y-1.5">
+                  <Label htmlFor="issue-rule-feishu-webhook">{gt("Group bot webhook")}</Label>
+                  <SecretInput
+                    id="issue-rule-feishu-webhook"
+                    size="sm"
+                    configured={hasFeishuWebhook}
+                    value={feishuWebhook}
+                    onChange={(event) => {
+                      setFeishuWebhook(event.target.value);
+                      setFeishuWebhookInvalid(false);
+                    }}
+                    placeholder={gt("Paste the Feishu group bot webhook")}
+                    aria-required={!hasFeishuWebhook}
+                    aria-invalid={feishuWebhookInvalid}
+                    aria-describedby={
+                      feishuWebhookInvalid ? "issue-rule-feishu-webhook-error" : undefined
+                    }
+                  />
+                  {feishuWebhookInvalid && (
+                    <p
+                      role="alert"
+                      id="issue-rule-feishu-webhook-error"
+                      className="text-xs text-destructive"
+                    >
+                      {gt("Enter a valid Feishu group bot webhook.")}
+                    </p>
+                  )}
+                </div>
+              )}
             </RuleSection>
           </form>
         </DialogPanel>
