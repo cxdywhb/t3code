@@ -70,6 +70,7 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   Empty,
   EmptyContent,
@@ -98,6 +99,7 @@ import {
   computeIssueAutomationAnalytics,
   DEFAULT_WORKBENCH_PREFS,
   formatCompactDuration,
+  groupIssueAutomationTasks,
   isStageRunning,
   IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
@@ -186,10 +188,11 @@ export function IssueAutomationPage() {
   const actionModeLabel = useActionModeLabel();
   const isWideDesktop = useMediaQuery("(min-width: 1024px)");
   const environmentId = usePrimaryEnvironmentId();
-  const supportsRuleScan =
-    useEnvironment(environmentId)?.serverConfig?.environment.capabilities
-      .issueAutomationRuleScan === true;
+  const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
+  const supportsRuleScan = capabilities?.issueAutomationRuleScan === true;
+  const supportsRetry = capabilities?.issueAutomationRetry === true;
   const { snapshot } = useIssueAutomationLiveState(environmentId);
+  const taskGroups = groupIssueAutomationTasks(snapshot.tasks);
 
   const storageKey = `t3code:issue-automation:prefs:v1:${environmentId ?? "default"}`;
   const [prefs, setPrefs] = useLocalStorage(
@@ -686,6 +689,47 @@ export function IssueAutomationPage() {
     }
   };
 
+  const handleRetryTask = async (task: IssueAutomationTask) => {
+    if (!environmentId || dispatching || !supportsRetry) return;
+    setDispatching(true);
+    const result = await analyzeIssuesCmd({
+      environmentId,
+      input: {
+        connectorId: task.connectorId,
+        scopeId: task.scopeId,
+        scopeName: task.scopeName,
+        issueKeys: [task.issueKey],
+        ...(task.profileId ? { profileId: task.profileId } : {}),
+        retryTaskId: task.id,
+      },
+    });
+    setDispatching(false);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: gt("Failed to start analysis"),
+        description: error instanceof Error ? error.message : gt("Dispatch failed."),
+      });
+      return;
+    }
+    const attempt = result.value.tasks[0];
+    if (attempt) selectRun(attempt);
+  };
+
+  const handleCancelTask = async (taskId: IssueAutomationTask["id"]) => {
+    if (!environmentId) return;
+    const result = await cancelTaskCmd({ environmentId, input: { taskId } });
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: gt("Could not cancel diagnosis"),
+        ...(error instanceof Error ? { description: error.message } : {}),
+      });
+    }
+  };
+
   const handleManualWriteBack = async (action: ManualWriteBackPayload): Promise<boolean> => {
     if (!environmentId || !activeConnector) return false;
     setWritingBack(true);
@@ -730,19 +774,32 @@ export function IssueAutomationPage() {
     }
   };
 
-  const filteredTasks = snapshot.tasks.filter((task) => {
-    if (runFilter === "active" && !isStageActive(task.stage)) return false;
-    if (runFilter === "needs_human" && task.stage !== "needs_human") return false;
-    if (runFilter === "completed" && task.stage !== "completed") return false;
-    if (runFilter === "failed" && task.stage !== "failed" && task.stage !== "cancelled") {
-      return false;
-    }
-    const q = runQuery.trim().toLowerCase();
-    if (!q) return true;
+  const groupCounts = {
+    all: taskGroups.length,
+    active: 0,
+    needs_human: 0,
+    completed: 0,
+    failed: 0,
+  };
+  const query = runQuery.trim().toLowerCase();
+  const filteredGroups = taskGroups.filter(({ latest, attempts }) => {
+    const stage = latest.stage;
+    const filter =
+      stage === "needs_human" || stage === "completed"
+        ? stage
+        : isStageActive(stage)
+          ? "active"
+          : "failed";
+    groupCounts[filter] += 1;
     return (
-      task.displayKey.toLowerCase().includes(q) ||
-      task.issueTitle.toLowerCase().includes(q) ||
-      task.assignedModelLabel.toLowerCase().includes(q)
+      (runFilter === "all" || runFilter === filter) &&
+      (!query ||
+        attempts.some(
+          (task) =>
+            task.displayKey.toLowerCase().includes(query) ||
+            task.issueTitle.toLowerCase().includes(query) ||
+            task.assignedModelLabel.toLowerCase().includes(query),
+        ))
     );
   });
 
@@ -774,10 +831,7 @@ export function IssueAutomationPage() {
         onDispatchIssue={(key) => void handleDispatchIssues([key])}
         writingBack={writingBack}
         onManualWriteBack={handleManualWriteBack}
-        onCancelTask={(taskId) => {
-          if (!environmentId) return;
-          void cancelTaskCmd({ environmentId, input: { taskId } });
-        }}
+        onCancelTask={(taskId) => void handleCancelTask(taskId)}
         onOpenThread={openThread}
         onClose={() => setInspectorOpen(false)}
       />
@@ -818,7 +872,7 @@ export function IssueAutomationPage() {
                       {snapshot.activeRunCount > 0 ? <Spinner size="xs" /> : null}
                       <T>Runs</T>
                       <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                        {snapshot.tasks.length}
+                        {taskGroups.length}
                       </span>
                     </span>
                   </Toggle>
@@ -916,7 +970,7 @@ export function IssueAutomationPage() {
                   <T>Issue list</T>
                 </Toggle>
                 <Toggle value="runs">
-                  <T>Runs</T> ({snapshot.tasks.length})
+                  <T>Runs</T> ({taskGroups.length})
                 </Toggle>
                 <Toggle value="analytics">
                   <T>Analytics</T>
@@ -1339,16 +1393,16 @@ export function IssueAutomationPage() {
                       <span className="inline-flex items-center gap-1">
                         <T>All</T>
                         <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                          {allRunsQuickSummary.totalRunsCount}
+                          {groupCounts.all}
                         </span>
                       </span>
                     </Toggle>
                     <Toggle value="active">
                       <span className="inline-flex items-center gap-1">
                         <T>Running</T>
-                        {allRunsQuickSummary.activeCount > 0 ? (
+                        {groupCounts.active > 0 ? (
                           <span className="font-mono text-2xs text-info tabular-nums">
-                            {allRunsQuickSummary.activeCount}
+                            {groupCounts.active}
                           </span>
                         ) : null}
                       </span>
@@ -1356,9 +1410,9 @@ export function IssueAutomationPage() {
                     <Toggle value="needs_human">
                       <span className="inline-flex items-center gap-1">
                         <T>Needs review</T>
-                        {allRunsQuickSummary.needsHumanCount > 0 ? (
+                        {groupCounts.needs_human > 0 ? (
                           <span className="font-mono text-2xs text-warning tabular-nums">
-                            {allRunsQuickSummary.needsHumanCount}
+                            {groupCounts.needs_human}
                           </span>
                         ) : null}
                       </span>
@@ -1367,16 +1421,16 @@ export function IssueAutomationPage() {
                       <span className="inline-flex items-center gap-1">
                         <T>Completed</T>
                         <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                          {allRunsQuickSummary.completedCount}
+                          {groupCounts.completed}
                         </span>
                       </span>
                     </Toggle>
                     <Toggle value="failed">
                       <span className="inline-flex items-center gap-1">
                         <T>Failed</T>
-                        {allRunsQuickSummary.failedCount > 0 ? (
+                        {groupCounts.failed > 0 ? (
                           <span className="font-mono text-2xs text-destructive tabular-nums">
-                            {allRunsQuickSummary.failedCount}
+                            {groupCounts.failed}
                           </span>
                         ) : null}
                       </span>
@@ -1443,7 +1497,7 @@ export function IssueAutomationPage() {
 
               {/* Independent Scrollable Run Rows */}
               <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
-                {filteredTasks.length === 0 ? (
+                {filteredGroups.length === 0 ? (
                   <Empty size="compact" className="my-12">
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
@@ -1462,103 +1516,159 @@ export function IssueAutomationPage() {
                   </Empty>
                 ) : (
                   <div className="flex flex-col gap-0.5">
-                    {filteredTasks.map((task) => {
+                    {filteredGroups.map(({ key, latest: task, attempts }) => {
                       const selected = inspectorActive && activeTask?.id === task.id;
                       const repoTitle =
                         envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
+                      const hasHistory = attempts.length > 1;
+                      const canCancel =
+                        isStageActive(task.stage) &&
+                        (task.stage !== "cancelling" || task.lastError !== null);
                       return (
-                        <div
-                          key={task.id}
-                          className={cn(
-                            "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
-                            selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-                          )}
-                        >
-                          <button
-                            type="button"
-                            aria-current={selected ? "true" : undefined}
-                            onClick={() => selectRun(task)}
-                            className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                        <Collapsible key={key}>
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
+                              selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                            )}
                           >
-                            <TaskStageGlyph stage={task.stage} />
-                            <PullRequestRowLines
-                              number={
-                                <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
-                                  {formatIssueNumber(task.displayKey, task.issueKey)}
-                                </span>
-                              }
-                              title={cleanIssueText(task.issueTitle)}
-                              signals={
-                                <>
-                                  <SeverityIndicator severity={task.severity} />
-                                  <StageBadge stage={task.stage} />
-                                  {task.commentSyncedAt ? (
-                                    <Badge variant="outline" size="sm">
-                                      <T>Synced</T>
-                                    </Badge>
-                                  ) : null}
-                                </>
-                              }
-                              meta={
-                                <PullRequestMetaLine className="min-w-0 truncate">
-                                  <span className="truncate">{task.scopeName}</span>
-                                  {repoTitle ? (
-                                    <span className="inline-flex shrink-0 items-center gap-1">
-                                      <FolderGit2Icon className="size-3" />
-                                      {repoTitle}
-                                    </span>
-                                  ) : null}
-                                  <span className="truncate font-mono">
-                                    {task.assignedModelLabel}
+                            <button
+                              type="button"
+                              aria-current={selected ? "true" : undefined}
+                              onClick={() => selectRun(task)}
+                              className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                            >
+                              <TaskStageGlyph stage={task.stage} />
+                              <PullRequestRowLines
+                                number={
+                                  <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
+                                    {formatIssueNumber(task.displayKey, task.issueKey)}
                                   </span>
-                                  {task.worktreeBranch ? (
-                                    <span className="inline-flex shrink-0 items-center gap-1 font-mono">
-                                      <GitBranchIcon className="size-3" />
-                                      {task.worktreeBranch}
+                                }
+                                title={cleanIssueText(task.issueTitle)}
+                                signals={
+                                  <>
+                                    <SeverityIndicator severity={task.severity} />
+                                    <StageBadge stage={task.stage} />
+                                    {task.commentSyncedAt ? (
+                                      <Badge variant="outline" size="sm">
+                                        <T>Synced</T>
+                                      </Badge>
+                                    ) : null}
+                                  </>
+                                }
+                                meta={
+                                  <PullRequestMetaLine className="min-w-0 truncate">
+                                    <span className="truncate">{task.scopeName}</span>
+                                    {repoTitle ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1">
+                                        <FolderGit2Icon className="size-3" />
+                                        {repoTitle}
+                                      </span>
+                                    ) : null}
+                                    <span className="truncate font-mono">
+                                      {task.assignedModelLabel}
                                     </span>
-                                  ) : null}
-                                </PullRequestMetaLine>
-                              }
-                            />
-                          </button>
+                                    {task.worktreeBranch ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1 font-mono">
+                                        <GitBranchIcon className="size-3" />
+                                        {task.worktreeBranch}
+                                      </span>
+                                    ) : null}
+                                  </PullRequestMetaLine>
+                                }
+                              />
+                            </button>
 
-                          <div className="flex shrink-0 items-center gap-3 pl-2">
-                            <div className="flex min-w-16 items-center justify-end">
-                              <TaskDurationBadge task={task} environmentId={environmentId} />
-                            </div>
-                            <span className="hidden w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums sm:inline-block">
-                              <RelativeTime timestamp={task.updatedAt} />
-                            </span>
-                            <div className="flex w-22 shrink-0 items-center justify-end">
-                              {task.primaryThreadId ? (
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  className="shrink-0"
-                                  onClick={() => openThread(task.primaryThreadId!)}
+                            <div className="flex shrink-0 items-center gap-3 pl-2">
+                              {hasHistory ? (
+                                <CollapsibleTrigger
+                                  render={<Button variant="ghost-muted" size="xs" />}
                                 >
-                                  <MessageSquareIcon className="size-3.5" />
-                                  <T>Open Thread</T>
-                                </Button>
-                              ) : isStageActive(task.stage) && environmentId ? (
-                                <Button
-                                  size="xs"
-                                  variant="ghost-destructive"
-                                  className="shrink-0"
-                                  onClick={() =>
-                                    void cancelTaskCmd({
-                                      environmentId,
-                                      input: { taskId: task.id },
-                                    })
-                                  }
-                                >
-                                  <XIcon className="size-3.5" />
-                                  <T>Cancel</T>
-                                </Button>
+                                  <ChevronDownIcon className="size-3.5" />
+                                  {gt("Execution history · {count} runs", {
+                                    count: attempts.length,
+                                  })}
+                                </CollapsibleTrigger>
                               ) : null}
+                              <div className="flex min-w-16 items-center justify-end">
+                                <TaskDurationBadge task={task} environmentId={environmentId} />
+                              </div>
+                              <span className="hidden w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums sm:inline-block">
+                                <RelativeTime timestamp={task.updatedAt} />
+                              </span>
+                              <div className="flex w-22 shrink-0 items-center justify-end">
+                                {canCancel && environmentId ? (
+                                  <Button
+                                    size="xs"
+                                    variant="ghost-destructive"
+                                    className="shrink-0"
+                                    onClick={() => void handleCancelTask(task.id)}
+                                  >
+                                    <XIcon className="size-3.5" />
+                                    {task.stage === "cancelling" ? (
+                                      <T>Retry cancellation</T>
+                                    ) : (
+                                      <T>Cancel</T>
+                                    )}
+                                  </Button>
+                                ) : supportsRetry &&
+                                  task.stage === "cancelled" &&
+                                  task.actionMode === "diagnose_only" ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    className="shrink-0"
+                                    disabled={dispatching}
+                                    onClick={() => void handleRetryTask(task)}
+                                  >
+                                    <PlayIcon className="size-3.5" />
+                                    <T>Run diagnosis again</T>
+                                  </Button>
+                                ) : task.primaryThreadId ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    className="shrink-0"
+                                    onClick={() => openThread(task.primaryThreadId!)}
+                                  >
+                                    <MessageSquareIcon className="size-3.5" />
+                                    <T>Open Thread</T>
+                                  </Button>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
-                        </div>
+                          {hasHistory ? (
+                            <CollapsiblePanel animate={false}>
+                              <div className="my-1 ms-5 flex flex-col gap-1 border-s border-border/60 ps-3">
+                                {attempts.map((attempt, index) => (
+                                  <div
+                                    key={attempt.id}
+                                    className="flex flex-wrap items-center gap-2 py-1 pe-3 text-xs"
+                                  >
+                                    <span className="text-muted-foreground">
+                                      {gt("Run {number}", { number: attempts.length - index })}
+                                    </span>
+                                    <StageBadge stage={attempt.stage} />
+                                    <RelativeTime timestamp={attempt.createdAt} />
+                                    <Button
+                                      size="xs"
+                                      variant="ghost-muted"
+                                      onClick={() => selectRun(attempt)}
+                                    >
+                                      {attempt.diagnosisReport !== null ? (
+                                        <T>View result</T>
+                                      ) : (
+                                        <T>View logs</T>
+                                      )}
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            </CollapsiblePanel>
+                          ) : null}
+                        </Collapsible>
                       );
                     })}
                   </div>

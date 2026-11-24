@@ -13386,5 +13386,14 @@
   "27d76249d09eb69f": "Review-Leitfaden bereit",
   "faa3bb26abb39c93": "Review-Leitfaden fehlgeschlagen",
   "b7df38b7d8792d78": "Leitfaden öffnen",
-  "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden"
+  "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden",
+  "603661e55748ac0f": "Diagnose neu gestartet · Lauf {number}",
+  "0c0d3201ddb738f6": "Abbruch erneut versuchen",
+  "0b7d46934c587ee2": "Diagnose konnte nicht abgebrochen werden",
+  "2b9626820cbc04c0": "Ausführungsverlauf · {count} Läufe",
+  "364f515237dea67d": "Lauf {number}",
+  "bac6133002ffbcb9": "Diagnose erneut starten",
+  "d5ced1fafe7fd036": "Ergebnis anzeigen",
+  "2c28f3b4f185261d": "Protokolle anzeigen",
+  "70d7e44d1c492a43": "Wird abgebrochen"
 }

@@ -7,6 +7,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  RunId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -186,6 +187,7 @@ export const IssueAutomationStage = Schema.Literals([
   "diagnosing",
   "reviewing",
   "writing_back",
+  "cancelling",
   "completed",
   "needs_human",
   "failed",
@@ -225,6 +227,8 @@ export const IssueAutomationTask = Schema.Struct({
   referenceProjectIds: Schema.Array(ProjectId),
   primaryThreadId: Schema.NullOr(ThreadId),
   reviewThreadId: Schema.NullOr(ThreadId),
+  primaryRunId: Schema.optionalKey(RunId),
+  reviewRunId: Schema.optionalKey(RunId),
   assignedModelLabel: Schema.String,
   worktreeBranch: Schema.NullOr(Schema.String),
   diagnosisReport: Schema.NullOr(Schema.String),
@@ -419,6 +423,7 @@ export const IssueAutomationAnalyzeIssuesInput = Schema.Struct({
   overrideRepositories: Schema.optional(IssueAutomationRepoBinding),
   overrideModels: Schema.optional(IssueAutomationModelStrategy),
   overridePolicy: Schema.optional(IssueAutomationPolicy),
+  retryTaskId: Schema.optionalKey(IssueAutomationTaskId),
 });
 export type IssueAutomationAnalyzeIssuesInput = typeof IssueAutomationAnalyzeIssuesInput.Type;
 

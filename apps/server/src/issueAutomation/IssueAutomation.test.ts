@@ -2,13 +2,19 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  EventId,
   IssueAutomationPlatformKind,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
+  RunId,
+  ThreadId,
   type IssueAutomationSaveProfileInput,
   type IssueAutomationTaskId,
   type OrchestrationProjectShell,
+  type OrchestrationV2Run,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +28,7 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -170,6 +177,9 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
     const pollStarted = yield* Deferred.make<void>();
     const finishPoll = yield* Deferred.make<void>();
     const cancellableTaskStarted = yield* Deferred.make<void>();
+    const runWaiting = yield* Deferred.make<void>();
+    const stopRequested = yield* Deferred.make<void>();
+    const confirmStop = yield* Deferred.make<void>();
     const outbound: Array<{ readonly url: string; readonly body: unknown }> = [];
     const startedMessages: ThreadLaunchService.ThreadLaunchInitialMessage[] = [];
     const project: OrchestrationProjectShell = {
@@ -185,6 +195,85 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
     const baseUrl = "https://zentao.example.com/zentao";
     const scope = { id: "5", name: "好轻 App" };
     const platform = IssueAutomationPlatformKind.make("zentao");
+    const threadId = ThreadId.make("thread:issue-2849");
+    const oldRunId = RunId.make("run:issue-2849:1");
+    const newRunId = RunId.make("run:issue-2849:2");
+    const at = DateTime.makeUnsafe("2026-11-24T00:00:00Z");
+    const instanceId = ProviderInstanceId.make("codex");
+    const modelSelection = { instanceId, model: "example" };
+    const runs: OrchestrationV2Run[] = [];
+    const makeRun = (
+      id: RunId,
+      messageId: MessageId,
+      status: OrchestrationV2Run["status"],
+    ): OrchestrationV2Run => ({
+      id,
+      threadId,
+      ordinal: runs.length + 1,
+      providerInstanceId: instanceId,
+      modelSelection,
+      providerThreadId: null,
+      userMessageId: messageId,
+      rootNodeId: null,
+      activeAttemptId: null,
+      status,
+      requestedAt: at,
+      startedAt: at,
+      completedAt: status === "running" ? null : at,
+      checkpointId: null,
+      contextHandoffId: null,
+    });
+    const baseProjection = emptyProjection({
+      id: EventId.make("event:issue-2849"),
+      type: "thread.created",
+      threadId,
+      occurredAt: at,
+      payload: {
+        id: threadId,
+        projectId: project.id,
+        title: "Diagnosis",
+        createdBy: "user",
+        creationSource: "web",
+        providerInstanceId: instanceId,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "main",
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: at,
+        updatedAt: at,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+    });
+    const reply = (runId: RunId, text: string) => ({
+      id: MessageId.make(`reply:${runId}`),
+      threadId,
+      runId,
+      nodeId: null,
+      role: "assistant" as const,
+      createdBy: "agent" as const,
+      creationSource: "provider" as const,
+      text,
+      attachments: [],
+      streaming: false,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const projection = () => ({
+      ...baseProjection,
+      runs: [...runs],
+      messages: [
+        ...(runs.length > 1 ? [reply(newRunId, "New diagnosis")] : []),
+        reply(oldRunId, "Cancelled diagnosis fragment"),
+      ],
+    });
     const detail: PlatformIssueDetail = {
       key: "2846",
       displayKey: "#2846",
@@ -259,7 +348,9 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       getIssueDetail: ({ issueKey }) =>
         issueKey === "2847"
           ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
-          : Effect.succeed(detail),
+          : Effect.succeed(
+              issueKey === "2849" ? { ...detail, key: issueKey, displayKey: "#2849" } : detail,
+            ),
       writeBack: () => Effect.die("Unexpected write-back"),
     };
     const dependencies = Layer.mergeAll(
@@ -275,10 +366,16 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       ),
       Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([project]) }),
       Layer.mock(GitWorkflow.GitWorkflowService)({}),
-      Layer.mock(ThreadIssueService.ThreadIssueService)({}),
+      Layer.mock(ThreadIssueService.ThreadIssueService)({
+        link: () => Effect.succeed({ alreadyLinked: false }),
+      }),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
         launch: (input) => {
           if (input.initialMessage) startedMessages.push(input.initialMessage);
+          if (input.initialMessage?.context?.issueAutomation?.issueKey === "#2849") {
+            runs.push(makeRun(oldRunId, input.initialMessage.messageId!, "running"));
+            return Effect.succeed({ threadId, projection: projection(), resumed: false });
+          }
           return Effect.fail(
             new ThreadLaunchService.ThreadLaunchError({
               operation: "dispatch-message",
@@ -289,7 +386,57 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
           );
         },
       }),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadProjection: () => Effect.sync(projection),
+        interruptThread: (input) =>
+          Effect.gen(function* () {
+            expect(input).toMatchObject({ threadId, runId: oldRunId });
+            yield* Deferred.succeed(stopRequested, undefined);
+            return {
+              type: "interrupt_requested" as const,
+              run: runs[0]!,
+              dispatch: { sequence: 1, storedEvents: [] },
+            };
+          }),
+        waitForThread: (input) =>
+          Effect.gen(function* () {
+            expect(input.threadId).toBe(threadId);
+            if (input.runId === oldRunId && input.untilDelegatedWorkSettled) {
+              yield* Deferred.succeed(runWaiting, undefined);
+              return yield* Effect.never;
+            }
+            if (input.runId === oldRunId) {
+              yield* Deferred.await(confirmStop);
+              runs[0] = { ...runs[0]!, status: "interrupted", completedAt: at };
+              return { threadId, run: runs[0], timedOut: false };
+            }
+            expect(input.runId).toBe(newRunId);
+            return { threadId, run: runs[1]!, resultRun: runs[0]!, timedOut: false };
+          }),
+        sendToThread: (input) =>
+          Effect.sync(() => {
+            expect(input).toMatchObject({
+              threadId,
+              freshContext: true,
+              context: { issueAutomation: { attemptNumber: 2 } },
+            });
+            const run = makeRun(newRunId, input.messageId, "completed");
+            runs.push(run);
+            const message = {
+              ...reply(run.id, input.text),
+              id: input.messageId,
+              role: "user" as const,
+            };
+            return {
+              dispatch: { sequence: 2, storedEvents: [] },
+              projection: projection(),
+              message,
+              run,
+              turnItem: null,
+              delivery: "started" as const,
+            };
+          }),
+      }),
       FetchHttpClient.layer.pipe(
         Layer.provide(
           Layer.succeed(FetchHttpClient.Fetch, async (url, init) => {
@@ -476,8 +623,47 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       yield* Deferred.await(cancellableTaskStarted);
       yield* service.cancelTask({ taskId: cancelled });
       const afterCancel = yield* whenSettled(cancelled);
-      expect(afterCancel.tasks.find((task) => task.id === cancelled)?.stage).toBe("cancelled");
+      const cancelledTask = afterCancel.tasks.find((task) => task.id === cancelled);
+      expect(cancelledTask?.stage).toBe("cancelled");
+      expect(cancelledTask?.steps.map((step) => step.stage)).toContain("cancelling");
       expect(outbound).toHaveLength(2);
+
+      yield* service.saveProfile({ ...enable, feishuNotification: { enabled: false } });
+      const running = yield* run("2849");
+      yield* Deferred.await(runWaiting);
+      const stop = yield* service.cancelTask({ taskId: running }).pipe(Effect.forkChild);
+      yield* Deferred.await(stopRequested);
+      expect((yield* service.getState).tasks.find((task) => task.id === running)).toMatchObject({
+        stage: "cancelling",
+        primaryThreadId: threadId,
+        primaryRunId: oldRunId,
+        completedAt: null,
+      });
+      const retry = service.analyzeIssues({
+        connectorId: connector.id,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        issueKeys: ["2849"],
+        retryTaskId: running,
+      });
+      expect((yield* Effect.result(retry))._tag).toBe("Failure");
+      yield* Deferred.succeed(confirmStop, undefined);
+      yield* Fiber.join(stop);
+      const restarted = (yield* retry).tasks[0]!;
+      const final = yield* whenSettled(restarted.id);
+      expect(final.tasks.find((task) => task.id === running)).toMatchObject({
+        stage: "cancelled",
+        primaryRunId: oldRunId,
+      });
+      expect(final.tasks.find((task) => task.id === restarted.id)).toMatchObject({
+        stage: "completed",
+        primaryThreadId: threadId,
+        primaryRunId: newRunId,
+        diagnosisReport: "New diagnosis",
+      });
+      expect(
+        startedMessages.filter((message) => message.context?.issueAutomation?.issueKey === "#2849"),
+      ).toHaveLength(1);
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provide(dependencies))));
   }),
 );

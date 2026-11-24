@@ -90,6 +90,7 @@ describe("V2 preview upgrade", () => {
         [108, "IssueAutomation"],
         [109, "PrReviewWorkstation"],
         [110, "IssueAutomationFeishu"],
+        [111, "IssueAutomationRunLinks"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -223,6 +224,7 @@ describe("V2 preview upgrade", () => {
         [108, "IssueAutomation"],
         [109, "PrReviewWorkstation"],
         [110, "IssueAutomationFeishu"],
+        [111, "IssueAutomationRunLinks"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

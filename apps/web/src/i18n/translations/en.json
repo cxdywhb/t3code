@@ -13397,5 +13397,14 @@
   "27d76249d09eb69f": "Review guide ready",
   "faa3bb26abb39c93": "Review guide failed",
   "b7df38b7d8792d78": "Open guide",
-  "9e91e9a77b664e4e": "Could not start a review guide"
+  "9e91e9a77b664e4e": "Could not start a review guide",
+  "603661e55748ac0f": "Diagnosis restarted · Run {number}",
+  "0c0d3201ddb738f6": "Retry cancellation",
+  "0b7d46934c587ee2": "Could not cancel diagnosis",
+  "2b9626820cbc04c0": "Execution history · {count} runs",
+  "364f515237dea67d": "Run {number}",
+  "bac6133002ffbcb9": "Run diagnosis again",
+  "d5ced1fafe7fd036": "View result",
+  "2c28f3b4f185261d": "View logs",
+  "70d7e44d1c492a43": "Cancelling"
 }

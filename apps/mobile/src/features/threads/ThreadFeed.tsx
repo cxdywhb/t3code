@@ -4274,7 +4274,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           info.item.message.projectedItem?.item.type === "user_message" &&
           info.item.message.projectedItem.item.freshContext ? (
             <ThreadContextDivider
-              label={gt("New session")}
+              label={
+                info.item.message.projectedItem.item.context?.issueAutomation?.attemptNumber ===
+                undefined
+                  ? gt("New session")
+                  : gt("Diagnosis restarted · Run {number}", {
+                      number:
+                        info.item.message.projectedItem.item.context.issueAutomation.attemptNumber,
+                    })
+              }
               icon="arrow.clockwise"
               iconColor={iconSubtleColor}
             />

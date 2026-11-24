@@ -318,6 +318,7 @@ export const IssueAutomationMessageSummary = Schema.Struct({
   platform: Schema.String,
   issueKey: Schema.String,
   issueUrl: Schema.String,
+  attemptNumber: Schema.optionalKey(PositiveInt),
 });
 export type IssueAutomationMessageSummary = typeof IssueAutomationMessageSummary.Type;
 

@@ -14,6 +14,7 @@ import {
   IssueAutomationTask,
   IssueAutomationTaskId,
   ProjectId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -121,6 +122,8 @@ interface TaskRow {
   readonly reference_project_ids_json: string;
   readonly primary_thread_id: string | null;
   readonly review_thread_id: string | null;
+  readonly primary_run_id: string | null;
+  readonly review_run_id: string | null;
   readonly assigned_model_label: string;
   readonly worktree_branch: string | null;
   readonly diagnosis_report: string | null;
@@ -169,6 +172,13 @@ export class IssueAutomationRepository extends Context.Service<
 
     readonly listTasks: (
       limit?: number,
+    ) => Effect.Effect<ReadonlyArray<IssueAutomationTask>, IssueAutomationRepositoryError>;
+    readonly getTask: (
+      id: IssueAutomationTaskId,
+    ) => Effect.Effect<IssueAutomationTask | undefined, IssueAutomationRepositoryError>;
+    readonly listIssueTasks: (
+      connectorId: IssueAutomationConnectorId,
+      issueKey: string,
     ) => Effect.Effect<ReadonlyArray<IssueAutomationTask>, IssueAutomationRepositoryError>;
     readonly upsertTask: (
       task: IssueAutomationTask,
@@ -267,6 +277,8 @@ const make = Effect.gen(function* () {
       referenceProjectIds,
       primaryThreadId: row.primary_thread_id === null ? null : ThreadId.make(row.primary_thread_id),
       reviewThreadId: row.review_thread_id === null ? null : ThreadId.make(row.review_thread_id),
+      ...(row.primary_run_id === null ? {} : { primaryRunId: RunId.make(row.primary_run_id) }),
+      ...(row.review_run_id === null ? {} : { reviewRunId: RunId.make(row.review_run_id) }),
       assignedModelLabel: row.assigned_model_label,
       worktreeBranch: row.worktree_branch,
       diagnosisReport: row.diagnosis_report,
@@ -433,12 +445,31 @@ const make = Effect.gen(function* () {
     function* (limit = 1000) {
       const rows = yield* sql<TaskRow>`
         SELECT * FROM issue_automation_tasks
-        ORDER BY updated_at DESC
+        ORDER BY updated_at DESC, rowid DESC
         LIMIT ${limit}
       `;
       return yield* Effect.forEach(rows, rowToTask);
     },
     Effect.mapError(toRepoError("listIssueAutomationTasks", "IssueAutomationTask")),
+  );
+
+  const getTask = Effect.fn("IssueAutomationRepository.getTask")(
+    function* (id: IssueAutomationTaskId) {
+      const [row] = yield* sql<TaskRow>`SELECT * FROM issue_automation_tasks WHERE task_id = ${id}`;
+      return row ? yield* rowToTask(row) : undefined;
+    },
+    Effect.mapError(toRepoError("getIssueAutomationTask", "IssueAutomationTask")),
+  );
+
+  const listIssueTasks = Effect.fn("IssueAutomationRepository.listIssueTasks")(
+    function* (connectorId: IssueAutomationConnectorId, issueKey: string) {
+      const rows = yield* sql<TaskRow>`
+      SELECT * FROM issue_automation_tasks WHERE connector_id = ${connectorId} AND issue_key = ${issueKey}
+      ORDER BY created_at DESC, rowid DESC
+    `;
+      return yield* Effect.forEach(rows, rowToTask);
+    },
+    Effect.mapError(toRepoError("listTasksForIssue", "IssueAutomationTask")),
   );
 
   const upsertTask: IssueAutomationRepository["Service"]["upsertTask"] = Effect.fn(
@@ -455,7 +486,7 @@ const make = Effect.gen(function* () {
           issue_key, display_key, issue_title, issue_url, module_name,
           severity, priority, issue_status, assignee, trigger_kind,
           action_mode, stage, target_project_id, reference_project_ids_json,
-          primary_thread_id, review_thread_id, assigned_model_label, worktree_branch,
+          primary_thread_id, review_thread_id, primary_run_id, review_run_id, assigned_model_label, worktree_branch,
           diagnosis_report, review_report, comment_synced_at, state_synced_at,
           remote_updated_marker, last_error, steps_json, created_at, updated_at, completed_at
         ) VALUES (
@@ -465,6 +496,7 @@ const make = Effect.gen(function* () {
           ${task.severity}, ${task.priority}, ${task.issueStatus}, ${task.assignee},
           ${task.trigger}, ${task.actionMode}, ${task.stage}, ${task.targetProjectId},
           ${refProjectsJson}, ${task.primaryThreadId}, ${task.reviewThreadId},
+          ${task.primaryRunId ?? null}, ${task.reviewRunId ?? null},
           ${task.assignedModelLabel}, ${task.worktreeBranch}, ${task.diagnosisReport},
           ${task.reviewReport}, ${task.commentSyncedAt}, ${task.stateSyncedAt},
           ${task.remoteUpdatedMarker}, ${task.lastError}, ${stepsJson},
@@ -473,6 +505,10 @@ const make = Effect.gen(function* () {
         ON CONFLICT (task_id) DO UPDATE SET
           profile_id = excluded.profile_id,
           issue_title = excluded.issue_title,
+          issue_url = excluded.issue_url,
+          module_name = excluded.module_name,
+          severity = excluded.severity,
+          priority = excluded.priority,
           issue_status = excluded.issue_status,
           assignee = excluded.assignee,
           action_mode = excluded.action_mode,
@@ -481,6 +517,8 @@ const make = Effect.gen(function* () {
           reference_project_ids_json = excluded.reference_project_ids_json,
           primary_thread_id = excluded.primary_thread_id,
           review_thread_id = excluded.review_thread_id,
+          primary_run_id = excluded.primary_run_id,
+          review_run_id = excluded.review_run_id,
           assigned_model_label = excluded.assigned_model_label,
           worktree_branch = excluded.worktree_branch,
           diagnosis_report = excluded.diagnosis_report,
@@ -507,6 +545,8 @@ const make = Effect.gen(function* () {
     recordProfilePoll,
     deleteProfile,
     listTasks,
+    getTask,
+    listIssueTasks,
     upsertTask,
     appendTaskStep,
   });

@@ -2,11 +2,13 @@ import {
   IssueAutomationConnectorId,
   IssueAutomationPlatformKind,
   IssueAutomationProfileId,
+  IssueAutomationTaskId,
   ProviderInstanceId,
   WS_METHODS,
   type IssueAutomationListRemoteIssuesInput,
   type IssueAutomationRemoteIssue,
   type IssueAutomationStateSnapshot,
+  type IssueAutomationTask,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { createMemoryHistory } from "@tanstack/react-router";
@@ -48,6 +50,42 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
   const platform = IssueAutomationPlatformKind.make("zentao");
   const updatedAt = "2026-11-24T00:00:00.000Z";
   const scope = { id: "5", name: "Mobile app" };
+  const previous = {
+    id: IssueAutomationTaskId.make("attempt-1"),
+    profileId,
+    connectorId,
+    platform,
+    scopeId: scope.id,
+    scopeName: scope.name,
+    issueKey: "312",
+    displayKey: "#312",
+    issueTitle: "Pairing diagnosis",
+    issueUrl: "https://zentao.example.com/bug-view-312.html",
+    moduleName: null,
+    severity: 2,
+    priority: null,
+    issueStatus: "active",
+    assignee: null,
+    trigger: "manual",
+    actionMode: "diagnose_only",
+    stage: "cancelled",
+    targetProjectId: PROJECT_ID,
+    referenceProjectIds: [],
+    primaryThreadId: null,
+    reviewThreadId: null,
+    assignedModelLabel: "codex:gpt-5.4",
+    worktreeBranch: null,
+    diagnosisReport: null,
+    reviewReport: null,
+    commentSyncedAt: null,
+    stateSyncedAt: null,
+    remoteUpdatedMarker: null,
+    lastError: null,
+    steps: [],
+    createdAt: "2026-11-23T00:00:00.000Z",
+    updatedAt,
+    completedAt: updatedAt,
+  } satisfies IssueAutomationTask;
   const snapshot: IssueAutomationStateSnapshot = {
     platforms: [],
     connectors: [
@@ -102,7 +140,16 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
         updatedAt,
       },
     ],
-    tasks: [],
+    tasks: [
+      previous,
+      {
+        ...previous,
+        id: IssueAutomationTaskId.make("attempt-2"),
+        stage: "completed",
+        createdAt: updatedAt,
+        diagnosisReport: "Diagnosis result",
+      },
+    ],
     activeRunCount: 0,
   };
   using _state = answerRpc(WS_METHODS.issueAutomationGetState, () => Effect.succeed(snapshot));
@@ -197,4 +244,16 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
   expect(scans).toEqual([scanInput, scanInput]);
   expect(unsupportedScan).not.toHaveBeenCalled();
   expect(dispatch).not.toHaveBeenCalled();
+
+  await page.getByRole("button", { name: /^Runs/ }).click();
+  await expect.element(page.getByText("Pairing diagnosis")).toBeVisible();
+  expect(page.getByText("Pairing diagnosis").all()).toHaveLength(1);
+  const history = page.getByRole("button", { name: "Execution history · 2 runs" });
+  await expect.element(history).toHaveAttribute("aria-expanded", "false");
+  await history.click();
+  await expect.element(page.getByText("Run 2", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("Run 1", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("Cancelled", { exact: true })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "View result" })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "View logs" })).toBeVisible();
 });

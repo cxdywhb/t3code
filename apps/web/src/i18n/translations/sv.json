@@ -13394,5 +13394,14 @@
   "27d76249d09eb69f": "Granskningsguiden är klar",
   "faa3bb26abb39c93": "Granskningsguiden misslyckades",
   "b7df38b7d8792d78": "Öppna guiden",
-  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide"
+  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide",
+  "603661e55748ac0f": "Diagnos omstartad · Körning {number}",
+  "0c0d3201ddb738f6": "Försök avbryta igen",
+  "0b7d46934c587ee2": "Det gick inte att avbryta diagnosen",
+  "2b9626820cbc04c0": "Körningshistorik · {count} körningar",
+  "364f515237dea67d": "Körning {number}",
+  "bac6133002ffbcb9": "Kör diagnosen igen",
+  "d5ced1fafe7fd036": "Visa resultat",
+  "2c28f3b4f185261d": "Visa loggar",
+  "70d7e44d1c492a43": "Avbryter"
 }

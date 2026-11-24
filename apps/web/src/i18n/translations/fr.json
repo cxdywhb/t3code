@@ -13387,5 +13387,14 @@
   "27d76249d09eb69f": "Guide de revue prêt",
   "faa3bb26abb39c93": "Échec du guide de revue",
   "b7df38b7d8792d78": "Ouvrir le guide",
-  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue"
+  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
+  "603661e55748ac0f": "Diagnostic relancé · Exécution {number}",
+  "0c0d3201ddb738f6": "Réessayer l’annulation",
+  "0b7d46934c587ee2": "Impossible d’annuler le diagnostic",
+  "2b9626820cbc04c0": "Historique · {count} exécutions",
+  "364f515237dea67d": "Exécution {number}",
+  "bac6133002ffbcb9": "Relancer le diagnostic",
+  "d5ced1fafe7fd036": "Voir le résultat",
+  "2c28f3b4f185261d": "Voir les journaux",
+  "70d7e44d1c492a43": "Annulation en cours"
 }

@@ -642,9 +642,17 @@ function EnvironmentHandoffRow({
 }
 
 /** Marks where `/clear` or an automation started a new provider session in this thread. */
-export function FreshSessionRow() {
+export function FreshSessionRow({
+  diagnosisAttempt,
+}: {
+  readonly diagnosisAttempt?: number | undefined;
+}) {
   const gt = useGT();
-  return <TimelineSystemDivider label={gt("New session")} icon={EraserIcon} />;
+  const label =
+    diagnosisAttempt === undefined
+      ? gt("New session")
+      : gt("Diagnosis restarted · Run {number}", { number: diagnosisAttempt });
+  return <TimelineSystemDivider label={label} icon={EraserIcon} />;
 }
 
 /** A same-harness model or effort change. Shows only what changed. */

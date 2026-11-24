@@ -759,14 +759,15 @@ export function IssueAutomationInspectorContent({
                     <T>Cross-review Thread</T>
                   </Button>
                 ) : null}
-                {isStageActive(activeTask.stage) ? (
+                {isStageActive(activeTask.stage) &&
+                (activeTask.stage !== "cancelling" || activeTask.lastError !== null) ? (
                   <Button
                     size="xs"
                     variant="ghost-destructive"
                     onClick={() => onCancelTask(activeTask.id)}
                   >
                     <XCircleIcon className="size-3.5" />
-                    <T>Cancel</T>
+                    {activeTask.stage === "cancelling" ? <T>Retry cancellation</T> : <T>Cancel</T>}
                   </Button>
                 ) : null}
               </div>

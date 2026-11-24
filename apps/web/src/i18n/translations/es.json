@@ -13382,5 +13382,14 @@
   "27d76249d09eb69f": "Guía de revisión lista",
   "faa3bb26abb39c93": "Falló la guía de revisión",
   "b7df38b7d8792d78": "Abrir guía",
-  "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión"
+  "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión",
+  "603661e55748ac0f": "Diagnóstico reiniciado · Ejecución {number}",
+  "0c0d3201ddb738f6": "Reintentar cancelación",
+  "0b7d46934c587ee2": "No se pudo cancelar el diagnóstico",
+  "2b9626820cbc04c0": "Historial de ejecución · {count} ejecuciones",
+  "364f515237dea67d": "Ejecución {number}",
+  "bac6133002ffbcb9": "Volver a ejecutar el diagnóstico",
+  "d5ced1fafe7fd036": "Ver resultado",
+  "2c28f3b4f185261d": "Ver registros",
+  "70d7e44d1c492a43": "Cancelando"
 }

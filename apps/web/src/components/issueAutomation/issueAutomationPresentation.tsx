@@ -39,7 +39,8 @@ export function isStageActive(stage: IssueAutomationStage): boolean {
     stage === "routing" ||
     stage === "diagnosing" ||
     stage === "reviewing" ||
-    stage === "writing_back"
+    stage === "writing_back" ||
+    stage === "cancelling"
   );
 }
 
@@ -61,6 +62,7 @@ export function stageStepIndex(stage: IssueAutomationStage): number {
     case "needs_human":
       return 6;
     case "failed":
+    case "cancelling":
     case "cancelled":
       return -1;
   }
@@ -207,6 +209,12 @@ export function StageBadge({
       return (
         <Badge variant="outline" size={size}>
           <T>Cancelled</T>
+        </Badge>
+      );
+    case "cancelling":
+      return (
+        <Badge variant="warning" size={size}>
+          <T>Cancelling</T>
         </Badge>
       );
   }
