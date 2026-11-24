@@ -6073,7 +6073,7 @@
   "2abae864cf090352": "High-severity model",
   "142d9d9f0996bb32": "Same as primary",
   "e7095d800d3e3583": "Heterogeneous cross-review model",
-  "1b4884e142d6b18a": "Run a second model to audit code changes before write-back.",
+  "902579beadb71384": "Only in fix modes. A second model reviews changes and test results before writing back to ZenTao.",
   "866e499078b57cda": "Cross-review model",
   "0b236f40b2a852aa": "Disabled",
   "3eb62060ab150173": "Triage & failover models",

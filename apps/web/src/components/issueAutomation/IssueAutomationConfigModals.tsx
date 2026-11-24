@@ -1312,7 +1312,9 @@ export function ProfileModal({
 
               <SettingsRow
                 title={gt("Heterogeneous cross-review model")}
-                description={gt("Run a second model to audit code changes before write-back.")}
+                description={gt(
+                  "Only in fix modes. A second model reviews changes and test results before writing back to ZenTao.",
+                )}
                 control={
                   <OfficialModelPicker
                     environmentId={environmentId}
