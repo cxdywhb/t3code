@@ -7,8 +7,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import IssueAutomation from "./Migrations/111_IssueAutomation.ts";
-import PrReviewWorkstation from "./Migrations/112_PrReviewWorkstation.ts";
+import IssueAutomation from "./Migrations/112_IssueAutomation.ts";
+import PrReviewWorkstation from "./Migrations/113_PrReviewWorkstation.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
@@ -31,7 +31,7 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
-  it.effect.each([106, 108])("upgrades fork tables originally registered at %i", (firstId) =>
+  it.effect.each([106, 108, 111])("upgrades fork tables originally registered at %i", (firstId) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: firstId - 1 });
@@ -47,6 +47,13 @@ describe("runMigrations", () => {
 
       yield* runMigrations();
       assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.lengthOf(
+        yield* sql`
+        SELECT name FROM sqlite_master
+        WHERE name = 'orchestration_v2_projection_run_attempts_superseded_idx'
+      `,
+        1,
+      );
       assert.deepStrictEqual(yield* sql`SELECT base_url FROM issue_automation_connectors`, [
         { base_url: "https://example.test/team" },
       ]);

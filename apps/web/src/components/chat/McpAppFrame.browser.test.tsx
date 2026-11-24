@@ -3,6 +3,8 @@ import { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
+import { injectMcpAppDocumentBootstrap } from "@t3tools/shared/mcpApp";
+
 import "~/index.css";
 import { ConfirmDialogHost } from "~/components/ConfirmDialogHost";
 import { isConfirmDialogActive, resetConfirmDialogForTests } from "~/confirmDialog";
@@ -38,11 +40,26 @@ const mockCommands = vi.hoisted(() => ({
   toolInfo: vi.fn(),
   callTool: vi.fn(),
 }));
+const sizeChanged = (height: number) =>
+  `parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: ${height} } }, "*");`;
+// What the app's frame shows after the app follows a link: another page in the same window.
+// Its nested frame keeps `load`, which stops the app, from firing before its message arrives.
+const REPLACEMENT_URL = `data:text/html,${encodeURIComponent(`<script>${sizeChanged(777)}</script><iframe srcdoc="x"></iframe>`)}`;
+// Served as the server serves an app: the document bootstrap is its first script.
+const NAVIGATING_APP_HTML = injectMcpAppDocumentBootstrap(`<script>
+addEventListener("message", (event) => {
+  if (event.data === "leave") location.href = ${JSON.stringify(REPLACEMENT_URL)};
+  else if (event.data?.id === "init") ${sizeChanged(321)}
+});
+parent.postMessage({ jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} }, "*");
+</script>`);
+
+const asset = vi.hoisted(() => ({ html: "" }));
 
 vi.mock(import("~/assets/longLivedAssetUrls"), () => ({
   useLongLivedAssetUrl: () => ({
     _tag: "Success",
-    url: `data:text/html,${encodeURIComponent(APP_HTML)}`,
+    url: `data:text/html,${encodeURIComponent(asset.html)}`,
     expiresAt: Date.now() + 60 * 60_000,
   }),
 }));
@@ -61,7 +78,8 @@ vi.mock(import("~/state/use-atom-command"), () => ({
 
 import { McpAppFrame } from "./McpAppFrame";
 
-function setup() {
+function setup(html = APP_HTML) {
+  asset.html = html;
   resetConfirmDialogForTests();
   mcpAppToolApprovals.resetAll();
   mockCommands.toolInfo.mockReset();
@@ -348,5 +366,38 @@ describe("McpAppFrame", () => {
     await expect.element(page.getByRole("button", { name: "Allow once" })).toBeVisible();
     await userEvent.click(page.getByRole("button", { name: "Cancel" }));
     await expect.element(page.getByRole("button", { name: "Allow once" })).not.toBeInTheDocument();
+  });
+
+  it("ignores a page the app's frame navigated to", async () => {
+    setup(NAVIGATING_APP_HTML);
+    const element = () => (
+      <McpAppFrame
+        environmentId={EnvironmentId.make("environment")}
+        threadId={ThreadId.make("thread")}
+        conversationThreadId={ThreadId.make("thread")}
+        itemId={TurnItemId.make("item")}
+        revision="1"
+        app={{
+          attachmentId: "attachment",
+          server: "Demo",
+          tool: "show",
+          resourceUri: "ui://demo/app",
+        }}
+        onSendMessage={undefined}
+      />
+    );
+    await using screen = await render(element());
+    const frame = screen.getByTitle("Demo app").element() as HTMLIFrameElement;
+    const row = frame.parentElement!.parentElement!;
+    // The app resizes only after the host's answer reached it, so the bridge works both ways.
+    await expect.element(row).toHaveStyle({ height: "321px" });
+
+    // A tool update hands the row an equal app in a new object, which re-attaches the host.
+    await screen.rerender(element());
+    frame.contentWindow!.postMessage("leave", "*");
+    await expect
+      .element(screen.getByText("The Demo app left its page and was stopped"))
+      .toBeInTheDocument();
+    expect(row.style.height).toBe("321px");
   });
 });
