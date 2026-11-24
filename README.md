@@ -1,27 +1,21 @@
 <p align="center">
-  <a href="https://t3.codes">
-    <img src="./assets/prod/t3-black-web-icon-192x192.png" width="80" height="80" alt="T3 Code logo" />
+  <a href="https://github.com/cxdywhb/t3code/releases">
+    <img src="./assets/code/icon-192.png" width="96" height="96" alt="Code" />
   </a>
 </p>
 
-<h1 align="center">T3 Code</h1>
+<h1 align="center">Code</h1>
 
-<p align="center">The open-source control plane for coding agents.</p>
+<p align="center">在一个桌面应用里管理 Codex、Claude Code 等编码智能体。</p>
 
-<p align="center">
-  <a href="https://t3.codes/download"><strong>Download</strong></a> ·
-  <a href="https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824">iOS</a> ·
-  <a href="https://play.google.com/store/apps/details?id=com.t3tools.t3code">Android</a> ·
-  <a href="https://app.t3.codes">Web</a> ·
-  <a href="./docs/README.md">Docs</a> ·
-  <a href="https://discord.gg/jn4EGJjrvv">Discord</a>
-</p>
+<p align="center"><strong>非官方版本。</strong>基于 T3 Code 源码开发，与 T3 Tools, Inc. 无隶属关系。</p>
 
 <p align="center">
-  <a href="https://t3.codes">
-    <img src="./.github/readme/hero.webp" width="100%" alt="T3 Code on desktop with a finished Claude thread, next to the phone app asking to approve a command from Codex" />
-  </a>
+  <a href="https://github.com/cxdywhb/t3code/releases"><strong>下载 Code</strong></a> ·
+  <a href="./docs/README.md">文档</a>
 </p>
+
+## 上游项目文档
 
 T3 Code runs the coding agents on your machine and gives them one fast interface. Start a thread at your desk, then approve the next step from your phone.
 
