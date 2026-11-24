@@ -8,7 +8,7 @@
 
 <p align="center">在一个桌面应用里管理 Codex、Claude Code 等编码智能体。</p>
 
-<p align="center"><strong>非官方版本。</strong>基于 T3 Code 源码开发，与 T3 Tools, Inc. 无隶属关系。</p>
+<p align="center">非官方版本，基于 T3 Code 源码开发构建。</p>
 
 <p align="center">
   <a href="https://github.com/cxdywhb/t3code/releases"><strong>下载 X Code</strong></a> ·
