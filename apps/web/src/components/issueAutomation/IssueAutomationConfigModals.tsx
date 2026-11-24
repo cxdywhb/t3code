@@ -829,12 +829,10 @@ export function ProfileModal({
   const [highSeverityModel, setHighSeverityModel] = useState<ModelSelection | null>(
     initial?.models.highSeverityModel ?? null,
   );
-  const [triageModel, setTriageModel] = useState<ModelSelection | null>(
-    initial?.models.triageModel ?? null,
-  );
   const [reviewModel, setReviewModel] = useState<ModelSelection | null>(
     initial?.models.reviewModel ?? null,
   );
+  const [retryWithBackup, setRetryWithBackup] = useState(initial?.models.fallbackModel != null);
   const [fallbackModel, setFallbackModel] = useState<ModelSelection | null>(
     initial?.models.fallbackModel ?? null,
   );
@@ -932,6 +930,11 @@ export function ProfileModal({
       return;
     }
 
+    if (retryWithBackup && !fallbackModel) {
+      setErrorText(gt("Choose a backup model to retry the task."));
+      return;
+    }
+
     const scopeObj = activeConnector.scopes.find((s) => s.id === scopeId);
     const scopeName = scopeObj?.name ?? scopeId;
     setBusy(true);
@@ -953,9 +956,9 @@ export function ProfileModal({
         models: {
           primaryModel: resolvedPrimaryModel,
           highSeverityModel,
-          triageModel,
+          triageModel: initial?.models.triageModel ?? null,
           reviewModel,
-          fallbackModel,
+          fallbackModel: retryWithBackup ? fallbackModel : null,
         },
         filter: {
           browseType,
@@ -1327,29 +1330,49 @@ export function ProfileModal({
               />
 
               <SettingsRow
-                title={gt("Triage & failover models")}
-                description={gt("Optional fast router model and quota failover backup.")}
+                title={gt("Repository selection")}
+                description={gt(
+                  "First match module or keyword rules, then look for a repository name in the issue. If nothing matches, use the default repository.",
+                )}
+              />
+
+              <SettingsRow
+                title={gt("If the primary model fails")}
                 control={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <OfficialModelPicker
-                      environmentId={environmentId}
-                      value={triageModel}
-                      onChange={setTriageModel}
-                      ariaLabel={gt("Triage model")}
-                      emptyOptionLabel={gt("Heuristic routing")}
-                      triggerClassName="w-auto min-w-44"
-                    />
+                  <Select
+                    value={retryWithBackup ? "retry" : "stop"}
+                    onValueChange={(next) => {
+                      if (next) setRetryWithBackup(next === "retry");
+                    }}
+                  >
+                    <SelectTrigger size="sm" aria-label={gt("If the primary model fails")}>
+                      <SelectValue>
+                        {retryWithBackup
+                          ? gt("Retry once with a backup model")
+                          : gt("End the task")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value="stop">{gt("End the task")}</SelectItem>
+                      <SelectItem value="retry">{gt("Retry once with a backup model")}</SelectItem>
+                    </SelectPopup>
+                  </Select>
+                }
+              />
+              {retryWithBackup && (
+                <SettingsRow
+                  title={gt("Backup model")}
+                  control={
                     <OfficialModelPicker
                       environmentId={environmentId}
                       value={fallbackModel}
                       onChange={setFallbackModel}
-                      ariaLabel={gt("Failover model")}
-                      emptyOptionLabel={gt("No failover")}
-                      triggerClassName="w-auto min-w-44"
+                      ariaLabel={gt("Backup model")}
+                      emptyOptionLabel={fallbackModel ? undefined : gt("Select a model…")}
                     />
-                  </div>
-                }
-              />
+                  }
+                />
+              )}
             </SettingsGroup>
 
             <SettingsGroup>
