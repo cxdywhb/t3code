@@ -460,6 +460,12 @@ import {
   TextGeneratorError,
 } from "./settings.ts";
 import {
+  CollaborationTemplatesInput,
+  CollaborationTemplatesResult,
+  CreateCollaborationTemplateInput,
+  CreateCollaborationTemplateResult,
+  StartCollaborationRequirementInput,
+  StartCollaborationRequirementResult,
   WorkflowAnswerInput,
   WorkflowRequestError,
   WorkflowDefinitionChangeResult,
@@ -678,6 +684,9 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
+  collaborationTemplates: "collaboration.templates",
+  createCollaborationTemplate: "collaboration.createTemplate",
+  startCollaborationRequirement: "collaboration.startRequirement",
   workflowsSubscribe: "workflows.subscribe",
   workflowsCounts: "workflows.counts",
   workflowsGet: "workflows.get",
@@ -2553,6 +2562,24 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsCollaborationTemplatesRpc = Rpc.make(WS_METHODS.collaborationTemplates, {
+  payload: CollaborationTemplatesInput,
+  success: CollaborationTemplatesResult,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsCreateCollaborationTemplateRpc = Rpc.make(WS_METHODS.createCollaborationTemplate, {
+  payload: CreateCollaborationTemplateInput,
+  success: CreateCollaborationTemplateResult,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsStartCollaborationRequirementRpc = Rpc.make(WS_METHODS.startCollaborationRequirement, {
+  payload: StartCollaborationRequirementInput,
+  success: StartCollaborationRequirementResult,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
 const WsWorkflowsSubscribeRpc = Rpc.make(WS_METHODS.workflowsSubscribe, {
   payload: WorkflowRunsSubscribeInput,
   success: WorkflowRunsUpdate,
@@ -2781,6 +2808,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsCollaborationTemplatesRpc,
+  WsCreateCollaborationTemplateRpc,
+  WsStartCollaborationRequirementRpc,
   WsWorkflowsSubscribeRpc,
   WsWorkflowsCountsRpc,
   WsWorkflowsGetRpc,

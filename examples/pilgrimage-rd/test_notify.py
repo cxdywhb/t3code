@@ -10,6 +10,16 @@ import notify
 
 
 class NotificationTest(unittest.TestCase):
+    def test_template_run_links_to_review_and_final_deliverables(self):
+        record = {
+            "run": {"workflow": "team-collaboration", "status": "completed"},
+            "steps": [{"name": "2 · 评审", "result": {"decision": "退回", "markdown": "内部细节"}}],
+        }
+        self.assertEqual(list(notify.events(record)), [
+            ("2 · 评审", "2 · 评审 评审退回"),
+            ("completed", "需求协作已完成，各角色交付已归档。"),
+        ])
+
     def test_failure_retries_and_success_is_deduplicated(self):
         data = {
             "run": {

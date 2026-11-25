@@ -56,6 +56,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   buildWorkflowFeed,
   buildWorkflowTimeline,
+  collaborationDeliverables,
   readWorkflowQuestion,
   workflowAgentSummary,
   isOwnWorkflowAnswer,
@@ -363,7 +364,8 @@ export function WorkflowRunFeed({
       onOpenThread={onOpenThread}
     />
   );
-  const resultLines = workflowResultLines(run.result);
+  const deliverables = collaborationDeliverables(run);
+  const resultLines = deliverables ? [] : workflowResultLines(run.result);
   const pausedApart = run.status === "paused" && pausedAt === null;
   const keys = new Set([
     ...(feed ?? []).flatMap((row) => (row.kind === "quick" ? [`quick:${row.steps[0]?.name}`] : [])),
@@ -377,8 +379,13 @@ export function WorkflowRunFeed({
   const lastAnswer = beats.findLast((beat) => beat.kind === "ask" && beat.status === "completed");
   const answered = lastAnswer === undefined ? null : workflowAnswer(lastAnswer.result);
   const resultSaysMore =
-    resultLines.length > 0 &&
-    !(resultLines.length === 1 && answered !== null && resultLines[0]?.value === answered.choice);
+    Boolean(deliverables?.length) ||
+    (resultLines.length > 0 &&
+      !(
+        resultLines.length === 1 &&
+        answered !== null &&
+        resultLines[0]?.value === answered.choice
+      ));
   const latest = (found: ReadonlyArray<WorkflowBeat>) =>
     found.reduce<WorkflowBeat | undefined>(
       (best, beat) => (best === undefined || beat.endMs >= best.endMs ? beat : best),
@@ -622,7 +629,23 @@ export function WorkflowRunFeed({
                   {run.status !== "completed" && run.detail ? (
                     <p className="mt-3 text-sm break-words whitespace-pre-wrap">{run.detail}</p>
                   ) : null}
-                  <ResultLines lines={resultLines} />
+                  {deliverables ? (
+                    <div className="mt-4 min-w-0 space-y-5">
+                      {deliverables.map((item, index) => (
+                        <section
+                          key={JSON.stringify([run.runId, index])}
+                          className="min-w-0 space-y-2"
+                        >
+                          <h3 className="text-sm font-semibold">
+                            {index + 1} · {item.role}
+                          </h3>
+                          <ChatMarkdown text={item.markdown} cwd={undefined} />
+                        </section>
+                      ))}
+                    </div>
+                  ) : (
+                    <ResultLines lines={resultLines} />
+                  )}
                 </FeedCard>
               ) : (
                 <p className="text-xs text-muted-foreground">

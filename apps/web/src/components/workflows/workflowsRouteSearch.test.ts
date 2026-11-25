@@ -26,6 +26,11 @@ function matchedSearch(url: string) {
 }
 
 describe("workflows route search", () => {
+  it("keeps collaboration and research entry points independent", () => {
+    expect(matchedSearch("/workflows?collaboration=true")).toMatchObject({ collaboration: true });
+    expect(matchedSearch("/workflows?rd=true")).toMatchObject({ rd: true });
+    expect(matchedSearch("/workflows?collaboration=false")?.collaboration).not.toBe(true);
+  });
   it("cuts a long env, run and file before an emoji the limit would split", () => {
     const env = "a".repeat(199);
     const run = "b".repeat(199);

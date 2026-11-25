@@ -22,6 +22,7 @@ import WorkflowSkippedRunsMigration from "../persistence/Migrations/113_Workflow
 import WorkflowRunTagsMigration from "../persistence/Migrations/115_WorkflowRunTags.ts";
 import WorkflowMailSenderMigration from "../persistence/Migrations/117_WorkflowMailSender.ts";
 import WorkflowPoolsMigration from "../persistence/Migrations/118_WorkflowPools.ts";
+import { collaborationWorkflow } from "./collaborationWorkflow.ts";
 import { type AgentResult, WorkflowAgents } from "./WorkflowAgents.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
 import * as WorkflowRuntime from "./WorkflowRuntime.ts";
@@ -47,6 +48,7 @@ const setup = Effect.fn("setup")(function* (
   wrap: (fileSystem: FileSystem.FileSystem) => FileSystem.FileSystem = (fileSystem) => fileSystem,
   engine?: (definitions: ReadonlyArray<WorkflowDefinition>) => Layer.Layer<Workflows.Workflows>,
   agents?: WorkflowAgents["Service"],
+  builtins: ReadonlyArray<WorkflowDefinition> = [],
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -79,7 +81,7 @@ const setup = Effect.fn("setup")(function* (
         ),
     ),
     directory,
-    Effect.succeed(true),
+    builtins,
   ).pipe(Effect.provideService(FileSystem.FileSystem, wrap(fileSystem)));
   return { fileSystem, at, directory, made, runtime: Layer.effectContext(made) };
 });
@@ -564,5 +566,78 @@ it.effect(
         const freed = yield* workflows.waitFor(held.runId, (run) => run.status === "completed");
         assert.equal(freed.result, "go on");
       }).pipe(Effect.scoped, Effect.raceFirst(Effect.forever(TestClock.adjust("1 second"))));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect(
+  "a team template runs without definition files, hands a rejected stage back to its author and archives the revision",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{ name: string; thread: string | undefined; prompt: string }> = [];
+      const { at, fileSystem, runtime } = yield* setup(
+        undefined,
+        undefined,
+        {
+          start: (job) =>
+            Effect.sync(() => {
+              calls.push({ name: job.origin.step, thread: job.thread, prompt: job.prompt });
+              return { threadId: job.thread ?? job.origin.step, turnId: job.origin.step };
+            }),
+          result: (turn) =>
+            Effect.succeed({
+              ending: "completed",
+              detail: "",
+              reply: "",
+              output: {
+                decision: turn.turnId === "2 · 评审" ? "退回" : "完成",
+                markdown: turn.turnId,
+              },
+            }),
+          interrupt: () => Effect.succeed("stopped"),
+        },
+        [collaborationWorkflow],
+      );
+      yield* fileSystem.remove(at("hold.ts"));
+      yield* Effect.gen(function* () {
+        const service = yield* Workflows.Workflows;
+        const files = yield* WorkflowRuntime.WorkflowDefinitions;
+        const collision = yield* files.save(
+          "clash.ts",
+          greet("x").replace('"greet"', '"team-collaboration"'),
+        );
+        assert.isFalse(collision.changed);
+        const started = yield* service.start(
+          "team-collaboration",
+          {
+            template: {
+              id: "22c22a22-6f98-402f-892e-a0c57041b021",
+              name: "需求流程",
+              stages: [
+                { role: "产品", instruction: "写 PRD" },
+                { role: "评审", instruction: "核对 PRD" },
+              ],
+            },
+            project: "p1",
+            title: "库存预警",
+            description: "只提醒一次",
+          },
+          { idempotencyKey: "case-1" },
+        );
+        const run = yield* service.waitFor(started.runId, (r) => r.endedAt !== null);
+        assert.equal(run.status, "completed");
+        assert.deepStrictEqual(
+          calls.map((c) => c.thread),
+          [undefined, undefined, "1 · 产品", "2 · 评审"],
+        );
+        assert.include(calls[3]?.prompt ?? "", "上游修订");
+        assert.deepStrictEqual(run.result, [
+          { role: "产品", markdown: "2 · 评审 · 上游修订" },
+          { role: "评审", markdown: "2 · 评审 · 复审" },
+        ]);
+      }).pipe(
+        Effect.provide(runtime),
+        Effect.scoped,
+        Effect.raceFirst(Effect.forever(TestClock.adjust("1 second"))),
+      );
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

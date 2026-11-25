@@ -6,6 +6,7 @@ import {
   FolderGit2Icon,
   SettingsIcon,
   ShieldCheckIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
@@ -310,6 +311,14 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handleIssueAutomationClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<WorkflowIcon />}
+            label={gt("Collaboration workflows")}
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: "/workflows", search: { collaboration: true } });
+            }}
+          />
           <SidebarUtilityItem
             icon={<FolderGit2Icon />}
             label={gt("Repositories")}

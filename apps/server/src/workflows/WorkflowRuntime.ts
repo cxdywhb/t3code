@@ -1,7 +1,6 @@
 // Workflows in the running server: every file in one folder defines some, and the folder can
 // change while the server runs. A file that loads replaces what it defined before; one that does
-// not keeps its last good version running. With no definitions there is no engine, unless runs
-// from before are kept: then one with nothing registered serves their history.
+// not keeps its last good version running. The built-in collaboration workflow runs alongside the files.
 import * as NodeAsyncHooks from "node:async_hooks";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the CommonJS cache is cleared in the same tick as the import.
 import * as NodeFS from "node:fs";
@@ -26,7 +25,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
@@ -286,16 +284,15 @@ const definitionProblems = (
 };
 
 /**
- * `engine` gives the layer that runs a set of definitions. It is asked for only once there is
- * something to run or `kept` says there are runs to read, since the engine's modules are not worth
- * loading for nothing. `where` is the folder of definition files, or one file.
+ * `where` is the folder of definition files, or one file. Built-ins also run on environments
+ * with no user-authored files.
  */
 export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
   engine: Effect.Effect<
     (definitions: ReadonlyArray<WorkflowDefinition>) => Layer.Layer<Workflows.Workflows, E, R>
   >,
   where: string,
-  kept: Effect.Effect<boolean>,
+  builtins: ReadonlyArray<WorkflowDefinition>,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -311,7 +308,6 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
   let ready = Deferred.makeUnsafe<Workflows.Workflows["Service"]>();
   let engineScope: Scope.Closeable | undefined;
   let running: ReadonlyArray<WorkflowDefinition> = [];
-  let imported = false;
   /** Each file as it was last looked at, so one that did not change is not loaded again. */
   const seen = new Map<string, string>();
   /** The last version of each file that loaded, which runs while a newer one does not. */
@@ -360,7 +356,6 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
   ) {
     const scope = yield* Scope.fork(outer);
     const layerEngine = yield* engine;
-    imported = true;
     const built = yield* Effect.suspend(() =>
       Layer.buildWithScope(layerEngine(definitions), scope),
     ).pipe(Effect.provideContext(services), Effect.exit);
@@ -377,10 +372,6 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       if (engineScope !== undefined) yield* Scope.close(engineScope, Exit.void);
       engineScope = undefined;
       running = [];
-      if (definitions.length === 0 && !imported && !(yield* kept)) {
-        yield* Deferred.succeed(next, Workflows.disabled);
-        return null;
-      }
       const built = yield* build(definitions);
       if (Exit.isSuccess(built)) {
         running = definitions;
@@ -419,15 +410,27 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       Effect.provideContext(services),
       Effect.result,
     );
-    return definitions._tag === "Failure"
-      ? ({ problem: loadProblem(definitions.failure, from, name) } as const)
-      : ({ definitions: definitions.success } as const);
+    if (definitions._tag === "Failure")
+      return { problem: loadProblem(definitions.failure, from, name) };
+    const reserved = definitions.success.find((entry) =>
+      builtins.some((builtin) => builtin.name === entry.name),
+    );
+    if (reserved)
+      return {
+        problem: {
+          file: name,
+          message: `The workflow name ${reserved.name} is reserved by the server.`,
+        },
+      };
+    return { definitions: definitions.success };
   });
   /** What would run with these files, in the folder's order. */
-  const gathered = (files: ReadonlyMap<string, ReadonlyArray<WorkflowDefinition>>) =>
-    [...files]
+  const gathered = (files: ReadonlyMap<string, ReadonlyArray<WorkflowDefinition>>) => [
+    { name: "(built-in)", definitions: builtins },
+    ...[...files]
       .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([name, definitions]) => ({ name, definitions }));
+      .map(([name, definitions]) => ({ name, definitions })),
+  ];
 
   // Set once `reload` exists, which it schedules again; the indirection keeps its type inferred.
   let retryLater: Effect.Effect<void> = Effect.void;
@@ -558,7 +561,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
 
   yield* lock.withPermits(1)(reload());
   // No file defines anything yet, though runs kept from before may still be read.
-  if (!(yield* Deferred.isDone(ready))) yield* boot([]);
+  if (!(yield* Deferred.isDone(ready))) yield* boot(builtins);
 
   // The folder, not a file: an editor that saves by renaming replaces the file it was watching.
   yield* fileSystem.watch(directory).pipe(
@@ -951,24 +954,24 @@ export const layer = Layer.effectContext(
     const override = yield* definitionsOverride;
     const config = yield* ServerConfig.ServerConfig;
     const forge = Layer.succeed(WorkflowForge.WorkflowForge, yield* WorkflowForge.WorkflowForge);
-    const sql = yield* SqlClient.SqlClient;
     const settings = yield* ServerSettings.ServerSettingsService;
     const where = Option.getOrElse(override, () => config.workflowsDir);
     const changes = yield* settings.subscribeChanges;
     const gated = yield* gate(
-      make(
-        Effect.map(
-          Effect.promise((): Promise<typeof WorkflowEngine> => import("./WorkflowEngine.ts")),
-          (engine) => (definitions) =>
-            engine
-              .layer(definitions)
-              .pipe(Layer.provide(WorkflowAgentThreads.layer), Layer.provide(forge)),
-        ),
-        where,
-        sql`SELECT 1 FROM workflow_runs LIMIT 1`.pipe(
-          Effect.map((rows) => rows.length > 0),
-          Effect.orElseSucceed(() => true),
-        ),
+      Effect.flatMap(
+        Effect.promise(() => import("./collaborationWorkflow.ts")),
+        ({ collaborationWorkflow }) =>
+          make(
+            Effect.map(
+              Effect.promise((): Promise<typeof WorkflowEngine> => import("./WorkflowEngine.ts")),
+              (engine) => (definitions) =>
+                engine
+                  .layer(definitions)
+                  .pipe(Layer.provide(WorkflowAgentThreads.layer), Layer.provide(forge)),
+            ),
+            where,
+            [collaborationWorkflow],
+          ),
       ),
       where,
     );

@@ -141,6 +141,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as Workflows from "./workflows/Workflows.ts";
+import * as CollaborationTemplates from "./workflows/CollaborationTemplates.ts";
 import * as WorkflowRuntime from "./workflows/WorkflowRuntime.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as FeedbackStore from "./feedback/FeedbackStore.ts";
@@ -899,6 +900,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ReviewService.ReviewService)({}),
   Layer.mock(ScheduledTasks.ScheduledTaskService)({}),
   Workflows.layerDisabled,
+  Layer.mock(CollaborationTemplates.CollaborationTemplates)({}),
   Layer.mock(WorkflowRuntime.WorkflowDefinitions)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(FeedbackStore.FeedbackStore)({}),

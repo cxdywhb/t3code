@@ -1,6 +1,7 @@
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 import {
+  CollaborationDeliverables,
   type IssueRef,
   type PullRequestRef,
   WorkflowIssueAddress,
@@ -462,6 +463,14 @@ export function workflowRunState(
   }
 }
 
+const isCollaborationResult = Schema.is(CollaborationDeliverables);
+
+export function collaborationDeliverables(run: WorkflowRun) {
+  return run.workflow === "team-collaboration" && isCollaborationResult(run.result)
+    ? run.result
+    : null;
+}
+
 const firstLine = (text: string) => text.trim().split("\n", 1)[0]!.trim();
 
 /** What a run is at right now, as the line under its title. */
@@ -508,6 +517,8 @@ export function workflowRunNow(node: WorkflowRunNode, resolve: MFunctionType = m
         ? resolve(msg("Waiting", { $context: "what a workflow run is doing now" }))
         : resolve(msg("Waiting for {step}", { step: detail }));
     case "completed": {
+      const outputs = collaborationDeliverables(run);
+      if (outputs?.length) return outputs.map((step) => step.role).join(" → ");
       const line = workflowResultLines(run.result)[0];
       if (line === undefined) {
         return resolve(msg("Finished", { $context: "what a workflow run is doing now" }));

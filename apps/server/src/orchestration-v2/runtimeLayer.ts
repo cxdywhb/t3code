@@ -59,6 +59,7 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as WorkflowRuntime from "../workflows/WorkflowRuntime.ts";
+import * as CollaborationTemplates from "../workflows/CollaborationTemplates.ts";
 import * as ThreadIssueService from "./ThreadIssueService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
@@ -442,6 +443,9 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLaunchProvided,
   layerScheduledTaskProvided,
   layerWorkflowsProvided,
+  CollaborationTemplates.layer.pipe(
+    Layer.provide(Layer.merge(layerWorkflowsProvided, ProjectStore.layer)),
+  ),
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
   layerFeedbackStoreProvided,

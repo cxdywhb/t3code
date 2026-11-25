@@ -137,6 +137,7 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as Workflows from "./workflows/Workflows.ts";
+import * as CollaborationTemplates from "./workflows/CollaborationTemplates.ts";
 import * as WorkflowRuntime from "./workflows/WorkflowRuntime.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as FeedbackStore from "./feedback/FeedbackStore.ts";
@@ -1514,6 +1515,7 @@ export const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const workflows = yield* Workflows.Workflows;
+      const collaborationTemplates = yield* CollaborationTemplates.CollaborationTemplates;
       const workflowDefinitions = yield* WorkflowRuntime.WorkflowDefinitions;
       // The service's messages are built from its own attributes, so they are safe to send.
       const toWorkflowRequestError = (error: Workflows.WorkflowError) =>
@@ -2450,6 +2452,18 @@ export const layerWsRpc = (
           providerSessionManager.subscribePromptSuggestion(input.threadId),
         [WS_METHODS.workflowsSubscribe]: (input) =>
           input.changes === true ? workflows.watch : Workflows.wholeLists(workflows.watch),
+        [WS_METHODS.collaborationTemplates]: () =>
+          collaborationTemplates.list.pipe(
+            Effect.mapError((error) => new WorkflowRequestError({ message: error.message })),
+          ),
+        [WS_METHODS.createCollaborationTemplate]: (input) =>
+          collaborationTemplates
+            .create(input)
+            .pipe(Effect.mapError((error) => new WorkflowRequestError({ message: error.message }))),
+        [WS_METHODS.startCollaborationRequirement]: (input) =>
+          collaborationTemplates
+            .start(input)
+            .pipe(Effect.mapError((error) => new WorkflowRequestError({ message: error.message }))),
         [WS_METHODS.workflowsCounts]: (_input) => workflows.counts,
         [WS_METHODS.workflowsGet]: (input) =>
           workflows.get(input.runId).pipe(Effect.mapError(toWorkflowRequestError)),

@@ -185,6 +185,17 @@ describe("the list of runs", () => {
     expect(told({ status: "completed", endedAt: at(1), result: { merged: "ba6ac73" } })).toBe(
       "Done: merged: ba6ac73",
     );
+    expect(
+      told({
+        workflow: "team-collaboration",
+        status: "completed",
+        endedAt: at(1),
+        result: [
+          { role: "产品", markdown: "# PRD" },
+          { role: "测试", markdown: "# 用例" },
+        ],
+      }),
+    ).toBe("Done: 产品 → 测试");
     expect(told({ status: "cancelled", endedAt: at(1), detail: "superseded" })).toBe(
       "Cancelled: superseded",
     );

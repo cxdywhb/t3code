@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 
+import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { IssueRef } from "./issue.ts";
 import { PullRequestRef } from "./pullRequest.ts";
 
@@ -297,3 +298,38 @@ export class WorkflowRequestError extends Schema.TaggedError<WorkflowRequestErro
   "WorkflowRequestError",
   { message: Schema.String },
 ) {}
+
+export const CollaborationTemplate = Schema.Struct({
+  id: Schema.String.check(Schema.isUUID()),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
+  stages: Schema.Array(
+    Schema.Struct({
+      role: TrimmedNonEmptyString.check(Schema.isMaxLength(80)),
+      instruction: TrimmedNonEmptyString.check(Schema.isMaxLength(20_000)),
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
+});
+export type CollaborationTemplate = typeof CollaborationTemplate.Type;
+
+export const CollaborationDeliverables = Schema.Array(
+  Schema.Struct({ role: Schema.String, markdown: Schema.String }),
+);
+
+export const CollaborationTemplatesInput = Schema.Struct({});
+export const CollaborationTemplatesResult = Schema.Struct({
+  templates: Schema.Array(CollaborationTemplate),
+});
+export const CreateCollaborationTemplateInput = CollaborationTemplate;
+export const CreateCollaborationTemplateResult = Schema.Struct({
+  id: CollaborationTemplate.fields.id,
+});
+export const StartCollaborationRequirementInput = Schema.Struct({
+  templateId: CollaborationTemplate.fields.id,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  description: TrimmedNonEmptyString.check(Schema.isMaxLength(50_000)),
+  key: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export const StartCollaborationRequirementResult = Schema.Struct({
+  runId: WorkflowRun.fields.runId,
+});

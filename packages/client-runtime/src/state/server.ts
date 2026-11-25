@@ -1521,7 +1521,25 @@ export function createServerEnvironmentAtoms<R, E>(
     concurrency: configConcurrency,
   });
 
+  const collaborationTemplates = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:collaboration:templates",
+    tag: WS_METHODS.collaborationTemplates,
+  });
+
   return {
+    collaborationTemplates,
+    createCollaborationTemplate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:collaboration:create-template",
+      tag: WS_METHODS.createCollaborationTemplate,
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(collaborationTemplates({ environmentId, input: {} }));
+        }),
+    }),
+    startCollaborationRequirement: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:collaboration:start-requirement",
+      tag: WS_METHODS.startCollaborationRequirement,
+    }),
     configValueAtom,
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",

@@ -415,7 +415,9 @@ export function WorkflowRunsView({
         </div>
         <ScrollArea
           className={cn(
-            "@container/feed min-h-0 min-w-0 flex-1",
+            "min-h-0 min-w-0 flex-1",
+            (shown?.run.workflow !== "team-collaboration" || shown.run.status !== "completed") &&
+              "@container/feed",
             selectedRunId === null ? "hidden md:block" : "block",
           )}
         >

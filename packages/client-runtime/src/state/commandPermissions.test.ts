@@ -35,6 +35,11 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand, runAtomCommand } from "./runtime.ts";
 import { AVAILABLE_CONNECTION_STATE, BearerConnectionTarget } from "../connection/model.ts";
+import { createServerEnvironmentAtoms } from "./server.ts";
+import * as Persistence from "../platform/persistence.ts";
+import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import type { SupervisorConnectionState, PreparedConnection } from "../connection/model.ts";
+import { RpcPermissionGuard } from "../rpc/client.ts";
 import { createPeerLinkEnvironmentAtoms } from "./peerLinks.ts";
 
 vi.mock("./session.ts", () => ({
@@ -228,6 +233,8 @@ describe("command permissions", () => {
   it.effect.each([
     WS_METHODS.scheduledTasksDelete,
     ORCHESTRATION_V2_WS_METHODS.stopWorkflow,
+    WS_METHODS.createCollaborationTemplate,
+    WS_METHODS.startCollaborationRequirement,
     WS_METHODS.workflowsAnswer,
     WS_METHODS.workflowsResume,
     WS_METHODS.workflowsCancel,
@@ -632,3 +639,87 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(writes).toBe(0);
   }),
 );
+
+describe("协作模板", () => {
+  it.effect("创建成功后刷新当前环境的模板查询", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const template = {
+          id: "c0547239-a388-4d20-85cc-b2a84c7dd024",
+          name: "研发协作",
+          stages: [{ role: "开发", instruction: "实现需求" }],
+        };
+        let templates: Array<typeof template> = [];
+        const client = {
+          [WS_METHODS.collaborationTemplates]: () => Effect.sync(() => ({ templates })),
+          [WS_METHODS.createCollaborationTemplate]: () =>
+            Effect.sync(() => {
+              templates = [template];
+              return { id: template.id };
+            }),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.of({
+          target: new BearerConnectionTarget({
+            environmentId: env,
+            label: "Test",
+            connectionId: "test",
+          }),
+          state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+            ...AVAILABLE_CONNECTION_STATE,
+            phase: "connected",
+          }),
+          session: yield* SubscriptionRef.make(Option.some({ client } as unknown as RpcSession)),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        });
+        const environments = EnvironmentRegistry.of({
+          run: (_id, effect) => Effect.provideService(effect, EnvironmentSupervisor, supervisor),
+          followStream: (_id, stream) =>
+            Stream.provideService(stream, EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry["Service"]);
+        const runtime = Atom.runtime(
+          Layer.mergeAll(
+            Layer.succeed(EnvironmentRegistry, environments),
+            Layer.succeed(RpcPermissionGuard, { authorize: () => Effect.void }),
+            Layer.succeed(Persistence.EnvironmentCacheStore, {
+              loadServerConfig: () => Effect.succeedNone,
+            } as unknown as Persistence.EnvironmentCacheStore["Service"]),
+          ),
+        );
+        const atoms = createServerEnvironmentAtoms(runtime, {
+          initialConfigValueAtom: () => Atom.make(null),
+        });
+        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (value) =>
+          Effect.sync(() => value.dispose()),
+        );
+        const query = atoms.collaborationTemplates({
+          environmentId: env,
+          input: {},
+        });
+        yield* AtomRegistry.mount(registry, query);
+        expect(yield* AtomRegistry.getResult(registry, query, { suspendOnWaiting: true })).toEqual({
+          templates: [],
+        });
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+            permissions: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+          }),
+        );
+        expect(
+          yield* atoms.createCollaborationTemplate.run(registry, {
+            environmentId: env,
+            input: template,
+          }),
+        ).toEqual({ id: template.id });
+        expect(yield* AtomRegistry.getResult(registry, query, { suspendOnWaiting: true })).toEqual({
+          templates: [template],
+        });
+      }),
+    ),
+  );
+});

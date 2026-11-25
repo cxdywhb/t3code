@@ -1,7 +1,7 @@
 import { EnvironmentId, type WorkflowRunReference } from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { T, useGT } from "gt-react";
-import { FileCode2Icon } from "lucide-react";
+import { BookOpenIcon, FileCode2Icon, WorkflowIcon } from "lucide-react";
 import { lazy, Suspense, useState, type MouseEvent } from "react";
 
 import { isElectron } from "~/env";
@@ -34,6 +34,7 @@ import {
   type WorkflowPaneState,
 } from "./workflowPane.logic";
 
+import { Collaboration } from "./Collaboration";
 import { ResearchCollaboration } from "./ResearchCollaboration";
 
 const COPY_PATH = "copy-path";
@@ -43,6 +44,7 @@ const WorkflowDefinitionEditor = lazy(() => import("./WorkflowDefinitionEditor")
 
 export interface WorkflowsSearch extends WorkflowPaneState {
   readonly rd?: boolean;
+  readonly collaboration?: boolean;
   readonly env?: string;
   readonly run?: string;
   /** Show the definition files instead of the runs: all of them, or `file` in the editor. */
@@ -150,9 +152,30 @@ export function WorkflowsPage() {
             reserveNativeControls={!paneOpen}
             className="border-b"
           >
-            <Button variant="outline" size="sm" onClick={() => go({ ...env, rd: !search.rd })}>
-              {search.rd ? gt("Back to Workflows") : gt("Research collaboration")}
-            </Button>
+            {!search.collaboration ? (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={search.rd ? gt("Back to Workflows") : gt("Research collaboration")}
+                onClick={() => go({ ...env, rd: !search.rd })}
+              >
+                <BookOpenIcon className="sm:hidden" />
+                <span className="hidden sm:inline">
+                  {search.rd ? gt("Back to Workflows") : gt("Research collaboration")}
+                </span>
+              </Button>
+            ) : null}
+            {!search.collaboration && (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={gt("Collaboration workflows")}
+                onClick={() => go({ ...env, collaboration: true })}
+              >
+                <WorkflowIcon className="sm:hidden" />
+                <span className="hidden sm:inline">{gt("Collaboration workflows")}</span>
+              </Button>
+            )}
             <WorkspaceBreadcrumb ariaLabel={gt("Workflows breadcrumb")} className="flex-1">
               <WorkspaceBreadcrumbItem current={!editing}>
                 {editing ? (
@@ -167,7 +190,7 @@ export function WorkflowsPage() {
                   </button>
                 ) : (
                   <h1 className="truncate">
-                    <T>Workflows</T>
+                    {search.collaboration ? gt("Collaboration workflows") : <T>Workflows</T>}
                   </h1>
                 )}
               </WorkspaceBreadcrumbItem>
@@ -215,7 +238,12 @@ export function WorkflowsPage() {
               <Select
                 value={environmentId ?? asked}
                 onValueChange={(value) => {
-                  if (value !== null) select({ env: value, ...(search.rd ? { rd: true } : {}) });
+                  if (value !== null)
+                    select({
+                      env: value,
+                      ...(search.rd ? { rd: true } : {}),
+                      ...(search.collaboration ? { collaboration: true } : {}),
+                    });
                 }}
               >
                 <SelectTrigger
@@ -245,7 +273,7 @@ export function WorkflowsPage() {
             {search.file === undefined ? null : (
               <div ref={setFileActions} className="flex shrink-0 items-center gap-2" />
             )}
-            {environmentId === null || editing ? null : (
+            {environmentId === null || editing || search.collaboration ? null : (
               <Button size="sm" variant="outline" onClick={() => openDefinitions(null)}>
                 <FileCode2Icon />
                 <T context="workflow definition files">Definitions</T>
@@ -293,6 +321,12 @@ export function WorkflowsPage() {
             <WorkflowsEmpty
               title={gt("No environment connected")}
               description={gt("Connect an environment to see its workflow runs.")}
+            />
+          ) : search.collaboration ? (
+            <Collaboration
+              key={environmentId}
+              environmentId={environmentId}
+              onSelect={(id) => go({ ...env, run: id })}
             />
           ) : search.rd ? (
             <ResearchCollaboration

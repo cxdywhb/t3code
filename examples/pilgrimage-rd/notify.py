@@ -14,16 +14,24 @@ import urllib.request
 
 def events(record):
     run = record["run"]
-    if run["workflow"] != "pilgrimage-rd":
-        raise ValueError("仅支持 pilgrimage-rd")
+    workflow = run["workflow"]
+    if workflow not in ("pilgrimage-rd", "team-collaboration"):
+        raise ValueError("该工作流没有配置协作提醒")
     for s in record["steps"]:
         result = s["result"]
         if isinstance(result, dict) and result.get("decision") == "退回":
-            yield s["name"], f"{s['name']} 评审退回\n{result['markdown']}"
+            message = f"{s['name']} 评审退回"
+            if workflow == "pilgrimage-rd":
+                message += f"\n{result['markdown']}"
+            yield s["name"], message
     if run["status"] in ("paused", "stopped", "cancelled"):
         yield run["updatedAt"], f"流程需要关注：{run['detail'] or run['status']}"
     elif run["status"] == "completed":
-        yield "completed", "研发协作已完成，PRD、技术方案和测试用例已归档。"
+        yield "completed", (
+            "研发协作已完成，PRD、技术方案和测试用例已归档。"
+            if workflow == "pilgrimage-rd"
+            else "需求协作已完成，各角色交付已归档。"
+        )
 
 
 def main():
