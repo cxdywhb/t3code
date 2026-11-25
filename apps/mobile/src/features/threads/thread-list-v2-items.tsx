@@ -127,8 +127,8 @@ const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> =
   working: {
     label: null,
     icon: "circle.dashed",
-    className: "text-adaptive-sky-600-400",
-    iconTintClassName: "accent-adaptive-sky-600-400",
+    className: "text-foreground-muted",
+    iconTintClassName: "accent-foreground-muted",
   },
   waiting: {
     label: null,

@@ -494,6 +494,8 @@ describe("resolveThreadStatusPill", () => {
     expect(resolveSidebarThreadStatus(resumed)).toBe("working");
     expect(resolveThreadStatusPill({ thread: resumed })).toMatchObject({
       label: "Working",
+      colorClass: "text-zinc-500 dark:text-zinc-400",
+      dotClass: "bg-zinc-500 dark:bg-zinc-400",
       pulse: true,
     });
   });

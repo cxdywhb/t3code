@@ -823,7 +823,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 ? gt("Goal", { $context: "thread status: working on a goal" })
                 : gt("Working", { $context: "thread status" }),
           icon: "working" as const,
-          className: "text-info-foreground",
+          className: "text-zinc-500 dark:text-zinc-400",
         }
       : status === "waiting"
         ? {
