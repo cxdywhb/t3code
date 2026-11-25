@@ -314,12 +314,15 @@ export const IssueAutomationStateSnapshot = Schema.Struct({
 });
 export type IssueAutomationStateSnapshot = typeof IssueAutomationStateSnapshot.Type;
 
+export const ISSUE_AUTOMATION_OAUTH_CALLBACK_PATH = "/oauth/issue-automation/callback";
+
 export const IssueAutomationStartConnectorAuthInput = Schema.Struct({
   id: Schema.optional(IssueAutomationConnectorId),
   platform: IssueAutomationPlatformKind,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
   mcpUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
   baseUrl: Schema.String.check(Schema.isMaxLength(1024)),
+  callbackBaseUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))),
 });
 export type IssueAutomationStartConnectorAuthInput =
   typeof IssueAutomationStartConnectorAuthInput.Type;
@@ -327,13 +330,16 @@ export type IssueAutomationStartConnectorAuthInput =
 export const IssueAutomationStartConnectorAuthResult = Schema.Struct({
   authorizationUrl: TrimmedNonEmptyString,
   attemptId: TrimmedNonEmptyString,
+  automatic: Schema.optionalKey(Schema.Boolean),
 });
 export type IssueAutomationStartConnectorAuthResult =
   typeof IssueAutomationStartConnectorAuthResult.Type;
 
 export const IssueAutomationFinishConnectorAuthInput = Schema.Struct({
   attemptId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
-  callbackUrl: Schema.RedactedFromValue(TrimmedNonEmptyString.check(Schema.isMaxLength(16_384))),
+  callbackUrl: Schema.optionalKey(
+    Schema.RedactedFromValue(TrimmedNonEmptyString.check(Schema.isMaxLength(16_384))),
+  ),
 });
 export type IssueAutomationFinishConnectorAuthInput =
   typeof IssueAutomationFinishConnectorAuthInput.Type;

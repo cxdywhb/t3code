@@ -435,10 +435,11 @@ Writing to a tracker over a remote connection requires the `source-control:write
 ### Connect ZenTao issue automation
 
 Open **Issue automation** and add a **ZenTao (MCP)** connection. Enter your service's full
-HTTPS MCP address and choose **Authorize MCP**. Approve access in your browser, copy the
-address it redirects to, and paste it into T3 Code to verify the connection. The MCP service
-must support OAuth browser authorization with dynamic client registration and expose the
-ZenTao product, search, and Bug detail tools.
+HTTPS MCP address and choose **Authorize MCP**. Open the sign-in page and approve access.
+T3 Code verifies and saves the connection when your browser returns. For a remote environment
+served over plain HTTP, paste the return address into the dialog, or connect to the environment
+over HTTPS for automatic return. The MCP service must support OAuth browser authorization with
+dynamic client registration and expose the ZenTao product, search, and Bug detail tools.
 T3 shows Bug links supplied by MCP or built from a web address saved on an existing connection.
 
 After upgrading from a password connection, edit the existing connection and authorize the

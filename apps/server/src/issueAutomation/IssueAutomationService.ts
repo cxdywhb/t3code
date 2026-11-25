@@ -93,6 +93,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { buildZenTaoBugWebUrl } from "./connectors/zentao/ZenTaoClient.ts";
 import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
 import {
+  automaticMcpCallback,
   McpAuthorization,
   McpConnectionError,
   parseMcpCallback,
@@ -307,6 +308,9 @@ export class IssueAutomationService extends Context.Service<
     readonly finishConnectorAuth: (
       input: IssueAutomationFinishConnectorAuthInput,
     ) => Effect.Effect<IssueAutomationConnector, IssueAutomationError>;
+    readonly handleConnectorAuthCallback: (
+      callback: URL,
+    ) => Effect.Effect<IssueAutomationConnector, IssueAutomationError>;
     readonly deleteConnector: (
       input: IssueAutomationDeleteConnectorInput,
     ) => Effect.Effect<void, IssueAutomationError>;
@@ -361,6 +365,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const threadIssues = yield* ThreadIssueService.ThreadIssueService;
   const serviceScope = yield* Effect.scope;
+  const clock = yield* Clock.Clock;
 
   const updatesPubSub = yield* PubSub.unbounded<IssueAutomationStateSnapshot>();
   const activeTaskFibers = yield* Ref.make<ReadonlyMap<IssueAutomationTaskId, Fiber.Fiber<void>>>(
@@ -1510,16 +1515,35 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  const authorizationAttempts = new Map<
-    string,
-    {
-      readonly input: IssueAutomationStartConnectorAuthInput;
-      readonly connectorId: IssueAutomationConnectorId;
-      readonly previousMcpUrl: string | null;
-      readonly expiresAt: number;
-      readonly session: McpAuthorization;
-    }
-  >();
+  interface AuthorizationAttempt {
+    readonly input: IssueAutomationStartConnectorAuthInput;
+    readonly connectorId: IssueAutomationConnectorId;
+    readonly previousMcpUrl: string | null;
+    readonly expiresAt: number;
+    readonly session: McpAuthorization;
+    readonly automatic: boolean;
+    readonly result: Deferred.Deferred<IssueAutomationConnector, IssueAutomationError>;
+    started: boolean;
+  }
+
+  const authorizationAttempts = new Map<string, AuthorizationAttempt>();
+  const expiredAuthorization = () =>
+    new IssueAutomationError({
+      operation: "finishConnectorAuth",
+      detail: "授权已过期或已使用，请重新授权。",
+    });
+
+  const getAuthorizationAttempt = Effect.fn("IssueAutomationService.getAuthorizationAttempt")(
+    function* (attemptId: string) {
+      const attempt = authorizationAttempts.get(attemptId);
+      const now = yield* clock.currentTimeMillis;
+      if (!attempt || attempt.expiresAt <= now) {
+        authorizationAttempts.delete(attemptId);
+        return yield* expiredAuthorization();
+      }
+      return { attempt, remainingMs: attempt.expiresAt - now };
+    },
+  );
 
   const startConnectorAuth: IssueAutomationService["Service"]["startConnectorAuth"] = Effect.fn(
     "IssueAutomationService.startConnectorAuth",
@@ -1541,7 +1565,8 @@ const make = Effect.gen(function* () {
       catch: (cause) => mcpError("startConnectorAuth", cause),
     });
     const attemptId = NodeCrypto.randomUUID();
-    const session = new McpAuthorization(normalized.mcpUrl, attemptId);
+    const callback = automaticMcpCallback(input.callbackBaseUrl);
+    const session = new McpAuthorization(normalized.mcpUrl, attemptId, undefined, callback);
     yield* Effect.tryPromise({
       try: (signal) => session.withClient(signal, (client) => client.listTools()),
       catch: (cause) => mcpError("startConnectorAuth", cause),
@@ -1553,7 +1578,7 @@ const make = Effect.gen(function* () {
       });
     }
 
-    const now = yield* Clock.currentTimeMillis;
+    const now = yield* clock.currentTimeMillis;
     for (const [id, attempt] of authorizationAttempts) {
       if (attempt.expiresAt <= now) authorizationAttempts.delete(id);
     }
@@ -1569,109 +1594,168 @@ const make = Effect.gen(function* () {
       previousMcpUrl: existing?.mcpUrl ?? null,
       expiresAt: now + 10 * 60_000,
       session,
+      automatic: callback !== undefined,
+      result: yield* Deferred.make<IssueAutomationConnector, IssueAutomationError>(),
+      started: false,
     });
-    return { attemptId, authorizationUrl: session.authorizationUrl };
+    return {
+      attemptId,
+      authorizationUrl: session.authorizationUrl,
+      automatic: callback !== undefined,
+    };
   });
+
+  const saveAuthorizedConnector = Effect.fn("IssueAutomationService.saveAuthorizedConnector")(
+    function* (attempt: AuthorizationAttempt, code: string) {
+      const { input, connectorId, previousMcpUrl, session } = attempt;
+      const plugin = yield* plugins.requirePlugin(input.platform);
+      const probe = yield* plugin.probeAndListScopes({
+        baseUrl: input.baseUrl,
+        withClient: (operation, run) =>
+          Effect.tryPromise({
+            try: (signal) => session.withClient(signal, run, code),
+            catch: (cause) => mcpError(operation, cause),
+          }),
+      });
+      const oauth = session.credentials;
+      if (!oauth) {
+        return yield* new IssueAutomationError({
+          operation: "finishConnectorAuth",
+          detail: "禅道 MCP 未返回可用的 OAuth 凭据。",
+        });
+      }
+
+      return yield* withConnectorLock(
+        connectorId,
+        Effect.gen(function* () {
+          const previous = input.id === undefined ? undefined : yield* getConnector(connectorId);
+          if (input.id !== undefined && (!previous || previous.mcpUrl !== previousMcpUrl)) {
+            return yield* new IssueAutomationError({
+              operation: "finishConnectorAuth",
+              detail: "连接已被修改或删除，请重新授权。",
+            });
+          }
+          if (
+            previous &&
+            (previous.mcpUrl !== input.mcpUrl || previous.status === "disconnected")
+          ) {
+            const profiles = yield* repo.listProfiles.pipe(
+              Effect.mapError(mapRepoErr("listProfiles")),
+            );
+            const probesById = new Map(probe.scopes.map((scope) => [scope.id, scope.name]));
+            for (const profile of profiles) {
+              if (profile.connectorId !== connectorId) continue;
+              const expectedName =
+                previous.scopes.find((scope) => scope.id === profile.scopeId)?.name ??
+                profile.scopeName;
+              if (probesById.get(profile.scopeId) !== expectedName) {
+                return yield* new IssueAutomationError({
+                  operation: "finishConnectorAuth",
+                  detail: "此授权无法访问原有规则绑定的禅道产品，未切换连接。",
+                });
+              }
+            }
+          }
+
+          const connector: IssueAutomationConnector = {
+            id: connectorId,
+            platform: input.platform,
+            name: input.name,
+            baseUrl: input.baseUrl,
+            mcpUrl: input.mcpUrl,
+            writeActions: [...probe.writeActions],
+            status: "connected",
+            viewerName: null,
+            serverVersion: null,
+            statusDetail: null,
+            scopes: [...probe.scopes],
+            updatedAt: yield* nowIso,
+          };
+          const key = connectorSecretKey(connectorId);
+          const previousSecret = yield* secrets
+            .get(key)
+            .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* storeConnectorOAuth(key, input.mcpUrl, oauth);
+              yield* repo.upsertConnector(connector).pipe(
+                Effect.mapError(mapRepoErr("saveConnector")),
+                Effect.tapError(() =>
+                  Option.isSome(previousSecret)
+                    ? secrets.set(key, previousSecret.value).pipe(Effect.ignore)
+                    : secrets.remove(key).pipe(Effect.ignore),
+                ),
+              );
+            }),
+          );
+          yield* publishSnapshot;
+          return connector;
+        }),
+      );
+    },
+  );
+
+  const redeemAuthorization = Effect.fn("IssueAutomationService.redeemAuthorization")(function* (
+    attemptId: string,
+    attempt: AuthorizationAttempt,
+    callbackUrl: string,
+  ) {
+    if (attempt.started) return yield* expiredAuthorization();
+    const code = yield* Effect.try({
+      try: () => parseMcpCallback(callbackUrl, attemptId, attempt.session.redirectUri),
+      catch: (cause) => mcpError("finishConnectorAuth", cause),
+    });
+    if (attempt.started || authorizationAttempts.get(attemptId) !== attempt) {
+      return yield* expiredAuthorization();
+    }
+    attempt.started = true;
+    const complete =
+      code === null
+        ? Effect.fail(
+            new IssueAutomationError({
+              operation: "finishConnectorAuth",
+              detail: "已取消禅道授权，请重新授权。",
+            }),
+          )
+        : saveAuthorizedConnector(attempt, code);
+    yield* complete.pipe(
+      Effect.onExit((outcome) => Deferred.done(attempt.result, outcome).pipe(Effect.asVoid)),
+      Effect.ignoreCause,
+      Effect.forkIn(serviceScope),
+    );
+    return yield* Deferred.await(attempt.result);
+  });
+
+  const handleConnectorAuthCallback: IssueAutomationService["Service"]["handleConnectorAuthCallback"] =
+    Effect.fn("IssueAutomationService.handleConnectorAuthCallback")(function* (callback) {
+      const attemptId = callback.searchParams.get("state");
+      if (!attemptId) return yield* expiredAuthorization();
+      const { attempt } = yield* getAuthorizationAttempt(attemptId);
+      if (!attempt.automatic) return yield* expiredAuthorization();
+      return yield* redeemAuthorization(attemptId, attempt, callback.href);
+    });
 
   const finishConnectorAuth: IssueAutomationService["Service"]["finishConnectorAuth"] = Effect.fn(
     "IssueAutomationService.finishConnectorAuth",
   )(function* ({ attemptId, callbackUrl }) {
-    const now = yield* Clock.currentTimeMillis;
-    const attempt = authorizationAttempts.get(attemptId);
-    if (!attempt || attempt.expiresAt <= now) {
-      authorizationAttempts.delete(attemptId);
-      return yield* new IssueAutomationError({
-        operation: "finishConnectorAuth",
-        detail: "授权已过期或已使用，请重新授权。",
-      });
-    }
-    const code = yield* Effect.try({
-      try: () => parseMcpCallback(Redacted.value(callbackUrl), attemptId),
-      catch: (cause) => mcpError("finishConnectorAuth", cause),
-    });
-    authorizationAttempts.delete(attemptId);
-    const { input, connectorId, previousMcpUrl, session } = attempt;
-    const plugin = yield* plugins.requirePlugin(input.platform);
-    const probe = yield* plugin.probeAndListScopes({
-      baseUrl: input.baseUrl,
-      withClient: (operation, run) =>
-        Effect.tryPromise({
-          try: (signal) => session.withClient(signal, run, code),
-          catch: (cause) => mcpError(operation, cause),
+    const { attempt, remainingMs } = yield* getAuthorizationAttempt(attemptId);
+    if (attempt.automatic && callbackUrl === undefined) {
+      return yield* Deferred.await(attempt.result).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.millis(remainingMs),
+          orElse: () => Effect.fail(expiredAuthorization()),
         }),
-    });
-    const oauth = session.credentials;
-    if (!oauth) {
-      return yield* new IssueAutomationError({
-        operation: "finishConnectorAuth",
-        detail: "禅道 MCP 未返回可用的 OAuth 凭据。",
-      });
-    }
-
-    return yield* withConnectorLock(
-      connectorId,
-      Effect.gen(function* () {
-        const previous = input.id === undefined ? undefined : yield* getConnector(connectorId);
-        if (input.id !== undefined && (!previous || previous.mcpUrl !== previousMcpUrl)) {
-          return yield* new IssueAutomationError({
-            operation: "finishConnectorAuth",
-            detail: "连接已被修改或删除，请重新授权。",
-          });
-        }
-        if (previous && (previous.mcpUrl !== input.mcpUrl || previous.status === "disconnected")) {
-          const profiles = yield* repo.listProfiles.pipe(
-            Effect.mapError(mapRepoErr("listProfiles")),
-          );
-          const probesById = new Map(probe.scopes.map((scope) => [scope.id, scope.name]));
-          for (const profile of profiles) {
-            if (profile.connectorId !== connectorId) continue;
-            const expectedName =
-              previous.scopes.find((scope) => scope.id === profile.scopeId)?.name ??
-              profile.scopeName;
-            if (probesById.get(profile.scopeId) !== expectedName) {
-              return yield* new IssueAutomationError({
-                operation: "finishConnectorAuth",
-                detail: "此授权无法访问原有规则绑定的禅道产品，未切换连接。",
-              });
-            }
-          }
-        }
-
-        const connector: IssueAutomationConnector = {
-          id: connectorId,
-          platform: input.platform,
-          name: input.name,
-          baseUrl: input.baseUrl,
-          mcpUrl: input.mcpUrl,
-          writeActions: [...probe.writeActions],
-          status: "connected",
-          viewerName: null,
-          serverVersion: null,
-          statusDetail: null,
-          scopes: [...probe.scopes],
-          updatedAt: yield* nowIso,
-        };
-        const key = connectorSecretKey(connectorId);
-        const previousSecret = yield* secrets
-          .get(key)
-          .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
-        yield* Effect.uninterruptible(
-          Effect.gen(function* () {
-            yield* storeConnectorOAuth(key, input.mcpUrl, oauth);
-            yield* repo.upsertConnector(connector).pipe(
-              Effect.mapError(mapRepoErr("saveConnector")),
-              Effect.tapError(() =>
-                Option.isSome(previousSecret)
-                  ? secrets.set(key, previousSecret.value).pipe(Effect.ignore)
-                  : secrets.remove(key).pipe(Effect.ignore),
-              ),
-            );
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            if (!attempt.started) authorizationAttempts.delete(attemptId);
           }),
-        );
-        yield* publishSnapshot;
-        return connector;
-      }),
-    );
+        ),
+      );
+    }
+    if (!attempt.automatic && callbackUrl !== undefined) {
+      return yield* redeemAuthorization(attemptId, attempt, Redacted.value(callbackUrl));
+    }
+    return yield* expiredAuthorization();
   });
 
   const deleteConnector: IssueAutomationService["Service"]["deleteConnector"] = Effect.fn(
@@ -2448,6 +2532,7 @@ const make = Effect.gen(function* () {
     subscribe,
     startConnectorAuth,
     finishConnectorAuth,
+    handleConnectorAuthCallback,
     deleteConnector,
     refreshScopes,
     listRemoteIssues,

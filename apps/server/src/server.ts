@@ -60,6 +60,7 @@ import * as IssueService from "./issue/IssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as IssueAutomationRepository from "./issueAutomation/IssueAutomationRepository.ts";
 import * as IssueAutomationService from "./issueAutomation/IssueAutomationService.ts";
+import * as IssueAutomationOAuthCallback from "./issueAutomation/oauthCallbackHttp.ts";
 import * as IssueAutomationPluginRegistry from "./issueAutomation/plugin/PluginRegistry.ts";
 import * as PrReviewService from "./prReview/PrReviewService.ts";
 import * as IssueTrackerBindings from "./persistence/IssueTrackerBindings.ts";
@@ -897,6 +898,7 @@ const layerMakeRoutes = Layer.mergeAll(
     PreviewTunnel.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
+    IssueAutomationOAuthCallback.layer,
     speechStreamRouteLayer,
   ),
   McpHttpServer.layer.pipe(

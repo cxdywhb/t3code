@@ -15,11 +15,17 @@ import {
   type OAuthClientInformationMixed,
   type OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { isPublicFaviconHost, normalizeHostname } from "@t3tools/shared/hostClassification";
+import { ISSUE_AUTOMATION_OAUTH_CALLBACK_PATH } from "@t3tools/contracts";
+import {
+  isLocalLoopbackHost,
+  isPublicFaviconHost,
+  normalizeHostname,
+} from "@t3tools/shared/hostClassification";
+import { oauthCallbackUrl } from "@t3tools/shared/oauthCallback";
 import { Agent } from "undici";
 import * as Schema from "effect/Schema";
 
-const callbackUri = new URL("http://127.0.0.1:37139/issue-automation/oauth/callback");
+const manualCallbackUri = "http://127.0.0.1:37139/issue-automation/oauth/callback";
 const timeoutMs = 20_000;
 
 export class McpConnectionError extends Schema.TaggedError<
@@ -41,23 +47,28 @@ export function parseMcpUrl(value: string): URL {
   return url;
 }
 
-export function parseMcpCallback(value: string, state: string): string {
-  const url = URL.parse(value) ?? URL.parse(`http://${value}`);
-  const code = url?.searchParams.get("code");
+export function automaticMcpCallback(baseUrl: string | undefined): URL | undefined {
+  const base = baseUrl && URL.parse(baseUrl);
+  if (!base || base.username || base.password) return undefined;
   if (
-    url?.origin !== callbackUri.origin ||
-    url.pathname !== callbackUri.pathname ||
-    url.username ||
-    url.password ||
-    url.hash ||
-    url.searchParams.getAll("state").length !== 1 ||
-    url.searchParams.get("state") !== state ||
-    url.searchParams.getAll("code").length !== 1 ||
-    !code
+    base.protocol !== "https:" &&
+    !(base.protocol === "http:" && isLocalLoopbackHost(base.hostname))
   ) {
+    return undefined;
+  }
+  return new URL(ISSUE_AUTOMATION_OAUTH_CALLBACK_PATH, base);
+}
+
+export function parseMcpCallback(
+  value: string,
+  state: string,
+  redirectUri = manualCallbackUri,
+): string | null {
+  try {
+    return oauthCallbackUrl(value, redirectUri, state).searchParams.get("code");
+  } catch {
     throw McpConnectionError.create("授权未完成或回跳地址不匹配，请检查地址或重新发起授权。");
   }
-  return code;
 }
 
 const publicDispatcher = new Agent({
@@ -148,15 +159,17 @@ function mcpFetch(endpoint: URL, signal: AbortSignal): NonNullable<McpFetch> {
 export interface StoredOAuth {
   readonly client: OAuthClientInformationMixed;
   readonly tokens: OAuthTokens;
+  readonly redirectUri?: string;
 }
 
 export function readStoredOAuth(raw: string, endpoint: string): StoredOAuth | undefined {
   try {
-    const { mcpUrl, client, tokens } = JSON.parse(raw);
+    const { mcpUrl, client, tokens, redirectUri } = JSON.parse(raw);
     if (mcpUrl !== endpoint) return;
     return {
       client: OAuthClientInformationSchema.parse(client),
       tokens: OAuthTokensSchema.parse(tokens),
+      ...(typeof redirectUri === "string" ? { redirectUri } : {}),
     };
   } catch {
     return undefined;
@@ -166,6 +179,7 @@ export function readStoredOAuth(raw: string, endpoint: string): StoredOAuth | un
 export class McpAuthorization {
   private readonly endpoint: URL;
   private readonly state: string;
+  readonly redirectUri: string;
   private client: OAuthClientInformationMixed | undefined;
   private tokens: OAuthTokens | undefined;
   private discovery: OAuthDiscoveryState | undefined;
@@ -173,53 +187,61 @@ export class McpAuthorization {
   authorizationUrl: string | undefined;
   tokensChanged = false;
 
-  constructor(endpoint: URL, state: string, stored?: StoredOAuth) {
+  constructor(endpoint: URL, state: string, stored?: StoredOAuth, callbackUrl?: URL) {
     this.endpoint = endpoint;
     this.state = state;
+    this.redirectUri = callbackUrl?.href ?? stored?.redirectUri ?? manualCallbackUri;
     this.client = stored?.client;
     this.tokens = stored?.tokens;
+    this.provider = this.makeProvider();
   }
 
-  private readonly provider: OAuthClientProvider = {
-    redirectUrl: callbackUri,
-    clientMetadata: {
-      client_name: "T3 Code",
-      redirect_uris: [callbackUri.href],
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      token_endpoint_auth_method: "none",
-    },
-    state: () => this.state,
-    clientInformation: () => this.client,
-    saveClientInformation: (client) => {
-      this.client = client;
-    },
-    tokens: () => this.tokens,
-    saveTokens: (tokens) => {
-      this.tokens =
-        tokens.refresh_token || !this.tokens?.refresh_token
-          ? tokens
-          : { ...tokens, refresh_token: this.tokens.refresh_token };
-      this.tokensChanged = true;
-    },
-    redirectToAuthorization: (url) => {
-      if (url.protocol !== "https:" || url.username || url.password) {
-        throw McpConnectionError.create("MCP 授权页面必须使用 HTTPS。");
-      }
-      this.authorizationUrl = url.href;
-    },
-    saveCodeVerifier: (verifier) => {
-      this.verifier = verifier;
-    },
-    codeVerifier: () => this.verifier,
-    discoveryState: () => this.discovery,
-    saveDiscoveryState: (discovery) => {
-      this.discovery = discovery;
-    },
-  };
+  private readonly provider: OAuthClientProvider;
+
+  private makeProvider(): OAuthClientProvider {
+    return {
+      redirectUrl: this.redirectUri,
+      clientMetadata: {
+        client_name: "T3 Code",
+        redirect_uris: [this.redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      },
+      state: () => this.state,
+      clientInformation: () => this.client,
+      saveClientInformation: (client) => {
+        this.client = client;
+      },
+      tokens: () => this.tokens,
+      saveTokens: (tokens) => {
+        this.tokens =
+          tokens.refresh_token || !this.tokens?.refresh_token
+            ? tokens
+            : { ...tokens, refresh_token: this.tokens.refresh_token };
+        this.tokensChanged = true;
+      },
+      redirectToAuthorization: (url) => {
+        if (url.protocol !== "https:" || url.username || url.password) {
+          throw McpConnectionError.create("MCP 授权页面必须使用 HTTPS。");
+        }
+        this.authorizationUrl = url.href;
+      },
+      saveCodeVerifier: (verifier) => {
+        this.verifier = verifier;
+      },
+      codeVerifier: () => this.verifier,
+      discoveryState: () => this.discovery,
+      saveDiscoveryState: (discovery) => {
+        this.discovery = discovery;
+      },
+    };
+  }
 
   get credentials(): StoredOAuth | undefined {
-    return this.client && this.tokens ? { client: this.client, tokens: this.tokens } : undefined;
+    return this.client && this.tokens
+      ? { client: this.client, tokens: this.tokens, redirectUri: this.redirectUri }
+      : undefined;
   }
 
   async withClient<A>(

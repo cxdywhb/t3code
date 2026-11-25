@@ -6125,6 +6125,7 @@
   "daf8daec701f0863": "Account",
   "2af8e7cbfcc99c2e": "Connect the same ZenTao instance through MCP to restore its existing rules.",
   "a8aac6763511c18d": "Enter your ZenTao MCP service URL, then authorize in your browser.",
+  "234eba3140b761b7": "T3 Code completes the connection after you approve access in your browser.",
   "7cf81103a1ead612": "MCP service URL",
   "809da88b8998d886": "Start over",
   "bc88f64a2a49d5d5": "Authorize MCP",

@@ -19,6 +19,7 @@ import {
   type ModelSelection,
   type ProjectId,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { T, useGT, Var } from "gt-react";
@@ -34,7 +35,7 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   OfficialModelPicker,
@@ -52,7 +53,7 @@ import { waitForProject } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { issueAutomationEnvironment } from "~/state/issueAutomation";
 import { projectEnvironment } from "~/state/projects";
-import { useEnvironmentScope } from "~/state/session";
+import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
@@ -580,6 +581,7 @@ export function ConnectorModal({
   readonly initial: IssueAutomationConnector | null;
 }) {
   const gt = useGT();
+  const callbackBaseUrl = Option.getOrUndefined(usePreparedConnection(environmentId))?.httpBaseUrl;
   const canAuthorize = useAtomValue(
     issueAutomationEnvironment.startConnectorAuth.permissionAtom(environmentId),
   );
@@ -604,6 +606,10 @@ export function ConnectorModal({
   const [callbackUrl, setCallbackUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const pendingCallback = useRef<AbortController | null>(null);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancel the pending authorization RPC when the dialog unmounts.
+  useEffect(() => () => pendingCallback.current?.abort(), []);
 
   const selectedPlatformDesc = platforms.find((p) => p.platform === platform) ?? platforms[0];
 
@@ -612,7 +618,9 @@ export function ConnectorModal({
     if (
       !canAuthorize ||
       busy ||
-      (authorization ? !callbackUrl.trim() : !mcpUrl.trim() || !name.trim())
+      (authorization
+        ? authorization.automatic || !callbackUrl.trim()
+        : !mcpUrl.trim() || !name.trim())
     )
       return;
     setBusy(true);
@@ -645,14 +653,33 @@ export function ConnectorModal({
         name: name.trim(),
         mcpUrl: mcpUrl.trim(),
         baseUrl: initial?.baseUrl ?? "",
+        ...(callbackBaseUrl === undefined ? {} : { callbackBaseUrl }),
       },
     });
     setBusy(false);
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);
       setErrorText(error instanceof Error ? error.message : gt("Connection verification failed."));
+      return;
+    }
+    setAuthorization(result.value);
+    if (!result.value.automatic) return;
+
+    const controller = new AbortController();
+    pendingCallback.current = controller;
+    const completed = await finishAuthorization(
+      { environmentId, input: { attemptId: result.value.attemptId } },
+      { signal: controller.signal },
+    );
+    if (controller.signal.aborted) return;
+    pendingCallback.current = null;
+    if (completed._tag === "Success") {
+      void window.desktopBridge?.revealWindow?.().catch(() => undefined);
+      onOpenChange(false);
     } else {
-      setAuthorization(result.value);
+      setAuthorization(null);
+      const error = squashAtomCommandFailure(completed);
+      setErrorText(error instanceof Error ? error.message : gt("Connection verification failed."));
     }
   };
 
@@ -660,7 +687,9 @@ export function ConnectorModal({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!busy) onOpenChange(next);
+        if (busy) return;
+        if (!next) pendingCallback.current?.abort();
+        onOpenChange(next);
       }}
     >
       <DialogPopup className="max-w-lg" style={MODAL_POPUP_STYLE}>
@@ -669,7 +698,9 @@ export function ConnectorModal({
             {initial ? <T>Edit platform connection</T> : <T>Connect issue platform</T>}
           </DialogTitle>
           <DialogDescription>
-            {authorization ? (
+            {authorization?.automatic ? (
+              <T>T3 Code completes the connection after you approve access in your browser.</T>
+            ) : authorization ? (
               <T>
                 Approve access in your browser. It then opens a page that may not load: copy that
                 page's address and paste it here.
@@ -700,19 +731,21 @@ export function ConnectorModal({
                   <ExternalLinkIcon aria-hidden />
                   <T>Open sign-in page</T>
                 </Button>
-                <label className="grid gap-1.5 text-sm">
-                  <T>Address of the page your browser opened</T>
-                  <Input
-                    value={callbackUrl}
-                    onChange={(e) => setCallbackUrl(e.target.value)}
-                    inputMode="url"
-                    autoComplete="off"
-                    spellCheck={false}
-                    maxLength={16_384}
-                    disabled={busy}
-                    required
-                  />
-                </label>
+                {!authorization.automatic ? (
+                  <label className="grid gap-1.5 text-sm">
+                    <T>Address of the page your browser opened</T>
+                    <Input
+                      value={callbackUrl}
+                      onChange={(e) => setCallbackUrl(e.target.value)}
+                      inputMode="url"
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={16_384}
+                      disabled={busy}
+                      required
+                    />
+                  </label>
+                ) : null}
               </div>
             ) : (
               <fieldset disabled={busy} className="grid min-w-0 gap-4">
@@ -794,7 +827,10 @@ export function ConnectorModal({
             type="button"
             variant="outline"
             disabled={busy}
-            onClick={() => onOpenChange(false)}
+            onClick={() => {
+              pendingCallback.current?.abort();
+              onOpenChange(false);
+            }}
           >
             <T>Cancel</T>
           </Button>
@@ -804,6 +840,7 @@ export function ConnectorModal({
               variant="ghost"
               disabled={busy}
               onClick={() => {
+                pendingCallback.current?.abort();
                 setAuthorization(null);
                 setCallbackUrl("");
                 setErrorText(null);
@@ -812,13 +849,21 @@ export function ConnectorModal({
               <T>Start over</T>
             </Button>
           ) : null}
-          <DialogAction
-            form="issue-automation-connector-form"
-            type="submit"
-            disabled={busy || !canAuthorize}
-          >
-            {busy ? <T>Verifying…</T> : authorization ? <T>Verify & save</T> : <T>Authorize MCP</T>}
-          </DialogAction>
+          {!authorization?.automatic ? (
+            <DialogAction
+              form="issue-automation-connector-form"
+              type="submit"
+              disabled={busy || !canAuthorize}
+            >
+              {busy ? (
+                <T>Verifying…</T>
+              ) : authorization ? (
+                <T>Verify & save</T>
+              ) : (
+                <T>Authorize MCP</T>
+              )}
+            </DialogAction>
+          ) : null}
         </DialogFooter>
       </DialogPopup>
     </Dialog>

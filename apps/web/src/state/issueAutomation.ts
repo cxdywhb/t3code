@@ -117,8 +117,6 @@ function createIssueAutomationAtoms() {
     finishConnectorAuth: createEnvironmentRpcCommand(connectionAtomRuntime, {
       label: "issue-automation:finish-connector-auth",
       tag: WS_METHODS.issueAutomationFinishConnectorAuth,
-      scheduler,
-      concurrency: serialPerEnvironment,
       onSettled: (target, registry) =>
         Effect.sync(() => registry.refresh(refreshState(target.environmentId))),
     }),

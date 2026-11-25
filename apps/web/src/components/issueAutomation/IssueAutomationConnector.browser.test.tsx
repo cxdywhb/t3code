@@ -12,7 +12,6 @@ import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { createMemoryHistory } from "@tanstack/react-router";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
@@ -22,7 +21,7 @@ import { AppRoot } from "~/AppRoot";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
 import { answerRpc, installFakeEnvironment, type FakeDriver } from "../../../test/fakeEnvironment";
-import { render } from "../../../test/render";
+import { render, stubGlobal } from "../../../test/render";
 
 vi.mock("../../../../../packages/client-runtime/src/connection/driver.ts", async (original) => {
   const [actual, { fakeDriver }, Layer] = await Promise.all([
@@ -33,7 +32,7 @@ vi.mock("../../../../../packages/client-runtime/src/connection/driver.ts", async
   return { ...actual, layer: Layer.succeed(actual.ConnectionDriver, fakeDriver) };
 });
 
-it("reconnects an existing tracker using an operator-supplied MCP endpoint", async () => {
+it("reconnects an existing tracker automatically when browser authorization completes", async () => {
   using _environment = installFakeEnvironment([], { scopes: AuthAdministrativeClientScopes });
   const legacy: IssueAutomationConnector = {
     id: IssueAutomationConnectorId.make("same-connector"),
@@ -50,19 +49,15 @@ it("reconnects an existing tracker using an operator-supplied MCP endpoint", asy
     updatedAt: "2026-11-24T00:00:00.000Z",
   };
   const mcpUrl = "https://custom.example.test/zentao/mcp";
-  const callbackUrl =
-    "http://127.0.0.1:37139/issue-automation/oauth/callback?code=fixture&state=fixture";
+  const connected = { ...legacy, mcpUrl, status: "connected" as const };
+  const approval = Promise.withResolvers<IssueAutomationConnector>();
+  const authorizationUrl = "https://custom.example.test/authorize";
   const start = vi.fn((_input: IssueAutomationStartConnectorAuthInput) =>
-    Effect.succeed({
-      authorizationUrl: "https://custom.example.test/authorize",
-      attemptId: "fixture",
-    }),
+    Effect.succeed({ authorizationUrl, attemptId: "fixture", automatic: true }),
   );
-  const finish = vi.fn((input: IssueAutomationFinishConnectorAuthInput) => {
-    expect(input.attemptId).toBe("fixture");
-    expect(Redacted.value(input.callbackUrl)).toBe(callbackUrl);
-    return Effect.succeed({ ...legacy, mcpUrl, status: "connected" as const });
-  });
+  const finish = vi.fn((_input: IssueAutomationFinishConnectorAuthInput) =>
+    Effect.promise(() => approval.promise),
+  );
   using _start = answerRpc(WS_METHODS.issueAutomationStartConnectorAuth, start);
   using _finish = answerRpc(WS_METHODS.issueAutomationFinishConnectorAuth, finish);
   __setClientSettingsForTests({
@@ -84,6 +79,7 @@ it("reconnects an existing tracker using an operator-supplied MCP endpoint", asy
     // AppRoot mounts the actual routes.
     router: false,
   });
+  using openBrowser = vi.spyOn(window, "open").mockReturnValue(null);
   await page.getByRole("button", { name: "Authorize MCP", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Edit platform connection" });
   const endpoint = page.getByRole("textbox", { name: "MCP service URL" });
@@ -106,11 +102,21 @@ it("reconnects an existing tracker using an operator-supplied MCP endpoint", asy
     name: legacy.name,
     baseUrl: legacy.baseUrl,
     mcpUrl,
+    callbackBaseUrl: window.location.origin,
   });
-  await page
-    .getByRole("textbox", { name: "Address of the page your browser opened" })
-    .fill(callbackUrl);
-  await page.getByRole("button", { name: "Verify & save" }).click();
+  await dialog.getByRole("button", { name: "Open sign-in page" }).click();
+  expect(openBrowser).toHaveBeenCalledExactlyOnceWith(
+    authorizationUrl,
+    "_blank",
+    "noopener,noreferrer",
+  );
+  await expect
+    .element(dialog.getByRole("textbox", { name: "Address of the page your browser opened" }))
+    .not.toBeInTheDocument();
+  expect(finish).toHaveBeenCalledExactlyOnceWith({ attemptId: "fixture" });
+  const revealWindow = vi.fn(async () => {});
+  using _desktop = stubGlobal("desktopBridge", { revealWindow });
+  approval.resolve(connected);
   await expect.element(dialog).not.toBeInTheDocument();
-  expect(finish).toHaveBeenCalledOnce();
+  expect(revealWindow).toHaveBeenCalledOnce();
 });

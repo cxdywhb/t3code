@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import { vi } from "vite-plus/test";
 
 import {
+  automaticMcpCallback,
   McpAuthorization,
   parseMcpCallback,
   parseMcpUrl,
@@ -137,7 +138,9 @@ it.effect(
         }
       });
 
-      const session = new McpAuthorization(endpoint, nonce);
+      const redirectUri = automaticMcpCallback("http://127.0.0.1:5734");
+      if (!redirectUri) throw new Error("Missing test callback URI");
+      const session = new McpAuthorization(endpoint, nonce, undefined, redirectUri);
       const signal = yield* Effect.abortSignal;
       yield* Effect.promise(() =>
         expect(session.withClient(signal, (client) => client.listTools())).rejects.toThrow(),
@@ -149,11 +152,13 @@ it.effect(
       challenge = authorization.searchParams.get("code_challenge") ?? "";
       assert.notEqual(challenge, "");
       const callback = new URL(authorization.searchParams.get("redirect_uri")!);
+      assert.equal(callback.href, redirectUri.href);
       callback.searchParams.set("code", "user-approved");
       callback.searchParams.set("state", "wrong");
-      assert.throws(() => parseMcpCallback(callback.href, nonce));
+      assert.throws(() => parseMcpCallback(callback.href, nonce, redirectUri.href));
       callback.searchParams.set("state", nonce);
-      const code = parseMcpCallback(callback.href, nonce);
+      const code = parseMcpCallback(callback.href, nonce, redirectUri.href);
+      if (code === null) throw new Error("Missing test authorization code");
 
       const adapter = makeZenTaoPlatformPlugin();
       const baseUrl = "https://bugs.example.test/zentao";
@@ -175,6 +180,7 @@ it.effect(
       assert.isUndefined(readStoredOAuth(serialized, "https://other.example.test/mcp"));
       const stored = readStoredOAuth(serialized, endpoint.href);
       assert.equal(stored?.tokens.issuer, `${endpoint.origin}/zentao`);
+      assert.equal(stored?.redirectUri, redirectUri.href);
       grant = "renewed-token";
       const renewedSession = new McpAuthorization(endpoint, "new-state", stored);
       const page = yield* adapter.listIssues({
@@ -208,4 +214,19 @@ it("accepts a full HTTPS endpoint without exposing credentials in its URL", () =
   ]) {
     assert.throws(() => parseMcpUrl(url));
   }
+});
+
+it("uses automatic callbacks for HTTPS and loopback, with manual callbacks for plain remote HTTP", () => {
+  assert.equal(
+    automaticMcpCallback("https://t3.example.test/")?.href,
+    "https://t3.example.test/oauth/issue-automation/callback",
+  );
+  assert.isUndefined(automaticMcpCallback("http://192.168.1.10:3773"));
+  assert.equal(
+    parseMcpCallback(
+      "127.0.0.1:37139/issue-automation/oauth/callback?state=fixture&code=manual",
+      "fixture",
+    ),
+    "manual",
+  );
 });
