@@ -438,8 +438,8 @@ Open **Issue automation** and add a **ZenTao (MCP)** connection. Enter your serv
 HTTPS MCP address and choose **Authorize MCP**. Approve access in your browser, copy the
 address it redirects to, and paste it into T3 Code to verify the connection. The MCP service
 must support OAuth browser authorization with dynamic client registration and expose the
-ZenTao product, search, and Bug detail tools. Add the optional ZenTao web address to open Bug
-links when the service does not supply them.
+ZenTao product, search, and Bug detail tools.
+T3 shows Bug links supplied by MCP or built from a web address saved on an existing connection.
 
 After upgrading from a password connection, edit the existing connection and authorize the
 MCP service for the same ZenTao instance. Existing rules and run history stay with that

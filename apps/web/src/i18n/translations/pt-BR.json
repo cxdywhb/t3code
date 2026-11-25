@@ -6124,8 +6124,6 @@
   "2af8e7cbfcc99c2e": "Conecte a mesma instância do ZenTao via MCP para restaurar as regras existentes.",
   "a8aac6763511c18d": "Insira a URL do seu serviço MCP do ZenTao e autorize o acesso no navegador.",
   "7cf81103a1ead612": "URL do serviço MCP",
-  "b1bd5b727bed28ac": "URL web do ZenTao (opcional)",
-  "4de55f2be3df0e87": "O T3 usa este endereço para criar links que abrem bugs no ZenTao.",
   "809da88b8998d886": "Recomeçar",
   "bc88f64a2a49d5d5": "Autorizar MCP",
   "37c3c7611fccfe4f": "Baixar anexo {number}",

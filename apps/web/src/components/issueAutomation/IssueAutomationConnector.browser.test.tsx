@@ -92,6 +92,9 @@ it("reconnects an existing tracker using an operator-supplied MCP endpoint", asy
     .element(page.getByRole("textbox", { name: "Account", exact: true }))
     .not.toBeInTheDocument();
   await expect.element(page.getByLabelText("Password or token")).not.toBeInTheDocument();
+  await expect
+    .element(dialog.getByRole("textbox", { name: "ZenTao web URL (optional)" }))
+    .not.toBeInTheDocument();
   await endpoint.fill(mcpUrl);
   const authorize = dialog.getByRole("button", { name: "Authorize MCP" });
   await expect.element(authorize).toBeEnabled();

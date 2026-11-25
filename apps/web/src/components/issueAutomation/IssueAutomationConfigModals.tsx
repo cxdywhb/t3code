@@ -599,7 +599,6 @@ export function ConnectorModal({
   const [platform, setPlatform] = useState<string>(defaultPlatform);
   const [name, setName] = useState(initial?.name ?? "");
   const [mcpUrl, setMcpUrl] = useState(initial?.mcpUrl ?? "");
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
   const [authorization, setAuthorization] =
     useState<IssueAutomationStartConnectorAuthResult | null>(null);
   const [callbackUrl, setCallbackUrl] = useState("");
@@ -645,7 +644,7 @@ export function ConnectorModal({
         platform: IssueAutomationPlatformKind.make(platform),
         name: name.trim(),
         mcpUrl: mcpUrl.trim(),
-        baseUrl: baseUrl.trim(),
+        baseUrl: initial?.baseUrl ?? "",
       },
     });
     setBusy(false);
@@ -777,23 +776,6 @@ export function ConnectorModal({
                     spellCheck={false}
                     required
                   />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="connector-web-url">
-                    <T>ZenTao web URL (optional)</T>
-                  </Label>
-                  <Input
-                    id="connector-web-url"
-                    value={baseUrl}
-                    onChange={(e) => setBaseUrl(e.target.value)}
-                    placeholder="https://zentao.example.com/zentao"
-                    type="url"
-                    spellCheck={false}
-                    aria-describedby="connector-web-url-help"
-                  />
-                  <p id="connector-web-url-help" className="text-xs text-muted-foreground">
-                    <T>T3 uses this address for links that open Bugs in ZenTao.</T>
-                  </p>
                 </div>
               </fieldset>
             )}
