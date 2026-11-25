@@ -723,7 +723,7 @@ export function PrReviewWorkstationPage() {
                           <div
                             key={key}
                             className={cn(
-                              "flex items-center gap-2.5 rounded-md px-3 py-2 text-xs transition-colors duration-150",
+                              "@container/pr-review-row flex items-center gap-2.5 rounded-md px-3 py-2 text-xs transition-colors duration-150",
                               latestTask && latestTask.id === selectedTaskId
                                 ? "bg-accent"
                                 : "hover:bg-accent/60",
@@ -734,13 +734,18 @@ export function PrReviewWorkstationPage() {
                               onCheckedChange={() => toggleChecked(key)}
                             />
                             <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
-                            <div className="min-w-0 flex-1">
+                            <div className="@container/pr-review-item min-w-0 flex-1">
                               <PullRequestRowLines
                                 number={
-                                  <span className="inline-flex shrink-0 items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
+                                  <span className="inline-flex min-w-0 max-w-[40%] items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
                                     <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                    <span>
-                                      {entry.repository}
+                                    <Tooltip>
+                                      <TooltipTrigger render={<span className="truncate" />}>
+                                        {entry.repository}
+                                      </TooltipTrigger>
+                                      <TooltipPopup>{entry.repository}</TooltipPopup>
+                                    </Tooltip>
+                                    <span className="-ms-1 shrink-0">
                                       {sigil}
                                       {entry.number}
                                     </span>
@@ -750,9 +755,11 @@ export function PrReviewWorkstationPage() {
                                 signals={
                                   <>
                                     {isCloudUncloned ? (
-                                      <Badge variant="outline" size="sm">
-                                        <T>Cloud MR</T>
-                                      </Badge>
+                                      <span className="hidden @md/pr-review-item:inline-flex">
+                                        <Badge variant="outline" size="sm">
+                                          <T>Cloud MR</T>
+                                        </Badge>
+                                      </span>
                                     ) : null}
                                     {latestTask ? (
                                       <button
@@ -760,12 +767,14 @@ export function PrReviewWorkstationPage() {
                                         onClick={() => setSelectedTaskId(latestTask.id)}
                                         className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
                                       >
-                                        {isPrReviewStageActive(latestTask.stage) ? (
-                                          <PrReviewStageBadge stage={latestTask.stage} />
-                                        ) : (
-                                          <PrReviewVerdictBadge verdict={latestTask.verdict} />
-                                        )}
-                                        <span className="text-2xs text-muted-foreground">
+                                        <span className="hidden @md/pr-review-item:contents">
+                                          {isPrReviewStageActive(latestTask.stage) ? (
+                                            <PrReviewStageBadge stage={latestTask.stage} />
+                                          ) : (
+                                            <PrReviewVerdictBadge verdict={latestTask.verdict} />
+                                          )}
+                                        </span>
+                                        <span className="text-2xs whitespace-nowrap text-muted-foreground">
                                           <T>Report</T>
                                         </span>
                                       </button>
@@ -801,7 +810,9 @@ export function PrReviewWorkstationPage() {
                                 }
                               >
                                 <ZapIcon className="size-3 text-warning" />
-                                <T>Agent Review</T>
+                                <span className="sr-only @md/pr-review-row:not-sr-only">
+                                  <T>Agent Review</T>
+                                </span>
                               </Button>
                               <Button
                                 size="xs"
@@ -814,7 +825,9 @@ export function PrReviewWorkstationPage() {
                                 }
                               >
                                 <ShieldCheckIcon className="size-3 text-primary" />
-                                <T>Fusion Review</T>
+                                <span className="sr-only @md/pr-review-row:not-sr-only">
+                                  <T>Fusion Review</T>
+                                </span>
                               </Button>
                             </div>
                           </div>
