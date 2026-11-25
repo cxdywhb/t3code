@@ -765,6 +765,12 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       });
       expect((yield* Effect.result(service.analyzeIssues(repairInput)))._tag).toBe("Failure");
       const reviewed = yield* whenSettled(repair.id);
+      const repairPrompt = startedMessages.find(
+        (message) => message.context?.issueAutomation?.mode === "repair",
+      )?.text;
+      expect(repairPrompt).toContain("New diagnosis");
+      expect(repairPrompt).not.toContain("请先定位根本原因");
+      expect(repairPrompt).not.toContain("## 问题根因分析");
       expect(reviewed.tasks.find((task) => task.id === repair.id)).toMatchObject({
         stage: "needs_human",
         primaryThreadId: repairThreadId,

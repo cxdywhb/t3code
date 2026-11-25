@@ -90,6 +90,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { buildZenTaoBugWebUrl } from "./connectors/zentao/ZenTaoClient.ts";
 import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
 import * as IssueAutomationRepository from "./IssueAutomationRepository.ts";
+import { buildManualRepairPrompt } from "./ManualRepairPrompt.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
 import type {
   IssuePlatformPlugin,
@@ -135,7 +136,6 @@ function buildDiagnosisPrompt(input: {
   readonly referenceProjects: ReadonlyArray<OrchestrationProjectShell>;
   readonly downloadedImagePaths: ReadonlyArray<string>;
   readonly customInstructions: string | null;
-  readonly previousDiagnosis?: string | undefined;
 }): string {
   const modeGuidance =
     input.actionMode === "diagnose_only"
@@ -149,9 +149,6 @@ function buildDiagnosisPrompt(input: {
           "- 当前会话已运行在独立的 Git Worktree 隔离分支中，可安全修改源码；",
           "- 请先定位根本原因，实施最小且稳健的代码修复，并在终端执行相关的类型检查/构建/单元测试验证修复有效；",
           "- 不要执行 `git push` 或合并主分支，保持修改清晰可审阅。",
-          ...(input.previousDiagnosis
-            ? ["- 参考已有诊断结论并核对当前代码。请只在本地修复，不要操作禅道或发送外部通知。"]
-            : []),
         ].join("\n");
 
   const siblingLines =
@@ -206,9 +203,6 @@ function buildDiagnosisPrompt(input: {
     "",
     "## 4. 历史处理动态与备注",
     recentComments,
-    ...(input.previousDiagnosis
-      ? ["", "### 已完成的诊断报告（供参考）", input.previousDiagnosis]
-      : []),
     "",
     "## 5. 执行要求",
     modeGuidance,
@@ -216,9 +210,7 @@ function buildDiagnosisPrompt(input: {
       ? ["", "### 团队附加规范要求", input.customInstructions.trim()]
       : []),
     "",
-    input.previousDiagnosis
-      ? "## 6. 最终输出报告格式（供用户审查修复）"
-      : "## 6. 最终输出报告格式（必须严格输出以下结构化章节，系统将自动提取回写至禅道备注）",
+    "## 6. 最终输出报告格式（必须严格输出以下结构化章节，系统将自动提取回写至禅道备注）",
     "请在完成全部分析（及修复验证）后的最后一条回复中，输出清晰的中文结构化报告：",
     "1. `## 问题根因分析`：说明导致该问题的准确代码位置（文件路径 + 函数/行号）与触发机理；",
     "2. `## 影响范围评估`：说明是否影响其他模块或上下游仓库；",
@@ -716,7 +708,9 @@ const make = Effect.gen(function* () {
             { stage: "enriching", lastError: null },
             {
               stage: "enriching",
-              message: `正在从平台拉取 ${initialTask.displayKey} 完整详情与报错截图...`,
+              message: repair
+                ? `正在刷新 ${initialTask.displayKey} 的缺陷信息，准备沿用已有诊断...`
+                : `正在从平台拉取 ${initialTask.displayKey} 完整详情与报错截图...`,
             },
           );
           if (current.stage === "cancelling" || isTerminalStage(current.stage)) return current;
@@ -740,12 +734,9 @@ const make = Effect.gen(function* () {
             assignee: detail.assignee,
             remoteUpdatedMarker: detail.updatedAt,
           };
-          const downloadedImages = yield* downloadIssueImages(
-            plugin,
-            credentials,
-            current.id,
-            detail.imageUrls,
-          );
+          const downloadedImages = repair
+            ? []
+            : yield* downloadIssueImages(plugin, credentials, current.id, detail.imageUrls);
 
           // Step 2: Multi-Repository Routing
           current = yield* updateTaskState(
@@ -754,8 +745,9 @@ const make = Effect.gen(function* () {
             {
               stage: "routing",
               ...(models.triageModel ? { modelLabel: formatModelLabel(models.triageModel) } : {}),
-              message:
-                downloadedImages.length > 0
+              message: repair
+                ? "已刷新缺陷信息，继续使用原诊断的代码库"
+                : downloadedImages.length > 0
                   ? `已解析详情并下载 ${String(downloadedImages.length)} 张内网截图，正在执行多代码库定位...`
                   : "已拉取完整重现步骤与历史记录，正在匹配目标本地代码库...",
             },
@@ -835,20 +827,28 @@ const make = Effect.gen(function* () {
             {
               stage: "diagnosing",
               modelLabel: chosenModelLabel,
-              message: `${route.matchedReason} -> [${targetProject.title}]，已调度模型 ${chosenModelLabel} 开始深度分析${policy.actionMode === "diagnose_only" ? "" : `（隔离分支 ${branchSlug}）`}`,
+              message: repair
+                ? `已调度模型 ${chosenModelLabel} 在隔离分支 ${branchSlug} 基于已有诊断开始修复`
+                : `${route.matchedReason} -> [${targetProject.title}]，已调度模型 ${chosenModelLabel} 开始深度分析${policy.actionMode === "diagnose_only" ? "" : `（隔离分支 ${branchSlug}）`}`,
             },
           );
           if (current.stage === "cancelling" || isTerminalStage(current.stage)) return current;
 
-          const prompt = buildDiagnosisPrompt({
-            detail,
-            actionMode: policy.actionMode,
-            targetProject,
-            referenceProjects,
-            downloadedImagePaths: downloadedImages,
-            customInstructions: policy.customPromptInstructions,
-            previousDiagnosis: repair?.diagnosisReport,
-          });
+          const prompt = repair
+            ? buildManualRepairPrompt({
+                detail,
+                diagnosisReport: repair.diagnosisReport,
+                referenceProjects,
+                customInstructions: policy.customPromptInstructions,
+              })
+            : buildDiagnosisPrompt({
+                detail,
+                actionMode: policy.actionMode,
+                targetProject,
+                referenceProjects,
+                downloadedImagePaths: downloadedImages,
+                customInstructions: policy.customPromptInstructions,
+              });
           const summary = {
             mode: policy.actionMode === "diagnose_only" ? "diagnose" : "repair",
             scopeName: detail.scopeName,
@@ -924,7 +924,7 @@ const make = Effect.gen(function* () {
             return yield* updateTaskState(
               current,
               { stage: "failed", lastError: errMsg },
-              { stage: "failed", message: `模型诊断执行失败: ${errMsg}` },
+              { stage: "failed", message: `模型${repair ? "修复" : "诊断"}执行失败: ${errMsg}` },
             );
           }
 
@@ -962,7 +962,9 @@ const make = Effect.gen(function* () {
             {
               stage: "diagnosing",
               modelLabel: current.assignedModelLabel,
-              message: "主力模型已完成根因定位与验证，已生成结构化诊断报告",
+              message: repair
+                ? "已生成基于原诊断的修复报告"
+                : "主力模型已完成根因定位与验证，已生成结构化诊断报告",
             },
           );
 
