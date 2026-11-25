@@ -5,6 +5,7 @@ import type {
   IssueAutomationProfile,
   IssueAutomationRemoteIssue,
   IssueAutomationRemoteIssueDetail,
+  IssueAutomationSyncRepairAction,
   IssueAutomationTask,
   ModelSelection,
   ThreadId,
@@ -64,6 +65,7 @@ import {
   SELECTOR_SCROLL_LIST_STYLE,
   type SelectableProjectOption,
 } from "./IssueAutomationConfigModals";
+import { IssueAutomationRepairSyncDialog } from "./IssueAutomationRepairSyncDialog";
 import {
   cleanIssueText,
   formatIssueNumber,
@@ -79,6 +81,7 @@ import {
 export type InspectorSubTab = "detail" | "trace";
 
 export type ManualWriteBackPayload =
+  | IssueAutomationSyncRepairAction
   | { kind: "comment"; issueKey: string; comment: string; taskId?: IssueAutomationTask["id"] }
   | { kind: "confirm"; issueKey: string; comment?: string; taskId?: IssueAutomationTask["id"] }
   | {
@@ -166,6 +169,9 @@ export function IssueAutomationInspectorContent({
   onAdhocModeChange,
   dispatching,
   onDispatchIssue,
+  onStartRepair,
+  onConfirmRepair,
+  canWriteBack,
   writingBack,
   onManualWriteBack,
   onCancelTask,
@@ -192,6 +198,9 @@ export function IssueAutomationInspectorContent({
   readonly onAdhocModeChange: (next: IssueAutomationActionMode) => void;
   readonly dispatching: boolean;
   readonly onDispatchIssue: (issueKey: string) => void;
+  readonly onStartRepair?: (() => void) | undefined;
+  readonly onConfirmRepair?: ((taskId: IssueAutomationTask["id"]) => void) | undefined;
+  readonly canWriteBack: boolean;
   readonly writingBack: boolean;
   readonly onManualWriteBack: (payload: ManualWriteBackPayload) => Promise<boolean>;
   readonly onCancelTask: (taskId: IssueAutomationTask["id"]) => void;
@@ -432,7 +441,7 @@ export function IssueAutomationInspectorContent({
             </Toggle>
           </ToggleGroup>
 
-          <StageBadge stage={activeTask.stage} size="default" />
+          <StageBadge stage={activeTask.stage} size="default" task={activeTask} />
         </div>
       ) : null}
 
@@ -827,9 +836,124 @@ export function IssueAutomationInspectorContent({
             ) : null}
           </div>
 
+          {activeTask.diagnosisReport || onStartRepair ? (
+            <PullRequestSection
+              key={`report:${activeTask.id}`}
+              title={
+                activeTask.repairOfTaskId !== undefined
+                  ? gt("Repair report")
+                  : activeTask.actionMode === "diagnose_only"
+                    ? gt("Diagnosis report")
+                    : gt("Root-cause analysis & solution report")
+              }
+              keepMounted
+              actions={
+                onStartRepair ? (
+                  <Button size="xs" disabled={dispatching} onClick={onStartRepair}>
+                    {activeTask.repairOfTaskId !== undefined ? (
+                      <T>Retry repair</T>
+                    ) : (
+                      <T>Start repair</T>
+                    )}
+                  </Button>
+                ) : activeTask.repairOfTaskId !== undefined ? (
+                  activeTask.stage === "needs_human" && onConfirmRepair ? (
+                    <Button
+                      size="xs"
+                      disabled={dispatching}
+                      onClick={() => onConfirmRepair(activeTask.id)}
+                    >
+                      <T>Confirm repair</T>
+                    </Button>
+                  ) : activeTask.repairConfirmedAt && canWriteBack && activeTask.diagnosisReport ? (
+                    <IssueAutomationRepairSyncDialog
+                      task={activeTask}
+                      report={activeTask.diagnosisReport}
+                      detail={issueDetail}
+                      environmentId={environmentId}
+                      cwd={
+                        projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ??
+                        cwd
+                      }
+                      writingBack={writingBack}
+                      onSync={onManualWriteBack}
+                    />
+                  ) : null
+                ) : activeTask.actionMode !== "diagnose_only" ? (
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={writingBack}
+                      onClick={() =>
+                        void onManualWriteBack({
+                          kind: "comment",
+                          issueKey: activeTask.issueKey,
+                          comment: activeTask.diagnosisReport!,
+                          taskId: activeTask.id,
+                        })
+                      }
+                    >
+                      <SendIcon className="size-3" />
+                      {activeTask.commentSyncedAt ? <T>Re-sync comment</T> : <T>Sync to ZenTao</T>}
+                    </Button>
+                    <Button
+                      size="xs"
+                      disabled={writingBack}
+                      onClick={() =>
+                        void onManualWriteBack({
+                          kind: "resolve",
+                          issueKey: activeTask.issueKey,
+                          resolution: "fixed",
+                          resolvedBuild: "trunk",
+                          comment: activeTask.diagnosisReport!,
+                          taskId: activeTask.id,
+                        })
+                      }
+                    >
+                      <CheckCircle2Icon className="size-3" />
+                      <T>Sync & mark Resolved</T>
+                    </Button>
+                  </div>
+                ) : null
+              }
+            >
+              {activeTask.diagnosisReport ? (
+                <div className="rounded-xl border border-border/60 bg-card/30 p-4">
+                  <PullRequestMarkdown
+                    text={activeTask.diagnosisReport}
+                    cwd={
+                      projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ??
+                      cwd
+                    }
+                    environmentId={environmentId}
+                  />
+                </div>
+              ) : null}
+            </PullRequestSection>
+          ) : null}
+
+          {activeTask.reviewReport ? (
+            <PullRequestSection
+              key={`review:${activeTask.id}`}
+              title={gt("Heterogeneous model cross-review")}
+            >
+              <div className="rounded-xl border border-border/60 bg-card/30 p-4">
+                <PullRequestMarkdown
+                  text={activeTask.reviewReport}
+                  cwd={
+                    projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ?? cwd
+                  }
+                  environmentId={environmentId}
+                />
+              </div>
+            </PullRequestSection>
+          ) : null}
+
           <PullRequestSection
             key={`timeline:${activeTask.id}`}
             title={gt("Execution timeline")}
+            defaultOpen={isStageActive(activeTask.stage) || !activeTask.diagnosisReport}
             keepMounted
           >
             <div className="relative ml-2 space-y-3 border-l border-border/70 pl-4">
@@ -857,78 +981,6 @@ export function IssueAutomationInspectorContent({
               ))}
             </div>
           </PullRequestSection>
-
-          {activeTask.diagnosisReport ? (
-            <PullRequestSection
-              key={`report:${activeTask.id}`}
-              title={gt("Root-cause analysis & solution report")}
-              keepMounted
-              actions={
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={writingBack}
-                    onClick={() =>
-                      void onManualWriteBack({
-                        kind: "comment",
-                        issueKey: activeTask.issueKey,
-                        comment: activeTask.diagnosisReport!,
-                        taskId: activeTask.id,
-                      })
-                    }
-                  >
-                    <SendIcon className="size-3" />
-                    {activeTask.commentSyncedAt ? <T>Re-sync comment</T> : <T>Sync to ZenTao</T>}
-                  </Button>
-                  <Button
-                    size="xs"
-                    disabled={writingBack}
-                    onClick={() =>
-                      void onManualWriteBack({
-                        kind: "resolve",
-                        issueKey: activeTask.issueKey,
-                        resolution: "fixed",
-                        resolvedBuild: "trunk",
-                        comment: activeTask.diagnosisReport!,
-                        taskId: activeTask.id,
-                      })
-                    }
-                  >
-                    <CheckCircle2Icon className="size-3" />
-                    <T>Sync & mark Resolved</T>
-                  </Button>
-                </div>
-              }
-            >
-              <div className="rounded-xl border border-border/60 bg-card/30 p-4">
-                <PullRequestMarkdown
-                  text={activeTask.diagnosisReport}
-                  cwd={
-                    projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ?? cwd
-                  }
-                  environmentId={environmentId}
-                />
-              </div>
-            </PullRequestSection>
-          ) : null}
-
-          {activeTask.reviewReport ? (
-            <PullRequestSection
-              key={`review:${activeTask.id}`}
-              title={gt("Heterogeneous model cross-review")}
-            >
-              <div className="rounded-xl border border-border/60 bg-card/30 p-4">
-                <PullRequestMarkdown
-                  text={activeTask.reviewReport}
-                  cwd={
-                    projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ?? cwd
-                  }
-                  environmentId={environmentId}
-                />
-              </div>
-            </PullRequestSection>
-          ) : null}
         </div>
       ) : null}
     </div>

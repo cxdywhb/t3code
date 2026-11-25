@@ -607,14 +607,20 @@ export function installFakeEnvironment(
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    readonly capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
   },
 ): Disposable {
   threads = fixtures;
+  const fixtureConfig = makeServerConfig(
+    options?.providers ?? [CODEX_PROVIDER],
+    fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+  );
   baseServerConfig = {
-    ...makeServerConfig(
-      options?.providers ?? [CODEX_PROVIDER],
-      fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
-    ),
+    ...fixtureConfig,
+    environment: {
+      ...fixtureConfig.environment,
+      capabilities: { ...fixtureConfig.environment.capabilities, ...options?.capabilities },
+    },
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
   dispatched = [];

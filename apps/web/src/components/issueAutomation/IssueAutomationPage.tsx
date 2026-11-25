@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -191,6 +192,16 @@ export function IssueAutomationPage() {
   const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
   const supportsRuleScan = capabilities?.issueAutomationRuleScan === true;
   const supportsRetry = capabilities?.issueAutomationRetry === true;
+  const supportsRepair = capabilities?.issueAutomationRepair === true;
+  const canStartRepair = useAtomValue(
+    issueAutomationEnvironment.analyzeIssues.permissionAtom(environmentId),
+  );
+  const canConfirmRepair = useAtomValue(
+    issueAutomationEnvironment.confirmRepair.permissionAtom(environmentId),
+  );
+  const canWriteBack = useAtomValue(
+    issueAutomationEnvironment.writeBack.permissionAtom(environmentId),
+  );
   const { snapshot } = useIssueAutomationLiveState(environmentId);
   const taskGroups = groupIssueAutomationTasks(snapshot.tasks);
 
@@ -436,17 +447,29 @@ export function IssueAutomationPage() {
       : null,
   );
 
+  const activeTask: IssueAutomationTask | null =
+    selectedTaskId !== null
+      ? (snapshot.tasks.find((t) => t.id === selectedTaskId) ?? null)
+      : selectedIssueKey !== null
+        ? (taskGroups.find(
+            ({ latest }) =>
+              latest.issueKey === selectedIssueKey && latest.connectorId === activeConnector?.id,
+          )?.latest ?? null)
+        : null;
+  const inspectingRun = inspectorTab === "trace" && activeTask !== null;
+  const detailConnectorId = inspectingRun ? activeTask.connectorId : activeConnector?.id;
+  const detailScopeId = inspectingRun ? activeTask.scopeId : effectiveScopeId;
   const remoteDetailQuery = useEnvironmentQuery(
     environmentId !== null &&
-      activeConnector !== null &&
-      effectiveScopeId.length > 0 &&
+      detailConnectorId !== undefined &&
+      detailScopeId.length > 0 &&
       selectedIssueKey !== null &&
       inspectorOpen
       ? issueAutomationEnvironment.remoteIssueDetail({
           environmentId,
           input: {
-            connectorId: activeConnector.id,
-            scopeId: effectiveScopeId,
+            connectorId: detailConnectorId,
+            scopeId: detailScopeId,
             issueKey: selectedIssueKey,
           },
         })
@@ -457,6 +480,9 @@ export function IssueAutomationPage() {
     reportFailure: false,
   });
   const cancelTaskCmd = useAtomCommand(issueAutomationEnvironment.cancelTask, {
+    reportFailure: false,
+  });
+  const confirmRepairCmd = useAtomCommand(issueAutomationEnvironment.confirmRepair, {
     reportFailure: false,
   });
   const writeBackCmd = useAtomCommand(issueAutomationEnvironment.writeBack, {
@@ -500,16 +526,21 @@ export function IssueAutomationPage() {
     selectedIssueKey !== null ? (issues.find((i) => i.key === selectedIssueKey) ?? null) : null;
   const selectedDetail = remoteDetailQuery.data;
 
-  const activeTask: IssueAutomationTask | null =
-    selectedTaskId !== null
-      ? (snapshot.tasks.find((t) => t.id === selectedTaskId) ?? null)
-      : selectedIssueKey !== null
-        ? (snapshot.tasks.find(
-            (t) =>
-              t.issueKey === selectedIssueKey &&
-              (activeConnector === null || t.connectorId === activeConnector.id),
-          ) ?? null)
-        : null;
+  const latestTask =
+    activeTask &&
+    taskGroups.find(
+      ({ latest }) =>
+        latest.connectorId === activeTask.connectorId && latest.issueKey === activeTask.issueKey,
+    )?.latest;
+  const canRetryRepair =
+    activeTask?.repairOfTaskId !== undefined &&
+    (activeTask.stage === "cancelled" || activeTask.stage === "failed");
+  const repairSource =
+    activeTask?.id === latestTask?.id
+      ? canRetryRepair
+        ? snapshot.tasks.find((task) => task.id === activeTask?.repairOfTaskId)
+        : activeTask
+      : null;
 
   const hasSelection = selectedIssueKey !== null || activeTask !== null;
   const inspectorActive =
@@ -689,8 +720,13 @@ export function IssueAutomationPage() {
     }
   };
 
-  const handleRetryTask = async (task: IssueAutomationTask) => {
-    if (!environmentId || dispatching || !supportsRetry) return;
+  const handleRunFromTask = async (task: IssueAutomationTask, kind: "retry" | "repair") => {
+    if (
+      !environmentId ||
+      dispatching ||
+      (kind === "repair" ? !supportsRepair || !canStartRepair : !supportsRetry)
+    )
+      return;
     setDispatching(true);
     const result = await analyzeIssuesCmd({
       environmentId,
@@ -700,7 +736,7 @@ export function IssueAutomationPage() {
         scopeName: task.scopeName,
         issueKeys: [task.issueKey],
         ...(task.profileId ? { profileId: task.profileId } : {}),
-        retryTaskId: task.id,
+        ...(kind === "repair" ? { repairFromTaskId: task.id } : { retryTaskId: task.id }),
       },
     });
     setDispatching(false);
@@ -708,13 +744,28 @@ export function IssueAutomationPage() {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
         type: "error",
-        title: gt("Failed to start analysis"),
+        title: kind === "repair" ? gt("Failed to start repair") : gt("Failed to start analysis"),
         description: error instanceof Error ? error.message : gt("Dispatch failed."),
       });
       return;
     }
     const attempt = result.value.tasks[0];
     if (attempt) selectRun(attempt);
+  };
+
+  const handleConfirmRepair = async (taskId: IssueAutomationTask["id"]) => {
+    if (!environmentId || dispatching || !canConfirmRepair) return;
+    setDispatching(true);
+    const result = await confirmRepairCmd({ environmentId, input: { taskId } });
+    setDispatching(false);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: gt("Could not confirm repair"),
+        ...(error instanceof Error ? { description: error.message } : {}),
+      });
+    }
   };
 
   const handleCancelTask = async (taskId: IssueAutomationTask["id"]) => {
@@ -731,12 +782,12 @@ export function IssueAutomationPage() {
   };
 
   const handleManualWriteBack = async (action: ManualWriteBackPayload): Promise<boolean> => {
-    if (!environmentId || !activeConnector) return false;
+    if (!environmentId || !detailConnectorId || writingBack) return false;
     setWritingBack(true);
     const res = await writeBackCmd({
       environmentId,
       input: {
-        connectorId: activeConnector.id,
+        connectorId: detailConnectorId,
         action,
       },
     });
@@ -829,6 +880,18 @@ export function IssueAutomationPage() {
         onAdhocModeChange={handleSelectActionMode}
         dispatching={dispatching}
         onDispatchIssue={(key) => void handleDispatchIssues([key])}
+        onStartRepair={
+          supportsRepair &&
+          canStartRepair &&
+          repairSource?.actionMode === "diagnose_only" &&
+          repairSource.stage === "completed" &&
+          repairSource.diagnosisReport &&
+          repairSource.targetProjectId
+            ? () => void handleRunFromTask(repairSource, "repair")
+            : undefined
+        }
+        onConfirmRepair={canConfirmRepair ? (id) => void handleConfirmRepair(id) : undefined}
+        canWriteBack={canWriteBack}
         writingBack={writingBack}
         onManualWriteBack={handleManualWriteBack}
         onCancelTask={(taskId) => void handleCancelTask(taskId)}
@@ -1549,7 +1612,7 @@ export function IssueAutomationPage() {
                                 signals={
                                   <>
                                     <SeverityIndicator severity={task.severity} />
-                                    <StageBadge stage={task.stage} />
+                                    <StageBadge stage={task.stage} task={task} />
                                     {task.commentSyncedAt ? (
                                       <Badge variant="outline" size="sm">
                                         <T>Synced</T>
@@ -1598,7 +1661,21 @@ export function IssueAutomationPage() {
                                 <RelativeTime timestamp={task.updatedAt} />
                               </span>
                               <div className="flex w-22 shrink-0 items-center justify-end">
-                                {canCancel && environmentId ? (
+                                {task.repairOfTaskId !== undefined ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => selectRun(task)}
+                                  >
+                                    {task.stage === "needs_human" ? (
+                                      <T>Review repair</T>
+                                    ) : isStageActive(task.stage) ? (
+                                      <T>View progress</T>
+                                    ) : (
+                                      <T>View repair</T>
+                                    )}
+                                  </Button>
+                                ) : canCancel && environmentId ? (
                                   <Button
                                     size="xs"
                                     variant="ghost-destructive"
@@ -1620,10 +1697,20 @@ export function IssueAutomationPage() {
                                     variant="outline"
                                     className="shrink-0"
                                     disabled={dispatching}
-                                    onClick={() => void handleRetryTask(task)}
+                                    onClick={() => void handleRunFromTask(task, "retry")}
                                   >
                                     <PlayIcon className="size-3.5" />
                                     <T>Run diagnosis again</T>
+                                  </Button>
+                                ) : task.stage === "completed" &&
+                                  task.actionMode === "diagnose_only" &&
+                                  task.diagnosisReport ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => selectRun(task)}
+                                  >
+                                    <T>View diagnosis</T>
                                   </Button>
                                 ) : task.primaryThreadId ? (
                                   <Button
@@ -1650,7 +1737,7 @@ export function IssueAutomationPage() {
                                     <span className="text-muted-foreground">
                                       {gt("Run {number}", { number: attempts.length - index })}
                                     </span>
-                                    <StageBadge stage={attempt.stage} />
+                                    <StageBadge stage={attempt.stage} task={attempt} />
                                     <RelativeTime timestamp={attempt.createdAt} />
                                     <Button
                                       size="xs"

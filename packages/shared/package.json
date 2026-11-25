@@ -19,6 +19,10 @@
       "types": "./src/issueAutomationTitle.ts",
       "import": "./src/issueAutomationTitle.ts"
     },
+    "./issueAutomationWriteBack": {
+      "types": "./src/issueAutomationWriteBack.ts",
+      "import": "./src/issueAutomationWriteBack.ts"
+    },
     "./legacyIssueAutomationSummary": {
       "types": "./src/legacyIssueAutomationSummary.ts",
       "import": "./src/legacyIssueAutomationSummary.ts"

@@ -5,6 +5,7 @@ import {
   IssueAutomationTaskId,
   ProviderInstanceId,
   WS_METHODS,
+  type IssueAutomationAnalyzeIssuesInput,
   type IssueAutomationListRemoteIssuesInput,
   type IssueAutomationRemoteIssue,
   type IssueAutomationStateSnapshot,
@@ -39,8 +40,10 @@ vi.mock("../../../../../packages/client-runtime/src/connection/driver.ts", async
   return { ...actual, layer: Layer.succeed(actual.ConnectionDriver, fakeDriver) };
 });
 
-it("scans a paused rule on a server without the scan RPC and only lists matching issues", async () => {
-  using _environment = installFakeEnvironment([]);
+it("scans without dispatching and opens diagnosis, repair and ZenTao sync from the task report", async () => {
+  using _environment = installFakeEnvironment([], {
+    capabilities: { issueAutomationRepair: true },
+  });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
     onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
@@ -152,10 +155,24 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
     ],
     activeRunCount: 0,
   };
-  using _state = answerRpc(WS_METHODS.issueAutomationGetState, () => Effect.succeed(snapshot));
-  using _subscribe = answerRpc(WS_METHODS.issueAutomationSubscribe, () =>
-    Stream.concat(Stream.make(snapshot), Stream.never),
-  );
+  const diagnosis = snapshot.tasks[1]!;
+  const repair = {
+    ...diagnosis,
+    id: IssueAutomationTaskId.make("attempt-3"),
+    repairOfTaskId: diagnosis.id,
+    actionMode: "fix_worktree_review",
+    stage: "needs_human",
+    createdAt: "2026-11-24T01:00:00.000Z",
+    diagnosisReport: "Applied and tested the repair",
+    worktreeBranch: "fix/zentao-312",
+  } satisfies IssueAutomationTask;
+  let current = snapshot;
+  const publish = (task: IssueAutomationTask) =>
+    Effect.sync(() => {
+      current = { ...snapshot, tasks: [task, ...snapshot.tasks] };
+    });
+  using _state = answerRpc(WS_METHODS.issueAutomationGetState, () => Effect.sync(() => current));
+  using _subscribe = answerRpc(WS_METHODS.issueAutomationSubscribe, () => Stream.never);
   const matchingIssue: IssueAutomationRemoteIssue = {
     connectorId,
     platform,
@@ -179,6 +196,18 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
     latestTaskId: null,
     latestStage: null,
   };
+  using _detail = answerRpc(WS_METHODS.issueAutomationGetRemoteIssueDetail, () =>
+    Effect.succeed({
+      ...matchingIssue,
+      stepsHtml: "",
+      stepsMarkdown: "",
+      imageUrls: [],
+      openedBuild: "6",
+      availableBuilds: [{ id: "7", name: "v1.2.0" }],
+      availableUsers: [],
+      comments: [],
+    }),
+  );
   const scans: IssueAutomationListRemoteIssuesInput[] = [];
   using _list = answerRpc(
     WS_METHODS.issueAutomationListRemoteIssues,
@@ -202,9 +231,19 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
     Effect.die("Unknown request tag: issueAutomation.scanProfileIssues"),
   );
   using _scan = answerRpc(WS_METHODS.issueAutomationScanProfileIssues, unsupportedScan);
-  const dispatch = vi.fn(() => Effect.die("The scan must not dispatch a task"));
+  const dispatch = vi.fn((input: IssueAutomationAnalyzeIssuesInput) =>
+    input.repairFromTaskId === diagnosis.id
+      ? publish(repair).pipe(Effect.as({ tasks: [repair] }))
+      : Effect.die("Expected a repair launched from the diagnosis report"),
+  );
   using _dispatch = answerRpc(WS_METHODS.issueAutomationAnalyzeIssues, dispatch);
-  using _legacyPoll = answerRpc(WS_METHODS.issueAutomationTriggerPoll, dispatch);
+  const legacyPoll = vi.fn(() => Effect.die("The scan must not trigger polling"));
+  using _legacyPoll = answerRpc(WS_METHODS.issueAutomationTriggerPoll, legacyPoll);
+  using _confirm = answerRpc(WS_METHODS.issueAutomationConfirmRepair, () =>
+    publish({ ...repair, stage: "completed", repairConfirmedAt: updatedAt }).pipe(Effect.asVoid),
+  );
+  const writeBack = vi.fn(() => Effect.succeed({ ok: true }));
+  using _writeBack = answerRpc(WS_METHODS.issueAutomationWriteBack, writeBack);
 
   await page.viewport(1200, 800);
   const router = getRouter(createMemoryHistory({ initialEntries: ["/issue-automation"] }));
@@ -230,6 +269,7 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
   };
   expect(scans).toEqual([scanInput]);
   expect(dispatch).not.toHaveBeenCalled();
+  expect(legacyPoll).not.toHaveBeenCalled();
   await page.getByRole("button", { name: "Clear rule filter" }).click();
   await expect.element(page.getByText("Pairing screen stays blank")).not.toBeInTheDocument();
 
@@ -256,4 +296,35 @@ it("scans a paused rule on a server without the scan RPC and only lists matching
   await expect.element(page.getByText("Cancelled", { exact: true })).toBeVisible();
   await expect.element(page.getByRole("button", { name: "View result" })).toBeVisible();
   await expect.element(page.getByRole("button", { name: "View logs" })).toBeVisible();
+
+  await expect.element(page.getByRole("button", { name: "Start repair" })).not.toBeInTheDocument();
+  await page.getByRole("button", { name: "View diagnosis" }).click();
+  await page.getByRole("button", { name: "Start repair" }).click();
+  await expect.element(page.getByRole("button", { name: "Review repair" })).toBeVisible();
+  await expect.element(page.getByText("Applied and tested the repair")).toBeVisible();
+  await expect
+    .element(page.getByRole("button", { name: "Sync repair to ZenTao" }))
+    .not.toBeInTheDocument();
+  await page.getByRole("button", { name: "Confirm repair" }).click();
+  expect(writeBack).not.toHaveBeenCalled();
+  await page.getByRole("button", { name: "Sync repair to ZenTao" }).click();
+  const dialog = page.getByRole("dialog", { name: "Sync repair to ZenTao" });
+  const comment = dialog.getByRole("checkbox", { name: "Write repair comment" });
+  const resolved = dialog.getByRole("checkbox", { name: "Mark as resolved" });
+  const submit = dialog.getByRole("button", { name: "Confirm sync" });
+  await expect.element(comment).not.toBeChecked();
+  await expect.element(resolved).not.toBeChecked();
+  await expect.element(submit).toBeDisabled();
+  await resolved.click();
+  await expect.element(submit).toBeDisabled();
+  await dialog.getByRole("combobox", { name: "Resolved build" }).click();
+  await page.getByRole("option", { name: "v1.2.0" }).click();
+  await comment.click();
+  await expect.element(dialog.getByText("Comment preview")).toBeVisible();
+  await submit.click();
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(writeBack).toHaveBeenCalledExactlyOnceWith({
+    connectorId,
+    action: { kind: "sync_repair", taskId: repair.id, writeComment: true, resolvedBuild: "7" },
+  });
 });

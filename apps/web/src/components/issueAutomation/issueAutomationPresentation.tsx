@@ -1,4 +1,8 @@
-import type { IssueAutomationActionMode, IssueAutomationStage } from "@t3tools/contracts";
+import type {
+  IssueAutomationActionMode,
+  IssueAutomationStage,
+  IssueAutomationTask,
+} from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
 import {
   CheckCircle2Icon,
@@ -141,10 +145,19 @@ export function TaskStageGlyph({
 export function StageBadge({
   stage,
   size = "sm",
+  task,
 }: {
   readonly stage: IssueAutomationStage;
   readonly size?: "sm" | "default";
+  readonly task?: IssueAutomationTask;
 }) {
+  if (task?.repairOfTaskId !== undefined && isStageActive(stage) && stage !== "cancelling") {
+    return (
+      <Badge variant="info" size={size}>
+        <T>Repair in progress</T>
+      </Badge>
+    );
+  }
   switch (stage) {
     case "queued":
       return (
@@ -190,13 +203,19 @@ export function StageBadge({
     case "completed":
       return (
         <Badge variant="success" size={size}>
-          <T>Completed</T>
+          {task?.repairConfirmedAt ? (
+            <T>Repair confirmed</T>
+          ) : task?.actionMode === "diagnose_only" ? (
+            <T>Diagnosis complete</T>
+          ) : (
+            <T>Completed</T>
+          )}
         </Badge>
       );
     case "needs_human":
       return (
         <Badge variant="warning" size={size}>
-          <T>Needs review</T>
+          {task?.repairOfTaskId !== undefined ? <T>Repair awaiting review</T> : <T>Needs review</T>}
         </Badge>
       );
     case "failed":

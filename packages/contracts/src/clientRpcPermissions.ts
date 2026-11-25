@@ -60,6 +60,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.issueAutomationTriggerPoll]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationAnalyzeIssues]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationCancelTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationConfirmRepair]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationWriteBack]: AuthSourceControlWriteScope,
   [WS_METHODS.prReviewSavePreset]: AuthOrchestrationOperateScope,
   [WS_METHODS.prReviewDeletePreset]: AuthOrchestrationOperateScope,

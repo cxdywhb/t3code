@@ -170,6 +170,13 @@ function createIssueAutomationAtoms() {
       onSettled: (target, registry) =>
         Effect.sync(() => registry.refresh(refreshState(target.environmentId))),
     }),
+    confirmRepair: createEnvironmentRpcCommand(connectionAtomRuntime, {
+      label: "issue-automation:confirm-repair",
+      tag: WS_METHODS.issueAutomationConfirmRepair,
+      scheduler,
+      onSettled: (target, registry) =>
+        Effect.sync(() => registry.refresh(refreshState(target.environmentId))),
+    }),
     writeBack: createEnvironmentRpcCommand(connectionAtomRuntime, {
       label: "issue-automation:write-back",
       tag: WS_METHODS.issueAutomationWriteBack,

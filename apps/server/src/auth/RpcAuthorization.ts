@@ -168,6 +168,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.issueAutomationTriggerPoll]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationAnalyzeIssues]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationCancelTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationConfirmRepair]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationWriteBack]: AuthSourceControlWriteScope,
   [WS_METHODS.prReviewGetState]: AuthOrchestrationReadScope,
   [WS_METHODS.prReviewSubscribe]: AuthOrchestrationReadScope,

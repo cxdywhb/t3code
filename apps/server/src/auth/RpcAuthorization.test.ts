@@ -60,6 +60,18 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("separates confirming a repair in T3 from writing it to ZenTao", () => {
+    for (const method of [
+      WS_METHODS.issueAutomationAnalyzeIssues,
+      WS_METHODS.issueAutomationConfirmRepair,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueAutomationWriteBack)).toBe(
+      AuthSourceControlWriteScope,
+    );
+  });
+
   it("separates passive terminal observation from operations that can change a shell", () => {
     for (const method of [WS_METHODS.terminalObserve, WS_METHODS.subscribeTerminalMetadata]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalReadScope);

@@ -124,6 +124,8 @@ interface TaskRow {
   readonly review_thread_id: string | null;
   readonly primary_run_id: string | null;
   readonly review_run_id: string | null;
+  readonly repair_of_task_id: string | null;
+  readonly repair_confirmed_at: string | null;
   readonly assigned_model_label: string;
   readonly worktree_branch: string | null;
   readonly diagnosis_report: string | null;
@@ -279,6 +281,10 @@ const make = Effect.gen(function* () {
       reviewThreadId: row.review_thread_id === null ? null : ThreadId.make(row.review_thread_id),
       ...(row.primary_run_id === null ? {} : { primaryRunId: RunId.make(row.primary_run_id) }),
       ...(row.review_run_id === null ? {} : { reviewRunId: RunId.make(row.review_run_id) }),
+      ...(row.repair_of_task_id === null
+        ? {}
+        : { repairOfTaskId: IssueAutomationTaskId.make(row.repair_of_task_id) }),
+      ...(row.repair_confirmed_at === null ? {} : { repairConfirmedAt: row.repair_confirmed_at }),
       assignedModelLabel: row.assigned_model_label,
       worktreeBranch: row.worktree_branch,
       diagnosisReport: row.diagnosis_report,
@@ -488,7 +494,8 @@ const make = Effect.gen(function* () {
           action_mode, stage, target_project_id, reference_project_ids_json,
           primary_thread_id, review_thread_id, primary_run_id, review_run_id, assigned_model_label, worktree_branch,
           diagnosis_report, review_report, comment_synced_at, state_synced_at,
-          remote_updated_marker, last_error, steps_json, created_at, updated_at, completed_at
+          remote_updated_marker, last_error, steps_json, created_at, updated_at, completed_at,
+          repair_of_task_id, repair_confirmed_at
         ) VALUES (
           ${task.id}, ${task.profileId}, ${task.connectorId}, ${task.platform},
           ${task.scopeId}, ${task.scopeName}, ${task.issueKey}, ${task.displayKey},
@@ -500,7 +507,8 @@ const make = Effect.gen(function* () {
           ${task.assignedModelLabel}, ${task.worktreeBranch}, ${task.diagnosisReport},
           ${task.reviewReport}, ${task.commentSyncedAt}, ${task.stateSyncedAt},
           ${task.remoteUpdatedMarker}, ${task.lastError}, ${stepsJson},
-          ${task.createdAt}, ${task.updatedAt}, ${task.completedAt}
+          ${task.createdAt}, ${task.updatedAt}, ${task.completedAt},
+          ${task.repairOfTaskId ?? null}, ${task.repairConfirmedAt ?? null}
         )
         ON CONFLICT (task_id) DO UPDATE SET
           profile_id = excluded.profile_id,
@@ -527,6 +535,7 @@ const make = Effect.gen(function* () {
           state_synced_at = excluded.state_synced_at,
           remote_updated_marker = excluded.remote_updated_marker,
           last_error = excluded.last_error,
+          repair_confirmed_at = excluded.repair_confirmed_at,
           steps_json = excluded.steps_json,
           updated_at = excluded.updated_at,
           completed_at = excluded.completed_at

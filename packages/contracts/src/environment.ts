@@ -227,6 +227,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueAutomationFeishuNotifications: Schema.optionalKey(Schema.Boolean),
   issueAutomationRuleScan: Schema.optionalKey(Schema.Boolean),
   issueAutomationRetry: Schema.optionalKey(Schema.Boolean),
+  issueAutomationRepair: Schema.optionalKey(Schema.Boolean),
   /** Serves `prReview.*` multi-model pull request fusion review workstation workflows. */
   prReview: Schema.optionalKey(Schema.Boolean),
 });

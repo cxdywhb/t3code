@@ -2,15 +2,20 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
   EventId,
   IssueAutomationPlatformKind,
   MessageId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   RunId,
   ThreadId,
   type IssueAutomationSaveProfileInput,
   type IssueAutomationTaskId,
+  type IssueAutomationWriteBackAction,
   type OrchestrationProjectShell,
   type OrchestrationV2Run,
 } from "@t3tools/contracts";
@@ -172,7 +177,7 @@ describe("MultiRepoRouter", () => {
   });
 });
 
-it.effect("uses the latest Feishu settings for finished tasks and skips manual cancellations", () =>
+it.effect("handles diagnosis retries, repair review and write-back, and Feishu notifications", () =>
   Effect.gen(function* () {
     const pollStarted = yield* Deferred.make<void>();
     const finishPoll = yield* Deferred.make<void>();
@@ -181,6 +186,7 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
     const stopRequested = yield* Deferred.make<void>();
     const confirmStop = yield* Deferred.make<void>();
     const outbound: Array<{ readonly url: string; readonly body: unknown }> = [];
+    const writeBacks: IssueAutomationWriteBackAction[] = [];
     const startedMessages: ThreadLaunchService.ThreadLaunchInitialMessage[] = [];
     const project: OrchestrationProjectShell = {
       id: ProjectId.make("proj-example"),
@@ -198,6 +204,10 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
     const threadId = ThreadId.make("thread:issue-2849");
     const oldRunId = RunId.make("run:issue-2849:1");
     const newRunId = RunId.make("run:issue-2849:2");
+    const repairThreadId = ThreadId.make("thread:repair-2849");
+    const repairRunId = RunId.make("run:repair-2849");
+    let repairMessageId = MessageId.make("repair-message");
+    let repairBranch = "";
     const at = DateTime.makeUnsafe("2026-11-24T00:00:00Z");
     const instanceId = ProviderInstanceId.make("codex");
     const modelSelection = { instanceId, model: "example" };
@@ -272,6 +282,41 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       messages: [
         ...(runs.length > 1 ? [reply(newRunId, "New diagnosis")] : []),
         reply(oldRunId, "Cancelled diagnosis fragment"),
+      ],
+    });
+    const repairRun = () => ({
+      ...makeRun(repairRunId, repairMessageId, "completed"),
+      threadId: repairThreadId,
+      ordinal: 1,
+    });
+    const repairProjection = () => ({
+      ...baseProjection,
+      thread: {
+        ...baseProjection.thread,
+        id: repairThreadId,
+        worktreePath: "/repos/example-worktree",
+        branch: repairBranch,
+      },
+      runs: [repairRun()],
+      messages: [
+        { ...reply(repairRunId, "Applied and tested the repair"), threadId: repairThreadId },
+      ],
+      checkpoints: [
+        {
+          id: CheckpointId.make("repair-checkpoint"),
+          threadId: repairThreadId,
+          scopeId: CheckpointScopeId.make("repair-scope"),
+          runId: repairRunId,
+          nodeId: NodeId.make("repair-node"),
+          parentCheckpointId: null,
+          ordinalWithinScope: 1,
+          appRunOrdinal: 1,
+          ref: CheckpointRef.make("refs/t3/checkpoint/repair"),
+          status: "ready" as const,
+          files: [],
+          filesTotal: { count: 1, additions: 1, deletions: 0 },
+          capturedAt: at,
+        },
       ],
     });
     const detail: PlatformIssueDetail = {
@@ -349,9 +394,22 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
         issueKey === "2847"
           ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.succeed(
-              issueKey === "2849" ? { ...detail, key: issueKey, displayKey: "#2849" } : detail,
+              issueKey === "2849"
+                ? {
+                    ...detail,
+                    key: issueKey,
+                    displayKey: "#2849",
+                    status: "active",
+                    statusLabel: "激活",
+                    availableBuilds: [{ id: "7", name: "v1.2.0" }],
+                  }
+                : detail,
             ),
-      writeBack: () => Effect.die("Unexpected write-back"),
+      writeBack: ({ action }) =>
+        Effect.sync(() => {
+          writeBacks.push(action);
+          return { ok: true };
+        }),
     };
     const dependencies = Layer.mergeAll(
       IssueAutomationRepository.layer.pipe(Layer.provide(Sqlite.layerMemory)),
@@ -365,13 +423,28 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
         Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
       ),
       Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([project]) }),
-      Layer.mock(GitWorkflow.GitWorkflowService)({}),
+      Layer.mock(GitWorkflow.GitWorkflowService)({ currentBranch: () => Effect.succeed("main") }),
       Layer.mock(ThreadIssueService.ThreadIssueService)({
         link: () => Effect.succeed({ alreadyLinked: false }),
       }),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
         launch: (input) => {
           if (input.initialMessage) startedMessages.push(input.initialMessage);
+          if (input.workspaceStrategy?.type === "worktree") {
+            expect(input.initialMessage?.text).toContain("New diagnosis");
+            expect(input.initialMessage?.context?.issueAutomation?.mode).toBe("repair");
+            expect(input.workspaceStrategy).toMatchObject({
+              baseRef: "main",
+              startFromOrigin: false,
+            });
+            repairMessageId = input.initialMessage!.messageId!;
+            repairBranch = input.workspaceStrategy.branch!;
+            return Effect.succeed({
+              threadId: repairThreadId,
+              projection: repairProjection(),
+              resumed: false,
+            });
+          }
           if (input.initialMessage?.context?.issueAutomation?.issueKey === "#2849") {
             runs.push(makeRun(oldRunId, input.initialMessage.messageId!, "running"));
             return Effect.succeed({ threadId, projection: projection(), resumed: false });
@@ -387,7 +460,8 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
         },
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadProjection: () => Effect.sync(projection),
+        getThreadProjection: (id) =>
+          Effect.sync(id === repairThreadId ? repairProjection : projection),
         interruptThread: (input) =>
           Effect.gen(function* () {
             expect(input).toMatchObject({ threadId, runId: oldRunId });
@@ -400,6 +474,10 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
           }),
         waitForThread: (input) =>
           Effect.gen(function* () {
+            if (input.threadId === repairThreadId) {
+              expect(input.runId).toBe(repairRunId);
+              return { threadId: repairThreadId, run: repairRun(), timedOut: false };
+            }
             expect(input.threadId).toBe(threadId);
             if (input.runId === oldRunId && input.untilDelegatedWorkSettled) {
               yield* Deferred.succeed(runWaiting, undefined);
@@ -664,6 +742,77 @@ it.effect("uses the latest Feishu settings for finished tasks and skips manual c
       expect(
         startedMessages.filter((message) => message.context?.issueAutomation?.issueKey === "#2849"),
       ).toHaveLength(1);
+
+      const repairInput = {
+        connectorId: connector.id,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        issueKeys: ["2849"],
+        repairFromTaskId: restarted.id,
+      };
+      const diagnosticPolicy = { ...input.policy, autoWriteComment: true };
+      yield* service.saveProfile({
+        ...input,
+        id: rule.id,
+        policy: diagnosticPolicy,
+        feishuNotification: { enabled: false },
+      });
+      const repair = (yield* service.analyzeIssues(repairInput)).tasks[0]!;
+      expect(repair).toMatchObject({
+        issueKey: "2849",
+        actionMode: "fix_worktree_review",
+        repairOfTaskId: restarted.id,
+      });
+      expect((yield* Effect.result(service.analyzeIssues(repairInput)))._tag).toBe("Failure");
+      const reviewed = yield* whenSettled(repair.id);
+      expect(reviewed.tasks.find((task) => task.id === repair.id)).toMatchObject({
+        stage: "needs_human",
+        primaryThreadId: repairThreadId,
+        diagnosisReport: "Applied and tested the repair",
+      });
+      const sync = (writeComment: boolean, resolvedBuild?: string) =>
+        service.writeBack({
+          connectorId: connector.id,
+          action: {
+            kind: "sync_repair",
+            taskId: repair.id,
+            writeComment,
+            ...(resolvedBuild === undefined ? {} : { resolvedBuild }),
+          },
+        });
+      expect((yield* Effect.result(sync(true)))._tag).toBe("Failure");
+      expect(writeBacks).toEqual([]);
+      yield* service.confirmRepair({ taskId: repair.id });
+      expect((yield* Effect.result(sync(false)))._tag).toBe("Failure");
+      expect((yield* Effect.result(sync(false, "unknown")))._tag).toBe("Failure");
+      expect(writeBacks).toEqual([]);
+      yield* sync(true);
+      yield* sync(true);
+      expect(writeBacks).toEqual([
+        {
+          kind: "comment",
+          issueKey: "2849",
+          comment: expect.stringContaining("Applied and tested the repair"),
+        },
+      ]);
+      yield* sync(false, "7");
+      expect(writeBacks[1]).toEqual({
+        kind: "resolve",
+        issueKey: "2849",
+        resolution: "fixed",
+        resolvedBuild: "7",
+      });
+      const persisted = yield* service.getState;
+      expect(persisted.tasks.find((task) => task.id === repair.id)).toMatchObject({
+        stage: "completed",
+        issueStatus: "resolved",
+        repairConfirmedAt: expect.any(String),
+        commentSyncedAt: expect.any(String),
+        stateSyncedAt: expect.any(String),
+      });
+      expect(persisted.profiles.find((profile) => profile.id === rule.id)?.policy).toEqual(
+        diagnosticPolicy,
+      );
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provide(dependencies))));
   }),
 );

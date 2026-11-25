@@ -229,6 +229,8 @@ export const IssueAutomationTask = Schema.Struct({
   reviewThreadId: Schema.NullOr(ThreadId),
   primaryRunId: Schema.optionalKey(RunId),
   reviewRunId: Schema.optionalKey(RunId),
+  repairOfTaskId: Schema.optionalKey(IssueAutomationTaskId),
+  repairConfirmedAt: Schema.optionalKey(IsoDateTime),
   assignedModelLabel: Schema.String,
   worktreeBranch: Schema.NullOr(Schema.String),
   diagnosisReport: Schema.NullOr(Schema.String),
@@ -424,6 +426,7 @@ export const IssueAutomationAnalyzeIssuesInput = Schema.Struct({
   overrideModels: Schema.optional(IssueAutomationModelStrategy),
   overridePolicy: Schema.optional(IssueAutomationPolicy),
   retryTaskId: Schema.optionalKey(IssueAutomationTaskId),
+  repairFromTaskId: Schema.optionalKey(IssueAutomationTaskId),
 });
 export type IssueAutomationAnalyzeIssuesInput = typeof IssueAutomationAnalyzeIssuesInput.Type;
 
@@ -436,6 +439,19 @@ export const IssueAutomationCancelTaskInput = Schema.Struct({
   taskId: IssueAutomationTaskId,
 });
 export type IssueAutomationCancelTaskInput = typeof IssueAutomationCancelTaskInput.Type;
+
+export const IssueAutomationConfirmRepairInput = Schema.Struct({
+  taskId: IssueAutomationTaskId,
+});
+export type IssueAutomationConfirmRepairInput = typeof IssueAutomationConfirmRepairInput.Type;
+
+export const IssueAutomationSyncRepairAction = Schema.Struct({
+  kind: Schema.Literal("sync_repair"),
+  taskId: IssueAutomationTaskId,
+  writeComment: Schema.Boolean,
+  resolvedBuild: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+});
+export type IssueAutomationSyncRepairAction = typeof IssueAutomationSyncRepairAction.Type;
 
 export const IssueAutomationWriteBackAction = Schema.Union([
   Schema.Struct({
@@ -497,7 +513,7 @@ export type IssueAutomationWriteBackAction = typeof IssueAutomationWriteBackActi
 
 export const IssueAutomationWriteBackInput = Schema.Struct({
   connectorId: IssueAutomationConnectorId,
-  action: IssueAutomationWriteBackAction,
+  action: Schema.Union([IssueAutomationWriteBackAction, IssueAutomationSyncRepairAction]),
 });
 export type IssueAutomationWriteBackInput = typeof IssueAutomationWriteBackInput.Type;
 

@@ -235,6 +235,7 @@ export const make = Effect.gen(function* () {
       issueAutomationFeishuNotifications: true,
       issueAutomationRuleScan: true,
       issueAutomationRetry: true,
+      issueAutomationRepair: true,
       prReview: true,
       sideChats: true,
       vcsBranchStatus: true,

@@ -2032,6 +2032,7 @@ export const layerWsRpc = (
         [WS_METHODS.issueAutomationTriggerPoll]: (input) => issueAutomation.triggerPoll(input),
         [WS_METHODS.issueAutomationAnalyzeIssues]: (input) => issueAutomation.analyzeIssues(input),
         [WS_METHODS.issueAutomationCancelTask]: (input) => issueAutomation.cancelTask(input),
+        [WS_METHODS.issueAutomationConfirmRepair]: (input) => issueAutomation.confirmRepair(input),
         [WS_METHODS.issueAutomationWriteBack]: (input) => issueAutomation.writeBack(input),
         [WS_METHODS.prReviewGetState]: () => prReview.getState,
         [WS_METHODS.prReviewSubscribe]: () => prReview.subscribe,

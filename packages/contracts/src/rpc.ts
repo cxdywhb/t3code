@@ -224,6 +224,7 @@ import {
   IssueAutomationAnalyzeIssuesInput,
   IssueAutomationAnalyzeIssuesResult,
   IssueAutomationCancelTaskInput,
+  IssueAutomationConfirmRepairInput,
   IssueAutomationConnector,
   IssueAutomationDeleteConnectorInput,
   IssueAutomationDeleteProfileInput,
@@ -738,6 +739,7 @@ export const WS_METHODS = {
   issueAutomationTriggerPoll: "issueAutomation.triggerPoll",
   issueAutomationAnalyzeIssues: "issueAutomation.analyzeIssues",
   issueAutomationCancelTask: "issueAutomation.cancelTask",
+  issueAutomationConfirmRepair: "issueAutomation.confirmRepair",
   issueAutomationWriteBack: "issueAutomation.writeBack",
 
   // Multi-model PR fusion review workstation methods
@@ -1667,6 +1669,11 @@ const WsIssueAutomationCancelTaskRpc = Rpc.make(WS_METHODS.issueAutomationCancel
   payload: IssueAutomationCancelTaskInput,
   success: Schema.Void,
   error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationConfirmRepairRpc = Rpc.make(WS_METHODS.issueAutomationConfirmRepair, {
+  payload: IssueAutomationConfirmRepairInput,
+  error: IssueAutomationError,
 });
 
 const WsIssueAutomationWriteBackRpc = Rpc.make(WS_METHODS.issueAutomationWriteBack, {
@@ -2862,6 +2869,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssueAutomationTriggerPollRpc,
   WsIssueAutomationAnalyzeIssuesRpc,
   WsIssueAutomationCancelTaskRpc,
+  WsIssueAutomationConfirmRepairRpc,
   WsIssueAutomationWriteBackRpc,
   WsPrReviewGetStateRpc,
   WsPrReviewSubscribeRpc,

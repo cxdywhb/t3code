@@ -17,6 +17,7 @@ import {
   type IssueAutomationActionMode,
   type IssueAutomationAnalyzeIssuesInput,
   type IssueAutomationAnalyzeIssuesResult,
+  type IssueAutomationConfirmRepairInput,
   type IssueAutomationCancelTaskInput,
   type IssueAutomationConnector,
   type IssueAutomationDeleteConnectorInput,
@@ -39,6 +40,7 @@ import {
   type IssueAutomationSetProfileEnabledInput,
   type IssueAutomationStage,
   type IssueAutomationStateSnapshot,
+  type IssueAutomationSyncRepairAction,
   type IssueAutomationTask,
   type IssueAutomationTriggerPollInput,
   type IssueAutomationTriggerPollResult,
@@ -55,6 +57,10 @@ import {
   matchesIssueAutomationFilter,
   scanIssueAutomationPage,
 } from "@t3tools/shared/issueAutomationScan";
+import {
+  formatIssueAutomationWriteBackComment,
+  ISSUE_AUTOMATION_COMMENT_MARKER,
+} from "@t3tools/shared/issueAutomationWriteBack";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -93,7 +99,6 @@ import type {
 } from "./plugin/IssuePlatformPlugin.ts";
 import * as PluginRegistry from "./plugin/PluginRegistry.ts";
 
-const BOT_SIGNATURE_MARKER = "[T3-Auto-Analysis]";
 const THREAD_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
 const POLL_TICK_INTERVAL = Duration.seconds(30);
 const isIssueAutomationError = Schema.is(IssueAutomationError);
@@ -130,6 +135,7 @@ function buildDiagnosisPrompt(input: {
   readonly referenceProjects: ReadonlyArray<OrchestrationProjectShell>;
   readonly downloadedImagePaths: ReadonlyArray<string>;
   readonly customInstructions: string | null;
+  readonly previousDiagnosis?: string | undefined;
 }): string {
   const modeGuidance =
     input.actionMode === "diagnose_only"
@@ -143,6 +149,9 @@ function buildDiagnosisPrompt(input: {
           "- 当前会话已运行在独立的 Git Worktree 隔离分支中，可安全修改源码；",
           "- 请先定位根本原因，实施最小且稳健的代码修复，并在终端执行相关的类型检查/构建/单元测试验证修复有效；",
           "- 不要执行 `git push` 或合并主分支，保持修改清晰可审阅。",
+          ...(input.previousDiagnosis
+            ? ["- 参考已有诊断结论并核对当前代码。请只在本地修复，不要操作禅道或发送外部通知。"]
+            : []),
         ].join("\n");
 
   const siblingLines =
@@ -197,6 +206,9 @@ function buildDiagnosisPrompt(input: {
     "",
     "## 4. 历史处理动态与备注",
     recentComments,
+    ...(input.previousDiagnosis
+      ? ["", "### 已完成的诊断报告（供参考）", input.previousDiagnosis]
+      : []),
     "",
     "## 5. 执行要求",
     modeGuidance,
@@ -204,7 +216,9 @@ function buildDiagnosisPrompt(input: {
       ? ["", "### 团队附加规范要求", input.customInstructions.trim()]
       : []),
     "",
-    "## 6. 最终输出报告格式（必须严格输出以下结构化章节，系统将自动提取回写至禅道备注）",
+    input.previousDiagnosis
+      ? "## 6. 最终输出报告格式（供用户审查修复）"
+      : "## 6. 最终输出报告格式（必须严格输出以下结构化章节，系统将自动提取回写至禅道备注）",
     "请在完成全部分析（及修复验证）后的最后一条回复中，输出清晰的中文结构化报告：",
     "1. `## 问题根因分析`：说明导致该问题的准确代码位置（文件路径 + 函数/行号）与触发机理；",
     "2. `## 影响范围评估`：说明是否影响其他模块或上下游仓库；",
@@ -235,31 +249,22 @@ function buildCrossReviewPrompt(input: {
   ].join("\n");
 }
 
-function formatWriteBackComment(input: {
-  readonly assignedModelLabel: string;
-  readonly worktreeBranch: string | null;
-  readonly diagnosisReport: string;
-  readonly reviewReport: string | null;
-}): string {
-  const sections = [
-    `## 🤖 自动诊断分析报告`,
-    `- **执行模型**: \`${input.assignedModelLabel}\``,
-    ...(input.worktreeBranch ? [`- **本地修复分支**: \`${input.worktreeBranch}\``] : []),
-    "",
-    input.diagnosisReport.trim(),
-  ];
-  if (input.reviewReport && input.reviewReport.trim().length > 0) {
-    sections.push("", "## 🔍 异构模型交叉审查意见", input.reviewReport.trim());
-  }
-  sections.push("", `\`${BOT_SIGNATURE_MARKER}\``);
-  return sections.join("\n");
-}
-
 function isTerminalStage(stage: IssueAutomationStage): boolean {
   return (
     stage === "completed" || stage === "needs_human" || stage === "failed" || stage === "cancelled"
   );
 }
+
+function blocksNewTask(task: IssueAutomationTask): boolean {
+  return (
+    !isTerminalStage(task.stage) ||
+    (task.repairOfTaskId !== undefined && task.stage === "needs_human")
+  );
+}
+
+type TaskContinuation =
+  | { readonly kind: "retry"; readonly threadId: ThreadId | null; readonly attemptNumber: number }
+  | { readonly kind: "repair"; readonly diagnosisReport: string };
 
 function hasRunBackgroundWork(projection: OrchestrationV2ThreadProjection, runId: RunId): boolean {
   return (
@@ -313,6 +318,9 @@ export class IssueAutomationService extends Context.Service<
     readonly cancelTask: (
       input: IssueAutomationCancelTaskInput,
     ) => Effect.Effect<void, IssueAutomationError>;
+    readonly confirmRepair: (
+      input: IssueAutomationConfirmRepairInput,
+    ) => Effect.Effect<void, IssueAutomationError>;
     readonly writeBack: (
       input: IssueAutomationWriteBackInput,
     ) => Effect.Effect<IssueAutomationWriteBackResult, IssueAutomationError>;
@@ -340,6 +348,7 @@ const make = Effect.gen(function* () {
   const profileWrites = yield* Semaphore.make(1);
   const taskWrites = yield* Semaphore.make(1);
   const taskStarts = yield* Semaphore.make(1);
+  const repairWrites = yield* Semaphore.make(1);
   const pendingCancellations = new Set<IssueAutomationTaskId>();
   const profileSemaphores = new Map<string, { max: number; sem: Semaphore.Semaphore }>();
 
@@ -476,9 +485,14 @@ const make = Effect.gen(function* () {
         const latest =
           (yield* repo.getTask(task.id).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? task;
         const nextStage = patch.stage ?? latest.stage;
+        const confirmsRepair =
+          latest.repairOfTaskId !== undefined &&
+          latest.stage === "needs_human" &&
+          nextStage === "completed" &&
+          patch.repairConfirmedAt !== undefined;
         if (
           nextStage !== latest.stage &&
-          (isTerminalStage(latest.stage) ||
+          ((isTerminalStage(latest.stage) && !confirmsRepair) ||
             (latest.stage === "cancelling" && nextStage !== "cancelled"))
         ) {
           return latest;
@@ -670,8 +684,10 @@ const make = Effect.gen(function* () {
     models: IssueAutomationModelStrategy,
     policy: IssueAutomationPolicy,
     maxConcurrency: number,
-    retry?: { readonly threadId: ThreadId | null; readonly attemptNumber: number },
+    continuation?: TaskContinuation,
   ) {
+    const retry = continuation?.kind === "retry" ? continuation : undefined;
+    const repair = continuation?.kind === "repair" ? continuation : undefined;
     const profileSem = yield* getProfileSemaphore(
       initialTask.profileId ?? initialTask.connectorId,
       maxConcurrency,
@@ -749,7 +765,7 @@ const make = Effect.gen(function* () {
             .listShells()
             .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<OrchestrationProjectShell>));
 
-          const route = retry
+          const route = continuation
             ? {
                 targetProjectId: binding.primaryProjectId,
                 referenceProjectIds: binding.linkedProjectIds.filter(
@@ -789,7 +805,8 @@ const make = Effect.gen(function* () {
           const chosenModelLabel = formatModelLabel(chosenPrimaryModel);
 
           const slugTick = yield* Clock.currentTimeMillis;
-          const branchSlug = `fix/${connector.platform}-${detail.key}-${String(slugTick).slice(-5)}`;
+          const branchSuffix = repair ? current.id.slice(-12) : String(slugTick).slice(-5);
+          const branchSlug = `fix/${connector.platform}-${detail.key}-${branchSuffix}`;
           let workspaceStrategy: ThreadLaunchService.ThreadLaunchWorkspaceStrategy = {
             type: "root",
           };
@@ -830,6 +847,7 @@ const make = Effect.gen(function* () {
             referenceProjects,
             downloadedImagePaths: downloadedImages,
             customInstructions: policy.customPromptInstructions,
+            previousDiagnosis: repair?.diagnosisReport,
           });
           const summary = {
             mode: policy.actionMode === "diagnose_only" ? "diagnose" : "repair",
@@ -841,7 +859,7 @@ const make = Effect.gen(function* () {
             ...(retry === undefined ? {} : { attemptNumber: retry.attemptNumber }),
           } satisfies IssueAutomationMessageSummary;
 
-          const threadTitle = `[自动诊断] ${detail.displayKey} ${detail.title.slice(0, 60)}`;
+          const threadTitle = `[${repair ? "手动修复" : "自动诊断"}] ${detail.displayKey} ${detail.title.slice(0, 60)}`;
           let primaryOutcome = yield* Effect.result(
             runModelTurnAndExtractText({
               projectId: targetProject.id,
@@ -862,7 +880,7 @@ const make = Effect.gen(function* () {
             const fallbackBranch =
               policy.actionMode === "diagnose_only"
                 ? null
-                : `fix/${connector.platform}-${detail.key}-fb-${String(fbTick).slice(-4)}`;
+                : `fix/${connector.platform}-${detail.key}-fb-${repair ? branchSuffix : String(fbTick).slice(-4)}`;
             const fallbackWorkspace: ThreadLaunchService.ThreadLaunchWorkspaceStrategy =
               fallbackBranch === null
                 ? { type: "root" }
@@ -1013,6 +1031,20 @@ const make = Effect.gen(function* () {
 
           const needsHumanReview = reviewReport !== null && reviewReport.includes("【需人工复核】");
 
+          if (repair) {
+            return yield* updateTaskState(
+              current,
+              hasConfirmedRepair
+                ? { stage: "needs_human" }
+                : { stage: "failed", lastError: "未检测到本次修复产生的代码变更" },
+              {
+                message: hasConfirmedRepair
+                  ? "隔离工作树中的修复已完成，等待人工审查"
+                  : "未检测到本次修复产生的代码变更，请查看会话或重试",
+              },
+            );
+          }
+
           // Step 5: Write-back to ZenTao / Issue Platform
           if (policy.autoWriteComment) {
             current = yield* updateTaskState(
@@ -1021,7 +1053,7 @@ const make = Effect.gen(function* () {
               { stage: "writing_back", message: "正在将结构化诊断报告写回问题平台..." },
             );
 
-            const formattedComment = formatWriteBackComment({
+            const formattedComment = formatIssueAutomationWriteBackComment({
               assignedModelLabel: current.assignedModelLabel,
               worktreeBranch: current.worktreeBranch,
               diagnosisReport: solved.reportText,
@@ -1127,11 +1159,13 @@ const make = Effect.gen(function* () {
     models: IssueAutomationModelStrategy,
     policy: IssueAutomationPolicy,
     maxConcurrency: number,
-    retry?: { readonly threadId: ThreadId | null; readonly attemptNumber: number },
+    continuation?: TaskContinuation,
   ) {
     const registered = yield* Deferred.make<void>();
     const fiber = yield* Deferred.await(registered).pipe(
-      Effect.andThen(executeTaskPipeline(task, binding, models, policy, maxConcurrency, retry)),
+      Effect.andThen(
+        executeTaskPipeline(task, binding, models, policy, maxConcurrency, continuation),
+      ),
       Effect.ensuring(
         Ref.update(activeTaskFibers, (current) => {
           const next = new Map(current);
@@ -1246,7 +1280,7 @@ const make = Effect.gen(function* () {
       const priorForIssue = existingTasks.filter(
         (t) => t.connectorId === connector.id && t.issueKey === item.key,
       );
-      const hasActive = priorForIssue.some((t) => !isTerminalStage(t.stage));
+      const hasActive = priorForIssue.some(blocksNewTask);
       const alreadyHandledVersion = priorForIssue.some(
         (t) =>
           (t.stage === "completed" || t.stage === "needs_human") &&
@@ -1263,7 +1297,7 @@ const make = Effect.gen(function* () {
       );
       if (
         detailCheck._tag === "Success" &&
-        detailCheck.success.comments.some((c) => c.body.includes(BOT_SIGNATURE_MARKER))
+        detailCheck.success.comments.some((c) => c.body.includes(ISSUE_AUTOMATION_COMMENT_MARKER))
       ) {
         skippedCount += 1;
         continue;
@@ -1322,7 +1356,7 @@ const make = Effect.gen(function* () {
           const latest = yield* repo
             .listIssueTasks(connector.id, item.key)
             .pipe(Effect.mapError(mapRepoErr("listIssueTasks")));
-          if (latest.some((previous) => !isTerminalStage(previous.stage))) return false;
+          if (latest.some(blocksNewTask)) return false;
           yield* repo.upsertTask(task).pipe(Effect.mapError(mapRepoErr("enqueuePollTask")));
           yield* spawnTaskExecution(
             task,
@@ -1671,23 +1705,32 @@ const make = Effect.gen(function* () {
     "IssueAutomationService.analyzeIssues",
   )(function* (input) {
     const { connector } = yield* readConnectorCredentials(input.connectorId);
+    const sourceId = input.retryTaskId ?? input.repairFromTaskId;
     const previous =
-      input.retryTaskId === undefined
+      sourceId === undefined
         ? undefined
-        : yield* repo.getTask(input.retryTaskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+        : yield* repo.getTask(sourceId).pipe(Effect.mapError(mapRepoErr("getTask")));
+    const isRepair = input.repairFromTaskId !== undefined;
     if (
-      input.retryTaskId !== undefined &&
+      sourceId !== undefined &&
       (!previous ||
-        previous.stage !== "cancelled" ||
         previous.actionMode !== "diagnose_only" ||
         previous.connectorId !== connector.id ||
         previous.scopeId !== input.scopeId ||
         input.issueKeys.length !== 1 ||
-        input.issueKeys[0] !== previous.issueKey)
+        input.issueKeys[0] !== previous.issueKey ||
+        (isRepair
+          ? input.retryTaskId !== undefined ||
+            previous.stage !== "completed" ||
+            !previous.diagnosisReport?.trim() ||
+            previous.targetProjectId === null
+          : previous.stage !== "cancelled"))
     ) {
       return yield* new IssueAutomationError({
         operation: "analyzeIssues",
-        detail: "只能重新诊断已取消的同一缺陷",
+        detail: isRepair
+          ? "只能从已完成的诊断报告开始修复同一缺陷"
+          : "只能重新诊断已取消的同一缺陷",
       });
     }
     const previousThread =
@@ -1695,8 +1738,13 @@ const make = Effect.gen(function* () {
         ? undefined
         : yield* threadManagement
             .getThreadProjection(previous.primaryThreadId)
-            .pipe(Effect.mapError(mapRepoErr("getRetryThread")));
+            .pipe(
+              Effect.catch((cause) =>
+                isRepair ? Effect.undefined : Effect.fail(mapRepoErr("getRetryThread")(cause)),
+              ),
+            );
     if (
+      !isRepair &&
       previousThread &&
       (previousThread.thread.archivedAt !== null ||
         previousThread.thread.deletedAt !== null ||
@@ -1716,8 +1764,9 @@ const make = Effect.gen(function* () {
       });
     }
     const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
-    const matchedProfile = input.profileId
-      ? profiles.find((p) => p.id === input.profileId)
+    const requestedProfileId = isRepair ? previous?.profileId : input.profileId;
+    const matchedProfile = requestedProfileId
+      ? profiles.find((p) => p.id === requestedProfileId)
       : profiles.find((p) => p.connectorId === input.connectorId && p.scopeId === input.scopeId);
 
     const configuredRepositories = input.overrideRepositories ?? matchedProfile?.repositories;
@@ -1728,32 +1777,35 @@ const make = Effect.gen(function* () {
           moduleMappings: [],
         }
       : configuredRepositories;
-    const configuredModels = input.overrideModels ?? matchedProfile?.models;
+    const configuredModels =
+      (isRepair ? undefined : input.overrideModels) ?? matchedProfile?.models;
     const models = previousThread
       ? {
           primaryModel: previousThread.thread.modelSelection,
           triageModel: null,
           highSeverityModel: null,
-          reviewModel: null,
-          fallbackModel: null,
+          reviewModel: isRepair ? (configuredModels?.reviewModel ?? null) : null,
+          fallbackModel: isRepair ? (configuredModels?.fallbackModel ?? null) : null,
         }
       : configuredModels;
-    const configuredPolicy: IssueAutomationPolicy = input.overridePolicy ??
+    const configuredPolicy: IssueAutomationPolicy = (isRepair ? undefined : input.overridePolicy) ??
       matchedProfile?.policy ?? {
         actionMode: "fix_worktree_review",
         autoWriteComment: true,
         baseBranch: null,
         customPromptInstructions: null,
       };
-    const policy = previous
-      ? {
-          ...configuredPolicy,
-          actionMode: "diagnose_only" as const,
-          autoWriteComment:
-            matchedProfile?.policy.actionMode === "diagnose_only" &&
-            matchedProfile.policy.autoWriteComment,
-        }
-      : configuredPolicy;
+    const policy = isRepair
+      ? { ...configuredPolicy, actionMode: "fix_worktree_review" as const, autoWriteComment: false }
+      : previous
+        ? {
+            ...configuredPolicy,
+            actionMode: "diagnose_only" as const,
+            autoWriteComment:
+              matchedProfile?.policy.actionMode === "diagnose_only" &&
+              matchedProfile.policy.autoWriteComment,
+          }
+        : configuredPolicy;
     const maxConcurrency = matchedProfile?.filter.maxConcurrency ?? 2;
     const scopeName =
       connector.scopes.find((scope) => scope.id === input.scopeId)?.name ?? input.scopeName;
@@ -1770,13 +1822,26 @@ const make = Effect.gen(function* () {
       const history = yield* repo
         .listIssueTasks(connector.id, issueKey)
         .pipe(Effect.mapError(mapRepoErr("listIssueTasks")));
-      if (previous && history[0]?.id !== previous.id) {
+      const latest = history[0];
+      const canRepairAgain =
+        isRepair &&
+        latest?.repairOfTaskId === previous?.id &&
+        (latest?.stage === "failed" || latest?.stage === "cancelled");
+      if (previous && latest?.id !== previous.id && !canRepairAgain) {
         return yield* new IssueAutomationError({
           operation: "analyzeIssues",
           detail: "该缺陷已有更新的执行记录",
         });
       }
-      if (history.some((task) => !isTerminalStage(task.stage))) continue;
+      if (history.some(blocksNewTask)) {
+        if (isRepair) {
+          return yield* new IssueAutomationError({
+            operation: "analyzeIssues",
+            detail: "该缺陷已有正在执行的任务",
+          });
+        }
+        continue;
+      }
       const createdAt = yield* nowIso;
       const modelLabel = formatModelLabel(models.primaryModel);
       const task: IssueAutomationTask = {
@@ -1793,11 +1858,11 @@ const make = Effect.gen(function* () {
           connector.platform === "zentao"
             ? buildZenTaoBugWebUrl(connector.baseUrl, issueKey)
             : connector.baseUrl,
-        moduleName: null,
-        severity: null,
-        priority: null,
-        issueStatus: "",
-        assignee: null,
+        moduleName: isRepair ? (previous?.moduleName ?? null) : null,
+        severity: isRepair ? (previous?.severity ?? null) : null,
+        priority: isRepair ? (previous?.priority ?? null) : null,
+        issueStatus: isRepair ? (previous?.issueStatus ?? "") : "",
+        assignee: isRepair ? (previous?.assignee ?? null) : null,
         trigger: "manual",
         actionMode: policy.actionMode,
         stage: "queued",
@@ -1807,6 +1872,7 @@ const make = Effect.gen(function* () {
         ),
         primaryThreadId: null,
         reviewThreadId: null,
+        ...(isRepair && previous ? { repairOfTaskId: previous.id } : {}),
         assignedModelLabel: modelLabel,
         worktreeBranch: null,
         diagnosisReport: null,
@@ -1820,7 +1886,9 @@ const make = Effect.gen(function* () {
             at: createdAt,
             stage: "queued",
             modelLabel,
-            message: "手动派发问题诊断任务，正在进入执行队列...",
+            message: isRepair
+              ? "已从诊断报告提交手动修复，正在进入执行队列..."
+              : "手动派发问题诊断任务，正在进入执行队列...",
           },
         ],
         createdAt,
@@ -1834,12 +1902,15 @@ const make = Effect.gen(function* () {
         models,
         policy,
         maxConcurrency,
-        previous
-          ? {
-              threadId: previousThread?.thread.id ?? null,
-              attemptNumber: history.length + 1,
-            }
-          : undefined,
+        isRepair && previous?.diagnosisReport
+          ? { kind: "repair", diagnosisReport: previous.diagnosisReport }
+          : previous
+            ? {
+                kind: "retry",
+                threadId: previousThread?.thread.id ?? null,
+                attemptNumber: history.length + 1,
+              }
+            : undefined,
       );
       createdTasks.push(task);
     }
@@ -1911,7 +1982,11 @@ const make = Effect.gen(function* () {
       const cancelling = yield* updateTaskState(
         task,
         { stage: "cancelling", lastError: null },
-        task.stage === "cancelling" ? undefined : { message: "正在停止本次诊断" },
+        task.stage === "cancelling"
+          ? undefined
+          : {
+              message: task.repairOfTaskId ? "正在停止本次修复" : "正在停止本次诊断",
+            },
       );
       if (cancelling.stage !== "cancelling") return;
 
@@ -1934,7 +2009,13 @@ const make = Effect.gen(function* () {
         yield* updateTaskState(linked, { lastError: stop.failure.detail });
         return yield* stop.failure;
       }
-      yield* updateTaskState(linked, { stage: "cancelled" }, { message: "已确认停止本次诊断" });
+      yield* updateTaskState(
+        linked,
+        { stage: "cancelled" },
+        {
+          message: linked.repairOfTaskId ? "已确认停止本次修复" : "已确认停止本次诊断",
+        },
+      );
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
@@ -1959,35 +2040,153 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
+  const confirmRepair: IssueAutomationService["Service"]["confirmRepair"] = Effect.fn(
+    "IssueAutomationService.confirmRepair",
+  )(function* ({ taskId }) {
+    const task = yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+    if (
+      task?.repairOfTaskId === undefined ||
+      (task.stage !== "needs_human" && !task.repairConfirmedAt)
+    ) {
+      return yield* new IssueAutomationError({
+        operation: "confirmRepair",
+        detail: "只有待审查的修复可以确认",
+      });
+    }
+    if (task.repairConfirmedAt) return;
+    const repairConfirmedAt = yield* nowIso;
+    yield* updateTaskState(
+      task,
+      { stage: "completed", repairConfirmedAt },
+      {
+        message: "用户已确认修复，可选择同步到禅道",
+      },
+    );
+  }, repairWrites.withPermits(1));
+
+  const syncRepair = Effect.fn("IssueAutomationService.syncRepair")(function* (
+    connectorId: IssueAutomationConnectorId,
+    action: IssueAutomationSyncRepairAction,
+  ) {
+    const task = yield* repo.getTask(action.taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+    if (
+      task?.repairOfTaskId === undefined ||
+      task.connectorId !== connectorId ||
+      task.stage !== "completed" ||
+      !task.repairConfirmedAt ||
+      !task.diagnosisReport ||
+      (!action.writeComment && action.resolvedBuild === undefined)
+    ) {
+      return yield* new IssueAutomationError({
+        operation: "syncRepair",
+        detail: "请先确认修复并选择至少一项禅道同步操作",
+      });
+    }
+    const writeComment = action.writeComment && task.commentSyncedAt === null;
+    const resolvedBuild = task.stateSyncedAt === null ? action.resolvedBuild : undefined;
+    if (!writeComment && resolvedBuild === undefined) return { ok: true };
+
+    const { plugin, credentials } = yield* readConnectorCredentials(connectorId);
+    if (resolvedBuild !== undefined) {
+      const detail = yield* plugin.getIssueDetail({
+        credentials,
+        scopeId: task.scopeId,
+        issueKey: task.issueKey,
+      });
+      if (
+        detail.status !== "active" ||
+        !detail.availableBuilds.some((build) => build.id === resolvedBuild)
+      ) {
+        return yield* new IssueAutomationError({
+          operation: "syncRepair",
+          detail: "缺陷状态或解决版本已变更，请重新查看禅道详情",
+        });
+      }
+    }
+
+    const comment = writeComment
+      ? formatIssueAutomationWriteBackComment({ ...task, diagnosisReport: task.diagnosisReport })
+      : "";
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const result = yield* plugin.writeBack({
+          credentials,
+          action:
+            resolvedBuild !== undefined
+              ? {
+                  kind: "resolve",
+                  issueKey: task.issueKey,
+                  resolution: "fixed",
+                  resolvedBuild,
+                  ...(comment ? { comment } : {}),
+                }
+              : { kind: "comment", issueKey: task.issueKey, comment },
+        });
+        if (!result.ok) {
+          return yield* new IssueAutomationError({
+            operation: "syncRepair",
+            detail: "禅道未确认写入成功",
+          });
+        }
+        const syncedAt = yield* nowIso;
+        yield* updateTaskState(
+          task,
+          {
+            ...(writeComment ? { commentSyncedAt: syncedAt } : {}),
+            ...(resolvedBuild === undefined
+              ? {}
+              : { stateSyncedAt: syncedAt, issueStatus: "resolved" }),
+          },
+          { message: "已将所选修复结果同步到禅道" },
+        );
+        return result;
+      }),
+    );
+  }, repairWrites.withPermits(1));
+
   const writeBack: IssueAutomationService["Service"]["writeBack"] = Effect.fn(
     "IssueAutomationService.writeBack",
   )(function* (input) {
+    if (input.action.kind === "sync_repair") {
+      return yield* syncRepair(input.connectorId, input.action);
+    }
     const { plugin, credentials } = yield* readConnectorCredentials(input.connectorId);
+    const found =
+      input.action.kind !== "create" && input.action.taskId !== undefined
+        ? yield* repo.getTask(input.action.taskId).pipe(Effect.mapError(mapRepoErr("getTask")))
+        : undefined;
+    if (found?.repairOfTaskId !== undefined) {
+      return yield* new IssueAutomationError({
+        operation: "writeBack",
+        detail: "请在修复报告中同步修复结果",
+      });
+    }
     const result = yield* plugin.writeBack({
       credentials,
       action: input.action,
     });
 
-    if (input.action.kind !== "create" && input.action.taskId !== undefined) {
-      const targetTaskId = input.action.taskId;
-      const tasks = yield* repo.listTasks(250).pipe(Effect.orElseSucceed(() => []));
-      const found = tasks.find((t) => t.id === targetTaskId);
-      if (found) {
-        const syncedAt = yield* nowIso;
-        yield* updateTaskState(
-          found,
-          {
-            ...(input.action.kind === "comment" || input.action.comment
-              ? { commentSyncedAt: syncedAt }
-              : {}),
-            ...(input.action.kind !== "comment" ? { stateSyncedAt: syncedAt } : {}),
-          },
-          {
-            stage: found.stage,
-            message: `已向平台执行写入动作: ${input.action.kind}`,
-          },
-        );
-      }
+    if (
+      result.ok &&
+      found &&
+      input.action.kind !== "create" &&
+      found.connectorId === input.connectorId &&
+      found.issueKey === input.action.issueKey
+    ) {
+      const syncedAt = yield* nowIso;
+      yield* updateTaskState(
+        found,
+        {
+          ...(input.action.kind === "comment" || input.action.comment
+            ? { commentSyncedAt: syncedAt }
+            : {}),
+          ...(input.action.kind !== "comment" ? { stateSyncedAt: syncedAt } : {}),
+        },
+        {
+          stage: found.stage,
+          message: `已向平台执行写入动作: ${input.action.kind}`,
+        },
+      );
     }
 
     return result;
@@ -2015,6 +2214,7 @@ const make = Effect.gen(function* () {
     triggerPoll,
     analyzeIssues,
     cancelTask,
+    confirmRepair,
     writeBack,
   });
 });
