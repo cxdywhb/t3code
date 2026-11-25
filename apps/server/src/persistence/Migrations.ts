@@ -119,8 +119,13 @@ import Migration0108 from "./Migrations/108_AgentFeedback.ts";
 import Migration0109 from "./Migrations/109_IssueTrackerAccounts.ts";
 import Migration0110 from "./Migrations/110_Workflows.ts";
 import Migration0111 from "./Migrations/111_SupersededRunAttemptIndex.ts";
-import Migration0112 from "./Migrations/112_IssueAutomation.ts";
-import Migration0113 from "./Migrations/113_PrReviewWorkstation.ts";
+import Migration0112 from "./Migrations/112_LayoutCommandApprovals.ts";
+import Migration0113 from "./Migrations/113_WorkflowSkippedRuns.ts";
+import Migration0114 from "./Migrations/114_WorkflowRunIndexes.ts";
+import Migration0115 from "./Migrations/115_WorkflowRunTags.ts";
+import Migration0116 from "./Migrations/116_ForkHistoryMembership.ts";
+import Migration0117 from "./Migrations/117_IssueAutomation.ts";
+import Migration0118 from "./Migrations/118_PrReviewWorkstation.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -235,8 +240,13 @@ const migrationEntries = [
   [109, "IssueTrackerAccounts", Migration0109],
   [110, "Workflows", Migration0110],
   [111, "SupersededRunAttemptIndex", Migration0111],
-  [112, "IssueAutomation", Migration0112],
-  [113, "PrReviewWorkstation", Migration0113],
+  [112, "LayoutCommandApprovals", Migration0112],
+  [113, "WorkflowSkippedRuns", Migration0113],
+  [114, "WorkflowRunIndexes", Migration0114],
+  [115, "WorkflowRunTags", Migration0115],
+  [116, "ForkHistoryMembership", Migration0116],
+  [117, "IssueAutomation", Migration0117],
+  [118, "PrReviewWorkstation", Migration0118],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -313,8 +323,8 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
       MAX(migration_id) AS latestId,
       SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows,
       SUM(
-        (migration_id IN (106, 108, 111) AND name = 'IssueAutomation') OR
-        (migration_id IN (107, 109, 112) AND name = 'PrReviewWorkstation')
+        (migration_id IN (106, 108, 111, 112) AND name = 'IssueAutomation') OR
+        (migration_id IN (107, 109, 112, 113) AND name = 'PrReviewWorkstation')
       ) AS legacyForkRows
     FROM effect_sql_migrations
   `;
@@ -348,8 +358,8 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     if (ledgerTables.length > 0) {
       yield* sql`
         DELETE FROM effect_sql_migrations
-        WHERE (migration_id IN (106, 108, 111) AND name = 'IssueAutomation')
-           OR (migration_id IN (107, 109, 112) AND name = 'PrReviewWorkstation')
+        WHERE (migration_id IN (106, 108, 111, 112) AND name = 'IssueAutomation')
+           OR (migration_id IN (107, 109, 112, 113) AND name = 'PrReviewWorkstation')
       `;
     }
   }

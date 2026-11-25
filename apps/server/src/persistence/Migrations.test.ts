@@ -7,8 +7,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import IssueAutomation from "./Migrations/112_IssueAutomation.ts";
-import PrReviewWorkstation from "./Migrations/113_PrReviewWorkstation.ts";
+import IssueAutomation from "./Migrations/117_IssueAutomation.ts";
+import PrReviewWorkstation from "./Migrations/118_PrReviewWorkstation.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
@@ -31,37 +31,39 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
-  it.effect.each([106, 108, 111])("upgrades fork tables originally registered at %i", (firstId) =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: firstId - 1 });
-      yield* IssueAutomation;
-      yield* PrReviewWorkstation;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+  it.effect.each([106, 108, 111, 112])(
+    "upgrades fork tables originally registered at %i",
+    (firstId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: firstId - 1 });
+        yield* IssueAutomation;
+        yield* PrReviewWorkstation;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES (${firstId}, 'IssueAutomation'), (${firstId + 1}, 'PrReviewWorkstation')`;
-      yield* sql`INSERT INTO issue_automation_connectors
+        yield* sql`INSERT INTO issue_automation_connectors
         (connector_id, platform, name, base_url, account, status, updated_at)
         VALUES ('existing', 'zentao', 'team', 'https://example.test/team', 'user', 'connected', '2026-01-01')`;
-      yield* sql`INSERT INTO pr_review_presets (preset_id, name, reviewer_models_json, updated_at)
+        yield* sql`INSERT INTO pr_review_presets (preset_id, name, reviewer_models_json, updated_at)
         VALUES ('existing', 'team review', '[]', '2026-01-01')`;
 
-      yield* runMigrations();
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.lengthOf(
-        yield* sql`
+        yield* runMigrations();
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.lengthOf(
+          yield* sql`
         SELECT name FROM sqlite_master
         WHERE name = 'orchestration_v2_projection_run_attempts_superseded_idx'
       `,
-        1,
-      );
-      assert.deepStrictEqual(yield* sql`SELECT base_url FROM issue_automation_connectors`, [
-        { base_url: "https://example.test/team" },
-      ]);
-      assert.deepStrictEqual(yield* sql`SELECT name FROM pr_review_presets`, [
-        { name: "team review" },
-      ]);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+          1,
+        );
+        assert.deepStrictEqual(yield* sql`SELECT base_url FROM issue_automation_connectors`, [
+          { base_url: "https://example.test/team" },
+        ]);
+        assert.deepStrictEqual(yield* sql`SELECT name FROM pr_review_presets`, [
+          { name: "team review" },
+        ]);
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("refuses to start when another migration took a V2 id", () =>
