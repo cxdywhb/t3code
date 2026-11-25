@@ -463,4 +463,59 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       assert.deepEqual(capturedPaths, []);
     }),
   );
+
+  it.effect("defaults telemetry off and blocks ingest.t3.codes even when explicitly enabled", () =>
+    Effect.gen(function* () {
+      const requestedUrls: Array<string> = [];
+      const client = HttpClient.make((request) => {
+        requestedUrls.push(request.url);
+        return respondWithStatus(204)(request);
+      });
+
+      for (const config of [
+        {},
+        {
+          T3CODE_TELEMETRY_ENABLED: true,
+          T3CODE_POSTHOG_KEY: "phc_test_key",
+        },
+        {
+          T3CODE_TELEMETRY_ENABLED: true,
+          T3CODE_POSTHOG_KEY: "phc_test_key",
+          T3CODE_POSTHOG_HOST: "https://ingest.t3.codes",
+        },
+        {
+          T3CODE_TELEMETRY_ENABLED: true,
+          T3CODE_POSTHOG_KEY: "phc_test_key",
+          T3CODE_POSTHOG_HOST: "https://sub.INGEST.T3.CODES./",
+        },
+      ]) {
+        const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provideMerge(
+            ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-block-" }),
+          ),
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(HostProcess.Platform, "darwin"),
+              Layer.succeed(HostProcess.Architecture, "arm64"),
+              Layer.succeed(HttpClient.HttpClient, client),
+              ManagedPolicy.layerTest(),
+            ),
+          ),
+        );
+
+        const recorded = yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          const result = yield* analytics.record("test.blocked", { index: 1 });
+          yield* analytics.recordOwners([{ source: "device", ownerId: "a".repeat(64) }], "server");
+          yield* analytics.flush;
+          return result;
+        }).pipe(Effect.provide(runtimeLayer));
+
+        assert.isFalse(recorded);
+      }
+
+      assert.deepEqual(requestedUrls, []);
+    }),
+  );
 });

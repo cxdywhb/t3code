@@ -66,14 +66,27 @@ function retryDelayMs(failures: number, random: number): number {
   return Math.round(ceiling / 2 + (ceiling / 2) * random);
 }
 
+// This fork disables telemetry by default and never reports to upstream ingest.t3.codes.
+const BLOCKED_TELEMETRY_HOST = "ingest.t3.codes";
+
+function normalizeTelemetryHost(rawHost: string): string | null {
+  const trimmed = rawHost.trim();
+  if (trimmed.length === 0) return null;
+  const parsed = URL.parse(trimmed);
+  if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+    return null;
+  }
+  const hostname = parsed.hostname.toLowerCase().replace(/\.+$/u, "");
+  if (hostname === BLOCKED_TELEMETRY_HOST || hostname.endsWith(`.${BLOCKED_TELEMETRY_HOST}`)) {
+    return null;
+  }
+  return trimmed.replace(/\/+$/u, "");
+}
+
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
-  ),
-  posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(
-    Config.withDefault("https://ingest.t3.codes"),
-  ),
-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("")),
+  posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.withDefault("")),
+  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -129,15 +142,27 @@ export const make = Effect.gen(function* () {
   // A managed policy can switch analytics off over the environment, never on.
   const policyAllows =
     ManagedPolicy.deniedBy(yield* ManagedPolicy.ManagedPolicy, "telemetry") === undefined;
+  const posthogHost = normalizeTelemetryHost(telemetryConfig.posthogHost);
+  const posthogKey = telemetryConfig.posthogKey.trim();
+  const canEverSend =
+    telemetryConfig.enabled && policyAllows && posthogHost !== null && posthogKey.length > 0;
+  if (!canEverSend) {
+    return AnalyticsService.of({
+      record: Effect.fn("AnalyticsService.record")(function* () {
+        return false;
+      }),
+      flush: Effect.void,
+      recordOwners: Effect.fn("AnalyticsService.recordOwners")(function* () {}),
+    });
+  }
   // A cached PATH does not establish consent from the current login shell.
   const telemetryEnabled = Effect.suspend(() => {
-    if (!telemetryConfig.enabled || !policyAllows) return Effect.succeed(false);
     if (!awaitingShellConsent) return Effect.succeed(true);
     if (hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1")
       return Effect.succeed(false);
     const preference = hostEnvironment.T3CODE_TELEMETRY_ENABLED;
     return Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
-      Config.withDefault(true),
+      Config.withDefault(false),
       Effect.provideService(
         ConfigProvider.ConfigProvider,
         ConfigProvider.fromEnv({
@@ -208,7 +233,7 @@ export const make = Effect.gen(function* () {
     if (!(yield* telemetryEnabled) || !distinctId) return;
 
     const payload = {
-      api_key: telemetryConfig.posthogKey,
+      api_key: posthogKey,
       batch: events.map((event) => ({
         uuid: event.uuid,
         event: event.event,
@@ -240,7 +265,7 @@ export const make = Effect.gen(function* () {
       })),
     };
 
-    yield* HttpClientRequest.post(`${telemetryConfig.posthogHost}/batch/`).pipe(
+    yield* HttpClientRequest.post(`${posthogHost}/batch/`).pipe(
       HttpClientRequest.bodyJson(payload),
       Effect.flatMap(httpClient.execute),
       Effect.flatMap(HttpClientResponse.filterStatusOk),

@@ -57,11 +57,11 @@ describe("web runtime relay telemetry policy", () => {
       exports: true,
     },
     {
-      // The hosted app is served by no T3 server, so nothing can answer for it.
+      // This fork keeps relay telemetry off by default even on a static hosted origin.
       surface: "hosted app",
       desktopBridge: undefined,
       location: new URL("https://app.example.test/"),
-      exports: true,
+      exports: false,
     },
   ])("applies $surface before the first relay span", async (surface) => {
     const { desktopBridge, exports } = surface;
