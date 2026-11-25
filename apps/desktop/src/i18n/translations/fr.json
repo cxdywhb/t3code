@@ -74,6 +74,7 @@
   "dfe6e415877b0533": "T3 Code {version} est prêt à être installé.",
   "d1d10979d6dcb162": "T3 Code va redémarrer pour l’installer. Les tâches en cours seront interrompues.",
   "2f0a8211a72e29aa": "Redémarrer",
+  "10cedfb03540e90f": "Ouvrir le dossier local",
   "116a21f6cc215e5f": "Échec de la recherche de mises à jour",
   "32c88cd9421abf33": "Impossible de rechercher des mises à jour.",
   "9e5ada64a94c10de": "Cette version {build} ne peut pas se mettre à jour seule depuis le canal {saved}. Remettez le canal de mise à jour sur {build}, ou utilisez Consulter à côté de Canal de mise à jour pour relancer le passage à {saved}.",

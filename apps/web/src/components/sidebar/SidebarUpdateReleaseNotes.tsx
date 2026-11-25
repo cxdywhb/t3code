@@ -1,6 +1,6 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon, FolderOpenIcon } from "lucide-react";
 
 import {
   getDesktopUpdateReleaseHistoryUrl,
@@ -8,9 +8,9 @@ import {
 } from "../desktopUpdate.logic";
 import type { MessageResolver } from "../../i18n/messages";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import { openDesktopUpdateReleaseNotes } from "../desktopUpdate.toast";
+import { openDesktopUpdateReleaseNotes, revealDesktopUpdateFolder } from "../desktopUpdate.toast";
 
-type DesktopUpdateShell = Pick<DesktopBridge, "openExternal">;
+type DesktopUpdateShell = Pick<DesktopBridge, "openExternal" | "revealDownloadedUpdate">;
 
 function keyReleaseNoteItems(items: ReadonlyArray<string>) {
   const occurrences = new Map<string, number>();
@@ -74,6 +74,8 @@ export function SidebarUpdateReleaseNotes({
   const releasedAt = state.releaseNotes.find(
     (releaseNote) => releaseNote.version === state.availableVersion,
   )?.releasedAt;
+  const canRevealDownloadedUpdate =
+    state.downloadedVersion !== null && typeof shell?.revealDownloadedUpdate === "function";
 
   return (
     <div className="flex max-h-[calc(var(--available-height)-0.5rem)] min-h-0 w-fit max-w-[min(24rem,calc(100vw-2rem))] flex-col text-left text-pretty">
@@ -94,6 +96,18 @@ export function SidebarUpdateReleaseNotes({
         ) : (
           <div className="text-sm leading-5 font-medium">{tooltip}</div>
         )}
+        {canRevealDownloadedUpdate ? (
+          <button
+            className="mt-1 inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs leading-5 text-muted-foreground underline-offset-2 outline-none transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            onClick={() => {
+              void revealDesktopUpdateFolder(shell);
+            }}
+            type="button"
+          >
+            <FolderOpenIcon aria-hidden className="size-3 shrink-0" strokeWidth={2} />
+            <T>Open local folder</T>
+          </button>
+        ) : null}
       </div>
       <div className="min-h-0 max-h-[min(28rem,calc(100vh-6rem))] overflow-y-auto px-1 pt-3 pb-1">
         {state.releaseNotes.map((releaseNote, index) => {

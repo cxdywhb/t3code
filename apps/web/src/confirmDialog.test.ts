@@ -140,4 +140,27 @@ describe("confirm dialog coordinator", () => {
     unregister();
     await expect(unmounted).resolves.toBeUndefined();
   });
+
+  it("passes non-closing secondary actions through to the dialog state", async () => {
+    const unregister = mountHost();
+    const onSecondaryAction = () => {};
+    const confirmation = requestChoiceConfirmDialog("Install update?", {
+      secondaryLabel: "Open local folder",
+      onSecondaryAction,
+    });
+
+    expect(readConfirmDialogState()).toEqual({
+      status: "confirming",
+      message: "Install update?",
+      variant: "default",
+      initialFocus: undefined,
+      secondaryLabel: "Open local folder",
+      onSecondaryAction,
+    });
+
+    respondToConfirmDialogChoice("confirm");
+    completeConfirmDialogClose();
+    unregister();
+    await expect(confirmation).resolves.toBe("confirm");
+  });
 });

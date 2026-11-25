@@ -74,6 +74,7 @@
   "dfe6e415877b0533": "T3 Code {version} är redo att installeras.",
   "d1d10979d6dcb162": "T3 Code startar om för att installera den. Uppgifter som körs avbryts.",
   "2f0a8211a72e29aa": "Starta om",
+  "10cedfb03540e90f": "Öppna lokal mapp",
   "116a21f6cc215e5f": "Sökningen efter uppdateringar misslyckades",
   "32c88cd9421abf33": "Kunde inte söka efter uppdateringar.",
   "9e5ada64a94c10de": "Den här {build}-versionen kan inte uppdatera sig själv från spåret {saved}. Byt tillbaka uppdateringsspåret till {build}, eller använd Granska bredvid Uppdateringsspår för att försöka byta till {saved} igen.",

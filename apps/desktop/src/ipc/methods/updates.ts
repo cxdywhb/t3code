@@ -66,3 +66,13 @@ export const checkForUpdate = DesktopIpc.makeIpcMethod({
     return yield* updates.check("web-ui");
   }),
 });
+
+export const revealDownloadedUpdate = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_REVEAL_DOWNLOADED_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.updates.revealDownloaded")(function* () {
+    const updates = yield* DesktopUpdates.DesktopUpdates;
+    return yield* updates.revealDownloadedFile;
+  }),
+});

@@ -74,6 +74,7 @@
   "dfe6e415877b0533": "O T3 Code {version} está pronto para instalar.",
   "d1d10979d6dcb162": "O T3 Code será reiniciado para instalá-la. As tarefas em execução serão interrompidas.",
   "2f0a8211a72e29aa": "Reiniciar",
+  "10cedfb03540e90f": "Abrir pasta local",
   "116a21f6cc215e5f": "Falha ao verificar atualizações",
   "32c88cd9421abf33": "Não foi possível verificar atualizações.",
   "9e5ada64a94c10de": "Esta build {build} não consegue se atualizar sozinha pelo canal {saved}. Volte o canal de atualização para {build} ou use Revisar ao lado de Canal de atualização para tentar de novo a mudança para {saved}.",

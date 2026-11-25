@@ -1,9 +1,10 @@
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { act, render } from "../../../test/render";
+import { ConfirmDialogHost } from "../ConfirmDialogHost";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 import type { UpdateEverythingRow } from "./updateEverything.logic";
 
@@ -92,6 +93,28 @@ function publish(update: DesktopUpdateState | null) {
 
 const releaseNotes = () => document.querySelector('[aria-label="Update release notes"]');
 
+function withDesktopBridge(bridge: DesktopBridge): Disposable {
+  const previous = window.desktopBridge;
+  window.desktopBridge = bridge;
+  return {
+    [Symbol.dispose]() {
+      if (previous === undefined) delete window.desktopBridge;
+      else window.desktopBridge = previous;
+    },
+  };
+}
+
+function downloadedUpdate(
+  releaseNotes: DesktopUpdateState["releaseNotes"] = RELEASE_NOTES,
+): DesktopUpdateState {
+  return {
+    ...nightlyUpdate(releaseNotes),
+    status: "downloaded",
+    downloadedVersion: "0.0.50-nightly.2",
+    downloadPercent: 100,
+  };
+}
+
 describe("SidebarUpdatePill release notes", () => {
   it("closes when the release notes stop applying", async () => {
     setup(nightlyUpdate(RELEASE_NOTES));
@@ -166,5 +189,78 @@ describe("SidebarUpdatePill update everything", () => {
     const row = table.getByRole("row", { name: new RegExp(label) });
     await expect.element(row.getByRole("cell", { name: label, exact: true })).toBeVisible();
     await expect.element(row.getByRole("cell", { name: "Claude", exact: true })).toBeVisible();
+  });
+
+  it("offers opening the local folder in downloaded update dialogs and popover", async () => {
+    const revealDownloadedUpdate = vi.fn(async () => true);
+    using _bridge = withDesktopBridge({
+      openExternal: vi.fn(async () => true),
+      revealDownloadedUpdate,
+      installUpdate: vi.fn(async () => ({
+        accepted: true,
+        completed: true,
+        state: downloadedUpdate(),
+      })),
+    } as unknown as DesktopBridge);
+
+    setup(nightlyUpdate(RELEASE_NOTES));
+    await using screen = await render(
+      <>
+        <SidebarUpdatePill />
+        <ConfirmDialogHost />
+      </>,
+    );
+
+    await userEvent.tab();
+    await vi.waitFor(() => expect(releaseNotes()).not.toBeNull());
+    expect(document.body.textContent).not.toContain("Open local folder");
+
+    await publish(downloadedUpdate());
+    await expect.element(page.getByRole("button", { name: "Open local folder" })).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "Open local folder" }));
+    expect(revealDownloadedUpdate).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /Update 0\.0\.50-nightly\.2 downloaded\. Click to restart and install\./,
+      }),
+    );
+    const dialog = page.getByRole("alertdialog");
+    await expect.element(dialog).toBeVisible();
+    await userEvent.click(dialog.getByRole("button", { name: "Open local folder" }));
+    expect(revealDownloadedUpdate).toHaveBeenCalledTimes(2);
+    await expect.element(dialog).toBeVisible();
+
+    await userEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+    await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull());
+  });
+
+  it("offers opening the local folder in the update-everything dialog when an update is downloaded", async () => {
+    const revealDownloadedUpdate = vi.fn(async () => true);
+    using _bridge = withDesktopBridge({
+      openExternal: vi.fn(async () => true),
+      revealDownloadedUpdate,
+    } as unknown as DesktopBridge);
+
+    setup(downloadedUpdate([]), {
+      hasUpdates: true,
+      rows: [
+        {
+          environmentId: null,
+          label: "Local Mac",
+          app: "this-app",
+          skipped: null,
+          providers: ["Claude"],
+        },
+      ],
+    });
+    await using screen = await render(<SidebarUpdatePill />);
+    await userEvent.click(screen.getByRole("button", { name: "Update everything" }));
+
+    const dialog = page.getByRole("alertdialog");
+    await expect.element(dialog).toBeVisible();
+    await userEvent.click(dialog.getByRole("button", { name: "Open local folder" }));
+    expect(revealDownloadedUpdate).toHaveBeenCalledTimes(1);
+    await expect.element(dialog).toBeVisible();
   });
 });

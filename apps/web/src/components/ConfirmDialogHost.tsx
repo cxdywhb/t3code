@@ -69,8 +69,15 @@ export function ConfirmDialogHost() {
   const focusConfirm = state.status !== "idle" && state.initialFocus === "confirm";
   const confirmLabel = state.status === "idle" ? undefined : state.confirmLabel;
   const secondaryLabel = state.status === "idle" ? undefined : state.secondaryLabel;
+  const onSecondaryAction = state.status === "idle" ? undefined : state.onSecondaryAction;
   const onCancel = () => respondToConfirmDialogChoice("cancel");
-  const onSecondary = () => respondToConfirmDialogChoice("secondary");
+  const onSecondary = () => {
+    if (onSecondaryAction) {
+      onSecondaryAction();
+      return;
+    }
+    respondToConfirmDialogChoice("secondary");
+  };
   const onConfirm = () => respondToConfirmDialogChoice("confirm");
 
   return (

@@ -10,7 +10,6 @@ import { isElectron } from "../../env";
 import { m } from "../../i18n/messages";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "../../lib/utils";
-import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -21,14 +20,17 @@ import {
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateIdleTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
   installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
+import {
+  confirmDesktopUpdateInstall,
+  revealDesktopUpdateFolder,
+  showDesktopUpdateDownloadedToast,
+} from "../desktopUpdate.toast";
 import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -315,10 +317,7 @@ function SidebarUpdateControl() {
     if (action === "install") {
       let confirmed = false;
       try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state),
-          { initialFocus: "confirm" },
-        );
+        confirmed = await confirmDesktopUpdateInstall(state, bridge);
       } catch (error) {
         setIsActionPending(false);
         toastManager.add(
@@ -421,6 +420,8 @@ function SidebarUpdateControl() {
       status={iconStatus}
     />
   );
+  const canRevealDownloadedUpdate =
+    action === "install" && typeof window.desktopBridge?.revealDownloadedUpdate === "function";
   const confirmDialog = (
     <UpdateEverythingDialog
       open={isConfirmingEverything}
@@ -430,6 +431,13 @@ function SidebarUpdateControl() {
       rows={everything.rows}
       restarts={everything.restarts}
       checking={providerCheck === "dialog"}
+      {...(canRevealDownloadedUpdate
+        ? {
+            onRevealDownloadedUpdate: () => {
+              void revealDesktopUpdateFolder(window.desktopBridge);
+            },
+          }
+        : {})}
       onConfirm={() => void runEverything()}
     />
   );

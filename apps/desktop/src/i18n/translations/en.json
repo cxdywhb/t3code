@@ -74,6 +74,7 @@
   "dfe6e415877b0533": "T3 Code {version} is ready to install.",
   "d1d10979d6dcb162": "T3 Code will restart to install it. Any running tasks will be interrupted.",
   "2f0a8211a72e29aa": "Restart",
+  "10cedfb03540e90f": "Open Local Folder",
   "116a21f6cc215e5f": "Update check failed",
   "32c88cd9421abf33": "Could not check for updates.",
   "9e5ada64a94c10de": "This {build} build can't update from the {saved} track on its own. Switch the update track back to {build}, or use Review beside Update track to retry the switch to {saved}.",

@@ -63,20 +63,25 @@ const layerElectronApp = Layer.succeed(ElectronApp.ElectronApp, {
 interface MenuServices {
   readonly checkResult?: DesktopUpdateCheckResult;
   readonly shownMessageBox?: Deferred.Deferred<Electron.MessageBoxOptions>;
+  readonly messageBoxResponse?: number;
+  readonly onRevealDownloadedFile?: Effect.Effect<boolean>;
 }
 
-const layerElectronDialog = ({ shownMessageBox }: MenuServices) =>
+const layerElectronDialog = ({ shownMessageBox, messageBoxResponse }: MenuServices) =>
   Layer.succeed(ElectronDialog.ElectronDialog, {
     pickFolder: () => Effect.succeedNone,
     pickFiles: () => Effect.succeed([]),
     showMessageBox: (options) =>
       (shownMessageBox ? Deferred.succeed(shownMessageBox, options) : Effect.void).pipe(
-        Effect.as({ response: options.cancelId ?? 0, checkboxChecked: false }),
+        Effect.as({
+          response: messageBoxResponse ?? options.cancelId ?? 0,
+          checkboxChecked: false,
+        }),
       ),
     showErrorBox: () => Effect.void,
   } satisfies ElectronDialog.ElectronDialog["Service"]);
 
-const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
+const layerDesktopUpdates = ({ checkResult, onRevealDownloadedFile }: MenuServices) =>
   Layer.succeed(DesktopUpdates.DesktopUpdates, {
     getState: Effect.die("unexpected getState"),
     isActionActive: Effect.succeed(false),
@@ -90,6 +95,7 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     download: Effect.die("unexpected download"),
     install: Effect.die("unexpected install"),
     installPrepared: () => Effect.die("unexpected installPrepared"),
+    revealDownloadedFile: onRevealDownloadedFile ?? Effect.die("unexpected revealDownloadedFile"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
 const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
@@ -159,7 +165,10 @@ const configureMenu = (
     ),
   );
 
-const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
+const checkForUpdatesFromMacMenu = (
+  state: Partial<DesktopUpdateState>,
+  extraServices: Omit<MenuServices, "checkResult" | "shownMessageBox"> = {},
+) =>
   Effect.gen(function* () {
     const applicationMenuTemplate =
       yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
@@ -169,6 +178,7 @@ const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
       applicationMenuTemplate,
       { platform: "darwin" },
       {
+        ...extraServices,
         checkResult: {
           checked: true,
           state: {
@@ -405,15 +415,28 @@ describe("DesktopApplicationMenu", () => {
     }),
   );
 
-  it.effect("tells the user a downloaded update is ready when the menu check runs", () =>
+  it.effect("tells the user a downloaded update is ready and can open its local folder", () =>
     Effect.gen(function* () {
-      const dialog = yield* checkForUpdatesFromMacMenu({
-        status: "downloaded",
-        availableVersion: "0.1.7",
-        downloadedVersion: "0.1.7",
-        downloadPercent: 100,
-      });
+      let revealCount = 0;
+      const dialog = yield* checkForUpdatesFromMacMenu(
+        {
+          status: "downloaded",
+          availableVersion: "0.1.7",
+          downloadedVersion: "0.1.7",
+          downloadPercent: 100,
+        },
+        {
+          messageBoxResponse: 1,
+          onRevealDownloadedFile: Effect.sync(() => {
+            revealCount += 1;
+            return true;
+          }),
+        },
+      );
       assert.include(`${dialog.title ?? ""} ${dialog.message} ${dialog.detail ?? ""}`, "0.1.7");
+      assert.deepEqual(dialog.buttons, ["Restart", "Open Local Folder", "Later"]);
+      assert.equal(dialog.cancelId, 2);
+      assert.equal(revealCount, 1);
     }),
   );
 

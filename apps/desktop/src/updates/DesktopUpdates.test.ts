@@ -1536,4 +1536,36 @@ describe("DesktopUpdates under a managed policy", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  it.effect("reveals the downloaded update file or its parent folder and clears on reset", () => {
+    const harness = makeHarness();
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        assert.isFalse(yield* updates.revealDownloadedFile);
+
+        const archivePath = "/tmp/t3-updates/T3-Code-1.2.4-arm64.zip";
+        harness.emit("update-downloaded", { version: "1.2.4", downloadedFile: archivePath });
+        yield* flushCallbacks;
+
+        assert.isTrue(yield* updates.revealDownloadedFile);
+        assert.deepEqual(harness.revealedPaths, [archivePath]);
+        assert.deepEqual(harness.openedPaths, []);
+
+        harness.deletedFiles.add(archivePath);
+        assert.isTrue(yield* updates.revealDownloadedFile);
+        assert.deepEqual(harness.openedPaths, ["/tmp/t3-updates"]);
+
+        harness.deletedFiles.add("/tmp/t3-updates");
+        assert.isFalse(yield* updates.revealDownloadedFile);
+
+        yield* updates.setChannel("nightly");
+        harness.deletedFiles.clear();
+        assert.isFalse(yield* updates.revealDownloadedFile);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
 });

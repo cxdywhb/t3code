@@ -5,6 +5,8 @@ export type ConfirmDialogChoiceResult = "cancel" | "confirm" | "secondary";
 export interface ChoiceConfirmDialogOptions extends ConfirmDialogOptions {
   readonly confirmLabel?: string;
   readonly secondaryLabel?: string;
+  /** Runs when the secondary button is clicked without closing the dialog. */
+  readonly onSecondaryAction?: () => void;
   readonly signal?: AbortSignal;
 }
 
@@ -17,6 +19,7 @@ export type ConfirmDialogState =
       readonly initialFocus: ConfirmDialogOptions["initialFocus"];
       readonly confirmLabel?: string;
       readonly secondaryLabel?: string;
+      readonly onSecondaryAction?: () => void;
     }
   | {
       readonly status: "closing";
@@ -25,6 +28,7 @@ export type ConfirmDialogState =
       readonly initialFocus: ConfirmDialogOptions["initialFocus"];
       readonly confirmLabel?: string;
       readonly secondaryLabel?: string;
+      readonly onSecondaryAction?: () => void;
     };
 
 type PendingConfirmation = {
@@ -33,6 +37,7 @@ type PendingConfirmation = {
   readonly initialFocus: ConfirmDialogOptions["initialFocus"];
   readonly confirmLabel?: string;
   readonly secondaryLabel?: string;
+  readonly onSecondaryAction?: () => void;
   readonly resolveChoice: (choice: ConfirmDialogChoiceResult | undefined) => void;
   cleanupAbort?: (() => void) | undefined;
 };
@@ -47,7 +52,7 @@ function buildDialogState(
   status: "confirming" | "closing",
   source: Pick<
     PendingConfirmation,
-    "message" | "variant" | "initialFocus" | "confirmLabel" | "secondaryLabel"
+    "message" | "variant" | "initialFocus" | "confirmLabel" | "secondaryLabel" | "onSecondaryAction"
   >,
 ): ConfirmDialogState {
   return {
@@ -57,6 +62,9 @@ function buildDialogState(
     initialFocus: source.initialFocus,
     ...(source.confirmLabel === undefined ? {} : { confirmLabel: source.confirmLabel }),
     ...(source.secondaryLabel === undefined ? {} : { secondaryLabel: source.secondaryLabel }),
+    ...(source.onSecondaryAction === undefined
+      ? {}
+      : { onSecondaryAction: source.onSecondaryAction }),
   };
 }
 
@@ -106,6 +114,7 @@ function enqueueChoiceConfirmation(
     readonly initialFocus: ConfirmDialogOptions["initialFocus"];
     readonly confirmLabel?: string;
     readonly secondaryLabel?: string;
+    readonly onSecondaryAction?: () => void;
     readonly signal?: AbortSignal;
   },
 ): Promise<ConfirmDialogChoiceResult | undefined> {
@@ -120,6 +129,9 @@ function enqueueChoiceConfirmation(
       initialFocus: options.initialFocus,
       ...(options.confirmLabel === undefined ? {} : { confirmLabel: options.confirmLabel }),
       ...(options.secondaryLabel === undefined ? {} : { secondaryLabel: options.secondaryLabel }),
+      ...(options.onSecondaryAction === undefined
+        ? {}
+        : { onSecondaryAction: options.onSecondaryAction }),
       resolveChoice,
     };
 
@@ -180,6 +192,9 @@ export function requestChoiceConfirmDialog(
     initialFocus: options.initialFocus,
     ...(options.confirmLabel === undefined ? {} : { confirmLabel: options.confirmLabel }),
     ...(options.secondaryLabel === undefined ? {} : { secondaryLabel: options.secondaryLabel }),
+    ...(options.onSecondaryAction === undefined
+      ? {}
+      : { onSecondaryAction: options.onSecondaryAction }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
 }

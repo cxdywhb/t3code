@@ -74,6 +74,7 @@
   "dfe6e415877b0533": "T3 Code {version} está listo para instalarse.",
   "d1d10979d6dcb162": "T3 Code se reiniciará para instalarla. Las tareas en ejecución se interrumpirán.",
   "2f0a8211a72e29aa": "Reiniciar",
+  "10cedfb03540e90f": "Abrir carpeta local",
   "116a21f6cc215e5f": "Error al buscar actualizaciones",
   "32c88cd9421abf33": "No se pudo buscar actualizaciones.",
   "9e5ada64a94c10de": "Esta compilación {build} no puede actualizarse por sí sola desde el canal {saved}. Vuelve a poner el canal de actualizaciones en {build} o usa Revisar junto a Canal de actualizaciones para reintentar el cambio a {saved}.",

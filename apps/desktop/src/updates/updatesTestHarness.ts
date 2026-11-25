@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -57,6 +58,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
   const installSteps: string[] = [];
+  const revealedPaths: string[] = [];
+  const openedPaths: string[] = [];
 
   const addListener = (eventName: string, listener: (...args: readonly unknown[]) => void) => {
     const eventListeners = listeners.get(eventName) ?? new Set();
@@ -142,6 +145,22 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       installSteps.push("closeSshTunnels");
     }),
   });
+
+  const layerShell = Layer.succeed(ElectronShell.ElectronShell, {
+    openExternal: () => Effect.succeed(true),
+    openSystemSettings: () => Effect.succeed(true),
+    showItemInFolder: (targetPath) =>
+      Effect.sync(() => {
+        revealedPaths.push(targetPath);
+        return true;
+      }),
+    openPath: (targetPath) =>
+      Effect.sync(() => {
+        openedPaths.push(targetPath);
+        return true;
+      }),
+    copyText: () => Effect.void,
+  } satisfies ElectronShell.ElectronShell["Service"]);
 
   let backendDesiredRunning = options.backendDesiredRunning ?? true;
   const stubBackendInstance: DesktopBackendPool.DesktopBackendInstance = {
@@ -295,6 +314,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layer = DesktopUpdates.layer.pipe(
     Layer.provide(layerFileSystem),
     Layer.provide(DesktopUpdatePolicy.layerTest(options.policy)),
+    Layer.provideMerge(layerShell),
     Layer.provideMerge(layerUpdater),
     Layer.provideMerge(layerWindow),
     Layer.provideMerge(layerBackend),
@@ -324,6 +344,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     installRecords,
     /** Paths removed behind the app's back, as by a cache cleaner. */
     deletedFiles,
+    revealedPaths,
+    openedPaths,
     previousInstallRecord: () => previousInstallRecord,
     downloadCount: () => downloadCount,
     feedUrls: (): ElectronUpdater.ElectronUpdaterFeedUrl[] => feedUrls,

@@ -130,11 +130,16 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
           ? m(msg("A new version of T3 Code is ready to install."))
           : m(msg("T3 Code {version} is ready to install."), { version }),
       detail: m(msg("T3 Code will restart to install it. Any running tasks will be interrupted.")),
-      buttons: [m(msg("Restart", { $context: "button, restarts the app" })), m(msg("Later"))],
+      buttons: [
+        m(msg("Restart", { $context: "button, restarts the app" })),
+        m(msg("Open Local Folder")),
+        m(msg("Later")),
+      ],
       defaultId: 0,
-      cancelId: 1,
+      cancelId: 2,
     });
     if (response === 0) yield* updates.install;
+    else if (response === 1) yield* updates.revealDownloadedFile;
   } else if (updateState.status === "error") {
     yield* electronDialog.showMessageBox({
       type: "warning",
