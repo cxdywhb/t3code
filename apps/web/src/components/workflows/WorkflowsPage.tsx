@@ -34,12 +34,15 @@ import {
   type WorkflowPaneState,
 } from "./workflowPane.logic";
 
+import { ResearchCollaboration } from "./ResearchCollaboration";
+
 const COPY_PATH = "copy-path";
 
 // The editor brings the code view's highlighter with it, which the run list has no use for.
 const WorkflowDefinitionEditor = lazy(() => import("./WorkflowDefinitionEditor"));
 
 export interface WorkflowsSearch extends WorkflowPaneState {
+  readonly rd?: boolean;
   readonly env?: string;
   readonly run?: string;
   /** Show the definition files instead of the runs: all of them, or `file` in the editor. */
@@ -147,6 +150,9 @@ export function WorkflowsPage() {
             reserveNativeControls={!paneOpen}
             className="border-b"
           >
+            <Button variant="outline" size="sm" onClick={() => go({ ...env, rd: !search.rd })}>
+              {search.rd ? gt("Back to Workflows") : gt("Research collaboration")}
+            </Button>
             <WorkspaceBreadcrumb ariaLabel={gt("Workflows breadcrumb")} className="flex-1">
               <WorkspaceBreadcrumbItem current={!editing}>
                 {editing ? (
@@ -209,7 +215,7 @@ export function WorkflowsPage() {
               <Select
                 value={environmentId ?? asked}
                 onValueChange={(value) => {
-                  if (value !== null) select({ env: value });
+                  if (value !== null) select({ env: value, ...(search.rd ? { rd: true } : {}) });
                 }}
               >
                 <SelectTrigger
@@ -287,6 +293,12 @@ export function WorkflowsPage() {
             <WorkflowsEmpty
               title={gt("No environment connected")}
               description={gt("Connect an environment to see its workflow runs.")}
+            />
+          ) : search.rd ? (
+            <ResearchCollaboration
+              environmentId={environmentId}
+              selected={search.run}
+              onSelect={(id) => select({ ...env, run: id, rd: true })}
             />
           ) : (
             <WorkflowRunsView

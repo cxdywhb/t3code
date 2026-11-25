@@ -10,6 +10,7 @@ export const Route = createFileRoute("/_chat/workflows")({
   validateSearch: (raw: Record<string, unknown>): WorkflowsSearch => ({
     ...(typeof raw.env === "string" && raw.env ? { env: sliceParam(raw.env) } : {}),
     ...(typeof raw.run === "string" && raw.run ? { run: sliceParam(raw.run) } : {}),
+    ...(raw.rd === true || raw.rd === "true" ? { rd: true } : {}),
     ...readWorkflowPane(raw.pane, raw.tab),
     ...(raw.definitions === true || raw.definitions === "true" ? { definitions: true } : {}),
     ...(typeof raw.file === "string" && raw.file ? { file: sliceParam(raw.file) } : {}),
