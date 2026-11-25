@@ -27,6 +27,10 @@ import {
 
 export type IssueAutomationRepositoryError = SqlErr | DecodeErr;
 
+const WriteActionsJson = Schema.fromJsonString(IssueAutomationConnector.fields.writeActions);
+const decodeWriteActions = Schema.decodeUnknownEffect(WriteActionsJson);
+const encodeWriteActions = Schema.encodeEffect(WriteActionsJson);
+
 const ScopesJson = Schema.fromJsonString(Schema.Array(IssueAutomationRemoteScope));
 const RepoBindingJson = Schema.fromJsonString(IssueAutomationProfile.fields.repositories);
 const ModelStrategyJson = Schema.fromJsonString(IssueAutomationProfile.fields.models);
@@ -68,7 +72,8 @@ interface ConnectorRow {
   readonly platform: string;
   readonly name: string;
   readonly base_url: string;
-  readonly account: string;
+  readonly mcp_url: string | null;
+  readonly write_actions_json: string;
   readonly status: string;
   readonly viewer_name: string | null;
   readonly server_version: string | null;
@@ -143,9 +148,13 @@ interface TaskRow {
 export class IssueAutomationRepository extends Context.Service<
   IssueAutomationRepository,
   {
-    readonly listConnectors: (
-      hasSecret: (id: IssueAutomationConnectorId) => Effect.Effect<boolean>,
-    ) => Effect.Effect<ReadonlyArray<IssueAutomationConnector>, IssueAutomationRepositoryError>;
+    readonly listConnectors: Effect.Effect<
+      ReadonlyArray<IssueAutomationConnector>,
+      IssueAutomationRepositoryError
+    >;
+    readonly getConnector: (
+      id: IssueAutomationConnectorId,
+    ) => Effect.Effect<IssueAutomationConnector | undefined, IssueAutomationRepositoryError>;
     readonly upsertConnector: (
       connector: IssueAutomationConnector,
     ) => Effect.Effect<void, IssueAutomationRepositoryError>;
@@ -199,7 +208,6 @@ const make = Effect.gen(function* () {
 
   const rowToConnector = Effect.fn("IssueAutomationRepository.rowToConnector")(function* (
     row: ConnectorRow,
-    secretPresent: boolean,
   ) {
     const rawScopes = yield* decodeScopes(row.scopes_json);
     const scopes = sortZenTaoScopesDesc(rawScopes);
@@ -208,8 +216,8 @@ const make = Effect.gen(function* () {
       platform: IssueAutomationPlatformKind.make(row.platform),
       name: row.name,
       baseUrl: row.base_url,
-      account: row.account,
-      hasSecret: secretPresent,
+      mcpUrl: row.mcp_url,
+      writeActions: yield* decodeWriteActions(row.write_actions_json),
       status: row.status,
       viewerName: row.viewer_name,
       serverVersion: row.server_version,
@@ -300,20 +308,22 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const listConnectors: IssueAutomationRepository["Service"]["listConnectors"] = Effect.fn(
-    "IssueAutomationRepository.listConnectors",
+  const listConnectors: IssueAutomationRepository["Service"]["listConnectors"] =
+    sql<ConnectorRow>`SELECT * FROM issue_automation_connectors ORDER BY updated_at DESC`.pipe(
+      Effect.flatMap((rows) => Effect.forEach(rows, rowToConnector)),
+      Effect.mapError(toRepoError("listIssueAutomationConnectors", "IssueAutomationConnector")),
+    );
+
+  const getConnector: IssueAutomationRepository["Service"]["getConnector"] = Effect.fn(
+    "IssueAutomationRepository.getConnector",
   )(
-    function* (hasSecret) {
-      const rows = yield* sql<ConnectorRow>`
-        SELECT * FROM issue_automation_connectors ORDER BY updated_at DESC
+    function* (id) {
+      const [row] = yield* sql<ConnectorRow>`
+        SELECT * FROM issue_automation_connectors WHERE connector_id = ${id}
       `;
-      return yield* Effect.forEach(rows, (row) =>
-        hasSecret(IssueAutomationConnectorId.make(row.connector_id)).pipe(
-          Effect.flatMap((present) => rowToConnector(row, present)),
-        ),
-      );
+      return row === undefined ? undefined : yield* rowToConnector(row);
     },
-    Effect.mapError(toRepoError("listIssueAutomationConnectors", "IssueAutomationConnector")),
+    Effect.mapError(toRepoError("getIssueAutomationConnector", "IssueAutomationConnector")),
   );
 
   const upsertConnector: IssueAutomationRepository["Service"]["upsertConnector"] = Effect.fn(
@@ -321,20 +331,22 @@ const make = Effect.gen(function* () {
   )(
     function* (connector) {
       const scopesJson = yield* encodeScopes(connector.scopes);
+      const writeActionsJson = yield* encodeWriteActions(connector.writeActions);
       yield* sql`
         INSERT INTO issue_automation_connectors (
-          connector_id, platform, name, base_url, account, status,
+          connector_id, platform, name, base_url, mcp_url, write_actions_json, status,
           viewer_name, server_version, status_detail, scopes_json, updated_at
         ) VALUES (
           ${connector.id}, ${connector.platform}, ${connector.name}, ${connector.baseUrl},
-          ${connector.account}, ${connector.status}, ${connector.viewerName},
+          ${connector.mcpUrl}, ${writeActionsJson}, ${connector.status}, ${connector.viewerName},
           ${connector.serverVersion}, ${connector.statusDetail}, ${scopesJson}, ${connector.updatedAt}
         )
         ON CONFLICT (connector_id) DO UPDATE SET
           platform = excluded.platform,
           name = excluded.name,
           base_url = excluded.base_url,
-          account = excluded.account,
+          mcp_url = excluded.mcp_url,
+          write_actions_json = excluded.write_actions_json,
           status = excluded.status,
           viewer_name = excluded.viewer_name,
           server_version = excluded.server_version,
@@ -546,6 +558,7 @@ const make = Effect.gen(function* () {
 
   return IssueAutomationRepository.of({
     listConnectors,
+    getConnector,
     upsertConnector,
     deleteConnector,
     listProfiles,

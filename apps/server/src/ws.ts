@@ -2015,7 +2015,10 @@ export const layerWsRpc = (
         [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
         [WS_METHODS.issueAutomationGetState]: () => issueAutomation.getState,
         [WS_METHODS.issueAutomationSubscribe]: () => issueAutomation.subscribe,
-        [WS_METHODS.issueAutomationSaveConnector]: (input) => issueAutomation.saveConnector(input),
+        [WS_METHODS.issueAutomationStartConnectorAuth]: (input) =>
+          issueAutomation.startConnectorAuth(input),
+        [WS_METHODS.issueAutomationFinishConnectorAuth]: (input) =>
+          issueAutomation.finishConnectorAuth(input),
         [WS_METHODS.issueAutomationDeleteConnector]: (input) =>
           issueAutomation.deleteConnector(input),
         [WS_METHODS.issueAutomationRefreshScopes]: (input) => issueAutomation.refreshScopes(input),

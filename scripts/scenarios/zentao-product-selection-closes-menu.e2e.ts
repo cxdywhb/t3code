@@ -1,8 +1,9 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- The scenario supplies a loopback ZenTao fixture.
-import * as NodeHttp from "node:http";
-import { IssueAutomationPlatformKind, WS_METHODS } from "@t3tools/contracts";
+import { IssueAutomationConnectorId, WS_METHODS } from "@t3tools/contracts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect } from "e2e";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { T3_HOME } from "../e2e.config.ts";
 import { rpcClient, runPromise, test, WEB } from "./t3.ts";
@@ -11,26 +12,18 @@ test(
   "Selecting a ZenTao product closes the unattended rule menu",
   WEB,
   async ({ t3, app, screen }) => {
-    const replies: Record<string, unknown> = {
-      getconfig: { requestType: "GET" },
-      getSessionID: { sessionID: "fixture-session" },
-      login: { status: "success" },
-      browse: {
-        products: Object.fromEntries(
-          Array.from({ length: 7 }, (_, index) => [index + 1, `Test product ${index + 1}`]),
-        ),
-      },
-    };
-    await using zentao = NodeHttp.createServer((request, response) => {
-      request.resume();
-      const { searchParams } = new URL(request.url ?? "/", "http://127.0.0.1");
-      const action = searchParams.get("f") ?? searchParams.get("mode") ?? "";
-      response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify(replies[action] ?? {}));
+    const connectorId = IssueAutomationConnectorId.make("fake-zentao-product-menu");
+    const scopes = Array.from({ length: 7 }, (_, index) => ({
+      id: String(index + 1),
+      name: `Test product ${index + 1}`,
+    }));
+    const scopesJson = JSON.stringify(scopes);
+    const mcpUrl = "https://127.0.0.1:1/mcp";
+    const fixtureCredential = JSON.stringify({
+      mcpUrl,
+      client: { client_id: "fixture" },
+      tokens: { access_token: "fixture", token_type: "Bearer" },
     });
-    await new Promise<void>((resolve) => zentao.listen(0, "127.0.0.1", resolve));
-    const address = zentao.address();
-    if (address === null || typeof address === "string") throw new Error("No fixture port");
 
     await t3.project("demo");
     await t3.project("target-repo");
@@ -38,15 +31,28 @@ test(
       Effect.gen(function* () {
         const client = yield* rpcClient(T3_HOME, app.baseUrl ?? "");
         yield* Effect.acquireRelease(
-          client[WS_METHODS.issueAutomationSaveConnector]({
-            platform: IssueAutomationPlatformKind.make("zentao"),
-            name: "Test ZenTao",
-            baseUrl: `http://127.0.0.1:${address.port}`,
-            account: "fixture",
-            secret: "fixture-secret",
-          }),
-          (connector) =>
-            client[WS_METHODS.issueAutomationDeleteConnector]({ connectorId: connector.id }).pipe(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.writeFileString(
+              `${T3_HOME}/userdata/secrets/issue-automation-connector-${connectorId}-oauth.bin`,
+              fixtureCredential,
+            );
+            yield* sql`
+              INSERT INTO issue_automation_connectors (
+                connector_id, platform, name, base_url, mcp_url, status, scopes_json, updated_at
+              ) VALUES (
+                ${connectorId}, 'zentao', 'Test ZenTao', 'https://bugs.example.test',
+                ${mcpUrl}, 'connected', ${scopesJson}, '2026-11-24T00:00:00Z'
+              )
+            `;
+          }).pipe(
+            Effect.provide(
+              NodeSqliteClient.layer({ filename: `${T3_HOME}/userdata/statev2.sqlite` }),
+            ),
+          ),
+          () =>
+            client[WS_METHODS.issueAutomationDeleteConnector]({ connectorId }).pipe(
               Effect.ignore({ log: true }),
             ),
         );

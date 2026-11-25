@@ -432,6 +432,20 @@ work on with the `link_issue` tool.
 
 Writing to a tracker over a remote connection requires the `source-control:write` scope.
 
+### Connect ZenTao issue automation
+
+Open **Issue automation** and add a **ZenTao (MCP)** connection. Enter your service's full
+HTTPS MCP address and choose **Authorize MCP**. Approve access in your browser, copy the
+address it redirects to, and paste it into T3 Code to verify the connection. The MCP service
+must support OAuth browser authorization with dynamic client registration and expose the
+ZenTao product, search, and Bug detail tools. Add the optional ZenTao web address to open Bug
+links when the service does not supply them.
+
+After upgrading from a password connection, edit the existing connection and authorize the
+MCP service for the same ZenTao instance. Existing rules and run history stay with that
+connection, and polling resumes after authorization. When access expires and cannot be
+renewed, open the connection and authorize again.
+
 ## GitHub stacks
 
 The Pull requests page shows each PR's position in its GitHub stack. Open the stack badge in a

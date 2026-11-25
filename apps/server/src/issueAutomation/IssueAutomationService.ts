@@ -33,7 +33,9 @@ import {
   type IssueAutomationRemoteIssue,
   type IssueAutomationRemoteIssueDetail,
   type IssueAutomationRepoBinding,
-  type IssueAutomationSaveConnectorInput,
+  type IssueAutomationStartConnectorAuthInput,
+  type IssueAutomationStartConnectorAuthResult,
+  type IssueAutomationFinishConnectorAuthInput,
   type IssueAutomationSaveProfileInput,
   type IssueAutomationScanProfileIssuesInput,
   type IssueAutomationScanProfileIssuesResult,
@@ -72,6 +74,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as RcMap from "effect/RcMap";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -89,6 +92,14 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProjectService from "../project/ProjectService.ts";
 import { buildZenTaoBugWebUrl } from "./connectors/zentao/ZenTaoClient.ts";
 import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
+import {
+  McpAuthorization,
+  McpConnectionError,
+  parseMcpCallback,
+  parseMcpUrl,
+  readStoredOAuth,
+  type StoredOAuth,
+} from "./IssueAutomationMcp.ts";
 import * as IssueAutomationRepository from "./IssueAutomationRepository.ts";
 import { buildManualRepairPrompt } from "./ManualRepairPrompt.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
@@ -105,9 +116,25 @@ const POLL_TICK_INTERVAL = Duration.seconds(30);
 const isIssueAutomationError = Schema.is(IssueAutomationError);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const encodeSecretJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 function connectorSecretKey(id: IssueAutomationConnectorId): string {
-  return `issue-automation-connector-${id}-secret`;
+  return `issue-automation-connector-${id}-oauth`;
+}
+
+const isMcpConnectionError = Schema.is(McpConnectionError);
+
+function mcpError(operation: string, cause: unknown): IssueAutomationError {
+  if (isMcpConnectionError(cause)) {
+    return new IssueAutomationError({
+      operation: cause.needsAuthorization ? "reauthorizeConnector" : operation,
+      detail: cause.message,
+    });
+  }
+  return new IssueAutomationError({
+    operation,
+    detail: "无法连接禅道 MCP，请检查地址、服务和授权配置。",
+  });
 }
 
 function profileForClient({
@@ -274,8 +301,11 @@ export class IssueAutomationService extends Context.Service<
   {
     readonly getState: Effect.Effect<IssueAutomationStateSnapshot, IssueAutomationError>;
     readonly subscribe: Stream.Stream<IssueAutomationStateSnapshot, IssueAutomationError>;
-    readonly saveConnector: (
-      input: IssueAutomationSaveConnectorInput,
+    readonly startConnectorAuth: (
+      input: IssueAutomationStartConnectorAuthInput,
+    ) => Effect.Effect<IssueAutomationStartConnectorAuthResult, IssueAutomationError>;
+    readonly finishConnectorAuth: (
+      input: IssueAutomationFinishConnectorAuthInput,
     ) => Effect.Effect<IssueAutomationConnector, IssueAutomationError>;
     readonly deleteConnector: (
       input: IssueAutomationDeleteConnectorInput,
@@ -337,6 +367,9 @@ const make = Effect.gen(function* () {
     new Map(),
   );
   const globalSemaphore = yield* Semaphore.make(3);
+  const connectorLocks = yield* RcMap.make({
+    lookup: (_id: IssueAutomationConnectorId) => Semaphore.make(1),
+  });
   const profileWrites = yield* Semaphore.make(1);
   const taskWrites = yield* Semaphore.make(1);
   const taskStarts = yield* Semaphore.make(1);
@@ -369,47 +402,113 @@ const make = Effect.gen(function* () {
           cause,
         });
 
-  const hasConnectorSecret = (id: IssueAutomationConnectorId) =>
-    secrets.get(connectorSecretKey(id)).pipe(
-      Effect.map(Option.isSome),
-      Effect.orElseSucceed(() => false),
+  const getConnector = Effect.fn("IssueAutomationService.getConnector")(
+    (id: IssueAutomationConnectorId) => repo.getConnector(id),
+    Effect.mapError(mapRepoErr("readConnector")),
+  );
+
+  const withConnectorLock = <A, E>(id: IssueAutomationConnectorId, effect: Effect.Effect<A, E>) =>
+    Effect.scoped(
+      Effect.flatMap(RcMap.get(connectorLocks, id), (lock) => lock.withPermits(1)(effect)),
     );
+
+  const storeConnectorOAuth = Effect.fn("IssueAutomationService.storeConnectorOAuth")(function* (
+    key: string,
+    mcpUrl: string,
+    oauth: StoredOAuth,
+  ) {
+    const serialized = yield* encodeSecretJson({
+      mcpUrl,
+      ...oauth,
+    }).pipe(Effect.mapError(() => mcpError("encodeConnectorSecret", undefined)));
+    yield* secrets
+      .set(key, encoder.encode(serialized))
+      .pipe(Effect.mapError(mapRepoErr("storeConnectorSecret")));
+  });
+
+  const markDisconnected = Effect.fn("IssueAutomationService.markDisconnected")(function* (
+    connector: IssueAutomationConnector,
+    detail: string,
+  ) {
+    yield* repo
+      .upsertConnector({ ...connector, status: "disconnected", statusDetail: detail })
+      .pipe(Effect.mapError(mapRepoErr("disconnectConnector")));
+    yield* publishSnapshot;
+  });
+
+  const credentialsFor = (
+    connector: IssueAutomationConnector,
+    mcpUrl: string,
+  ): PlatformCredentials => ({
+    baseUrl: connector.baseUrl,
+    withClient: (operation, run) =>
+      withConnectorLock(
+        connector.id,
+        Effect.gen(function* () {
+          const current = yield* getConnector(connector.id);
+          if (
+            current?.mcpUrl !== mcpUrl ||
+            current.baseUrl !== connector.baseUrl ||
+            current.status === "disconnected"
+          ) {
+            return yield* new IssueAutomationError({
+              operation: "readConnector",
+              detail: "禅道 MCP 连接已变更或未授权，请刷新页面或重新授权。",
+            });
+          }
+          const secretKey = connectorSecretKey(connector.id);
+          const stored = yield* secrets
+            .get(secretKey)
+            .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
+          const oauth = Option.isSome(stored)
+            ? readStoredOAuth(decoder.decode(stored.value), mcpUrl)
+            : undefined;
+          if (!oauth) {
+            const detail = "禅道 MCP 授权已失效，请重新授权。";
+            yield* markDisconnected(current, detail);
+            return yield* new IssueAutomationError({ operation: "reauthorizeConnector", detail });
+          }
+
+          const session = new McpAuthorization(new URL(mcpUrl), NodeCrypto.randomUUID(), oauth);
+          const outcome = yield* Effect.result(
+            Effect.tryPromise({
+              try: (signal) => session.withClient(signal, run),
+              catch: (cause) => mcpError(operation, cause),
+            }),
+          );
+          const credentials = session.credentials;
+          if (session.tokensChanged && credentials) {
+            yield* storeConnectorOAuth(secretKey, mcpUrl, credentials);
+          }
+          if (outcome._tag === "Failure") {
+            if (outcome.failure.operation === "reauthorizeConnector") {
+              yield* markDisconnected(current, outcome.failure.detail);
+            }
+            return yield* outcome.failure;
+          }
+          return outcome.success;
+        }),
+      ),
+  });
 
   const readConnectorCredentials = Effect.fn("IssueAutomationService.readConnectorCredentials")(
     function* (connectorId: IssueAutomationConnectorId) {
-      const connectors = yield* repo
-        .listConnectors(hasConnectorSecret)
-        .pipe(Effect.mapError(mapRepoErr("readConnector")));
-      const connector = connectors.find((item) => item.id === connectorId);
-      if (!connector) {
+      const connector = yield* getConnector(connectorId);
+      if (!connector?.mcpUrl || connector.status === "disconnected") {
         return yield* new IssueAutomationError({
           operation: "readConnector",
-          detail: "未找到对应的问题平台连接配置",
-        });
-      }
-      const storedSecret = yield* secrets
-        .get(connectorSecretKey(connector.id))
-        .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
-      if (Option.isNone(storedSecret)) {
-        return yield* new IssueAutomationError({
-          operation: "readConnectorSecret",
-          detail: `平台连接 "${connector.name}" 尚未配置密码或凭据已清除`,
+          detail: "请先连接或重新授权禅道 MCP。",
         });
       }
       const plugin = yield* plugins.requirePlugin(connector.platform);
-      const credentials: PlatformCredentials = {
-        baseUrl: connector.baseUrl,
-        account: connector.account,
-        secret: decoder.decode(storedSecret.value),
-      };
-      return { connector, plugin, credentials };
+      return { connector, plugin, credentials: credentialsFor(connector, connector.mcpUrl) };
     },
   );
 
   const buildSnapshot: Effect.Effect<IssueAutomationStateSnapshot, IssueAutomationError> =
     Effect.gen(function* () {
       const [connectors, profiles, tasks, runningMap] = yield* Effect.all([
-        repo.listConnectors(hasConnectorSecret).pipe(Effect.mapError(mapRepoErr("listConnectors"))),
+        repo.listConnectors.pipe(Effect.mapError(mapRepoErr("listConnectors"))),
         repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles"))),
         repo.listTasks(1000).pipe(Effect.mapError(mapRepoErr("listTasks"))),
         Ref.get(activeTaskFibers),
@@ -1048,7 +1147,7 @@ const make = Effect.gen(function* () {
           }
 
           // Step 5: Write-back to ZenTao / Issue Platform
-          if (policy.autoWriteComment) {
+          if (policy.autoWriteComment && connector.writeActions.includes("comment")) {
             current = yield* updateTaskState(
               current,
               { stage: "writing_back" },
@@ -1377,11 +1476,28 @@ const make = Effect.gen(function* () {
     return { enqueuedCount, skippedCount };
   });
 
+  yield* repo.listConnectors.pipe(
+    Effect.flatMap((connectors) =>
+      Effect.forEach(connectors, (connector) =>
+        secrets.remove(`issue-automation-connector-${connector.id}-secret`).pipe(Effect.ignore),
+      ),
+    ),
+    Effect.ignore,
+  );
+
   yield* Effect.gen(function* () {
-    const profiles = yield* repo.listProfiles.pipe(Effect.orElseSucceed(() => []));
+    const [profiles, connectors] = yield* Effect.all([
+      repo.listProfiles.pipe(Effect.orElseSucceed(() => [])),
+      repo.listConnectors.pipe(Effect.orElseSucceed(() => [])),
+    ]);
+    const available = new Set(
+      connectors
+        .filter((connector) => connector.status !== "disconnected")
+        .map((connector) => connector.id),
+    );
     const nowMs = yield* Clock.currentTimeMillis;
     for (const profile of profiles) {
-      if (!profile.enabled) continue;
+      if (!profile.enabled || !available.has(profile.connectorId)) continue;
       const lastMs = profile.lastPolledAt ? Date.parse(profile.lastPolledAt) : 0;
       const intervalMs = profile.filter.pollIntervalMinutes * 60 * 1000;
       if (!Number.isFinite(lastMs) || nowMs - lastMs >= intervalMs) {
@@ -1394,73 +1510,192 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  const saveConnector: IssueAutomationService["Service"]["saveConnector"] = Effect.fn(
-    "IssueAutomationService.saveConnector",
+  const authorizationAttempts = new Map<
+    string,
+    {
+      readonly input: IssueAutomationStartConnectorAuthInput;
+      readonly connectorId: IssueAutomationConnectorId;
+      readonly previousMcpUrl: string | null;
+      readonly expiresAt: number;
+      readonly session: McpAuthorization;
+    }
+  >();
+
+  const startConnectorAuth: IssueAutomationService["Service"]["startConnectorAuth"] = Effect.fn(
+    "IssueAutomationService.startConnectorAuth",
   )(function* (input) {
     const plugin = yield* plugins.requirePlugin(input.platform);
-    const connectorId = input.id ?? IssueAutomationConnectorId.make(NodeCrypto.randomUUID());
-    const normalizedUrl = plugin.normalizeBaseUrl(input.baseUrl);
-
-    let secretText = input.secret?.trim();
-    if (!secretText) {
-      const existing = yield* secrets
-        .get(connectorSecretKey(connectorId))
-        .pipe(Effect.mapError(mapRepoErr("readStoredConnectorSecret")));
-      if (Option.isNone(existing)) {
-        return yield* new IssueAutomationError({
-          operation: "saveConnector",
-          detail: "首次连接请输入平台密码或认证令牌",
-        });
-      }
-      secretText = decoder.decode(existing.value);
+    const existing = input.id === undefined ? undefined : yield* getConnector(input.id);
+    if (input.id !== undefined && existing?.platform !== input.platform) {
+      return yield* new IssueAutomationError({
+        operation: "startConnectorAuth",
+        detail: "未找到对应的问题平台连接配置。",
+      });
     }
 
-    const probe = yield* plugin.probeAndListScopes({
-      baseUrl: normalizedUrl,
-      account: input.account.trim(),
-      secret: secretText,
+    const normalized = yield* Effect.try({
+      try: () => ({
+        mcpUrl: parseMcpUrl(input.mcpUrl),
+        baseUrl: plugin.normalizeBaseUrl(input.baseUrl),
+      }),
+      catch: (cause) => mcpError("startConnectorAuth", cause),
     });
+    const attemptId = NodeCrypto.randomUUID();
+    const session = new McpAuthorization(normalized.mcpUrl, attemptId);
+    yield* Effect.tryPromise({
+      try: (signal) => session.withClient(signal, (client) => client.listTools()),
+      catch: (cause) => mcpError("startConnectorAuth", cause),
+    }).pipe(Effect.catch((error) => (session.authorizationUrl ? Effect.void : Effect.fail(error))));
+    if (!session.authorizationUrl) {
+      return yield* new IssueAutomationError({
+        operation: "startConnectorAuth",
+        detail: "该 MCP 服务没有提供网页 OAuth 授权。",
+      });
+    }
 
-    yield* secrets
-      .set(connectorSecretKey(connectorId), encoder.encode(secretText))
-      .pipe(Effect.mapError(mapRepoErr("storeConnectorSecret")));
+    const now = yield* Clock.currentTimeMillis;
+    for (const [id, attempt] of authorizationAttempts) {
+      if (attempt.expiresAt <= now) authorizationAttempts.delete(id);
+    }
+    if (authorizationAttempts.size >= 100) {
+      return yield* new IssueAutomationError({
+        operation: "startConnectorAuth",
+        detail: "待完成的授权过多，请稍后重试。",
+      });
+    }
+    authorizationAttempts.set(attemptId, {
+      input: { ...input, mcpUrl: normalized.mcpUrl.href, baseUrl: normalized.baseUrl },
+      connectorId: input.id ?? IssueAutomationConnectorId.make(NodeCrypto.randomUUID()),
+      previousMcpUrl: existing?.mcpUrl ?? null,
+      expiresAt: now + 10 * 60_000,
+      session,
+    });
+    return { attemptId, authorizationUrl: session.authorizationUrl };
+  });
 
-    const updatedAt = yield* nowIso;
-    const connector: IssueAutomationConnector = {
-      id: connectorId,
-      platform: input.platform,
-      name: input.name.trim(),
-      baseUrl: probe.normalizedBaseUrl,
-      account: input.account.trim(),
-      hasSecret: true,
-      status: "connected",
-      viewerName: probe.viewerName,
-      serverVersion: probe.serverVersion,
-      statusDetail: null,
-      scopes: [...probe.scopes],
-      updatedAt,
-    };
-    yield* repo.upsertConnector(connector).pipe(Effect.mapError(mapRepoErr("saveConnector")));
-    yield* publishSnapshot;
-    return connector;
+  const finishConnectorAuth: IssueAutomationService["Service"]["finishConnectorAuth"] = Effect.fn(
+    "IssueAutomationService.finishConnectorAuth",
+  )(function* ({ attemptId, callbackUrl }) {
+    const now = yield* Clock.currentTimeMillis;
+    const attempt = authorizationAttempts.get(attemptId);
+    if (!attempt || attempt.expiresAt <= now) {
+      authorizationAttempts.delete(attemptId);
+      return yield* new IssueAutomationError({
+        operation: "finishConnectorAuth",
+        detail: "授权已过期或已使用，请重新授权。",
+      });
+    }
+    const code = yield* Effect.try({
+      try: () => parseMcpCallback(Redacted.value(callbackUrl), attemptId),
+      catch: (cause) => mcpError("finishConnectorAuth", cause),
+    });
+    authorizationAttempts.delete(attemptId);
+    const { input, connectorId, previousMcpUrl, session } = attempt;
+    const plugin = yield* plugins.requirePlugin(input.platform);
+    const probe = yield* plugin.probeAndListScopes({
+      baseUrl: input.baseUrl,
+      withClient: (operation, run) =>
+        Effect.tryPromise({
+          try: (signal) => session.withClient(signal, run, code),
+          catch: (cause) => mcpError(operation, cause),
+        }),
+    });
+    const oauth = session.credentials;
+    if (!oauth) {
+      return yield* new IssueAutomationError({
+        operation: "finishConnectorAuth",
+        detail: "禅道 MCP 未返回可用的 OAuth 凭据。",
+      });
+    }
+
+    return yield* withConnectorLock(
+      connectorId,
+      Effect.gen(function* () {
+        const previous = input.id === undefined ? undefined : yield* getConnector(connectorId);
+        if (input.id !== undefined && (!previous || previous.mcpUrl !== previousMcpUrl)) {
+          return yield* new IssueAutomationError({
+            operation: "finishConnectorAuth",
+            detail: "连接已被修改或删除，请重新授权。",
+          });
+        }
+        if (previous && (previous.mcpUrl !== input.mcpUrl || previous.status === "disconnected")) {
+          const profiles = yield* repo.listProfiles.pipe(
+            Effect.mapError(mapRepoErr("listProfiles")),
+          );
+          const probesById = new Map(probe.scopes.map((scope) => [scope.id, scope.name]));
+          for (const profile of profiles) {
+            if (profile.connectorId !== connectorId) continue;
+            const expectedName =
+              previous.scopes.find((scope) => scope.id === profile.scopeId)?.name ??
+              profile.scopeName;
+            if (probesById.get(profile.scopeId) !== expectedName) {
+              return yield* new IssueAutomationError({
+                operation: "finishConnectorAuth",
+                detail: "此授权无法访问原有规则绑定的禅道产品，未切换连接。",
+              });
+            }
+          }
+        }
+
+        const connector: IssueAutomationConnector = {
+          id: connectorId,
+          platform: input.platform,
+          name: input.name,
+          baseUrl: input.baseUrl,
+          mcpUrl: input.mcpUrl,
+          writeActions: [...probe.writeActions],
+          status: "connected",
+          viewerName: null,
+          serverVersion: null,
+          statusDetail: null,
+          scopes: [...probe.scopes],
+          updatedAt: yield* nowIso,
+        };
+        const key = connectorSecretKey(connectorId);
+        const previousSecret = yield* secrets
+          .get(key)
+          .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* storeConnectorOAuth(key, input.mcpUrl, oauth);
+            yield* repo.upsertConnector(connector).pipe(
+              Effect.mapError(mapRepoErr("saveConnector")),
+              Effect.tapError(() =>
+                Option.isSome(previousSecret)
+                  ? secrets.set(key, previousSecret.value).pipe(Effect.ignore)
+                  : secrets.remove(key).pipe(Effect.ignore),
+              ),
+            );
+          }),
+        );
+        yield* publishSnapshot;
+        return connector;
+      }),
+    );
   });
 
   const deleteConnector: IssueAutomationService["Service"]["deleteConnector"] = Effect.fn(
     "IssueAutomationService.deleteConnector",
   )(
-    function* (input) {
-      const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
-      yield* repo
-        .deleteConnector(input.connectorId)
-        .pipe(Effect.mapError(mapRepoErr("deleteConnector")));
-      yield* secrets.remove(connectorSecretKey(input.connectorId)).pipe(Effect.ignore);
-      for (const profile of profiles) {
-        if (profile.connectorId === input.connectorId && profile.feishuWebhookSecretId) {
-          yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
-        }
-      }
-      yield* publishSnapshot;
-    },
+    (input) =>
+      withConnectorLock(
+        input.connectorId,
+        Effect.gen(function* () {
+          const profiles = yield* repo.listProfiles.pipe(
+            Effect.mapError(mapRepoErr("listProfiles")),
+          );
+          yield* repo
+            .deleteConnector(input.connectorId)
+            .pipe(Effect.mapError(mapRepoErr("deleteConnector")));
+          yield* secrets.remove(connectorSecretKey(input.connectorId)).pipe(Effect.ignore);
+          for (const profile of profiles) {
+            if (profile.connectorId === input.connectorId && profile.feishuWebhookSecretId) {
+              yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
+            }
+          }
+          yield* publishSnapshot;
+        }),
+      ),
     Effect.uninterruptible,
     profileWrites.withPermits(1),
   );
@@ -1470,33 +1705,39 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     const { connector, plugin, credentials } = yield* readConnectorCredentials(input.connectorId);
     const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials));
-    const updatedAt = yield* nowIso;
-
-    const updated: IssueAutomationConnector =
-      probeResult._tag === "Success"
-        ? {
-            ...connector,
-            baseUrl: probeResult.success.normalizedBaseUrl,
-            status: "connected",
-            viewerName: probeResult.success.viewerName,
-            serverVersion: probeResult.success.serverVersion,
-            statusDetail: null,
-            scopes: [...probeResult.success.scopes],
-            updatedAt,
-          }
-        : {
-            ...connector,
-            status: "error",
-            statusDetail: probeResult.failure.detail,
-            updatedAt,
-          };
-
-    yield* repo.upsertConnector(updated).pipe(Effect.mapError(mapRepoErr("refreshScopes")));
-    yield* publishSnapshot;
-    if (probeResult._tag === "Failure") {
-      return yield* probeResult.failure;
-    }
-    return updated;
+    return yield* withConnectorLock(
+      connector.id,
+      Effect.gen(function* () {
+        const current = yield* getConnector(connector.id);
+        if (
+          current?.mcpUrl !== connector.mcpUrl ||
+          current.status === "disconnected" ||
+          current.updatedAt !== connector.updatedAt
+        ) {
+          if (probeResult._tag === "Failure") return yield* probeResult.failure;
+          return yield* new IssueAutomationError({
+            operation: "refreshScopes",
+            detail: "连接已变更，请刷新后重试。",
+          });
+        }
+        const updated: IssueAutomationConnector = {
+          ...current,
+          ...(probeResult._tag === "Success"
+            ? {
+                status: "connected",
+                statusDetail: null,
+                scopes: [...probeResult.success.scopes],
+                writeActions: [...probeResult.success.writeActions],
+              }
+            : { status: "error", statusDetail: probeResult.failure.detail }),
+          updatedAt: yield* nowIso,
+        };
+        yield* repo.upsertConnector(updated).pipe(Effect.mapError(mapRepoErr("refreshScopes")));
+        yield* publishSnapshot;
+        if (probeResult._tag === "Failure") return yield* probeResult.failure;
+        return updated;
+      }),
+    );
   });
 
   const listRemoteIssues: IssueAutomationService["Service"]["listRemoteIssues"] = Effect.fn(
@@ -1857,9 +2098,10 @@ const make = Effect.gen(function* () {
         displayKey: `#${issueKey}`,
         issueTitle: previous?.issueTitle ?? `问题 #${issueKey}`,
         issueUrl:
-          connector.platform === "zentao"
+          previous?.issueUrl ||
+          (connector.baseUrl && connector.platform === "zentao"
             ? buildZenTaoBugWebUrl(connector.baseUrl, issueKey)
-            : connector.baseUrl,
+            : connector.baseUrl),
         moduleName: isRepair ? (previous?.moduleName ?? null) : null,
         severity: isRepair ? (previous?.severity ?? null) : null,
         priority: isRepair ? (previous?.priority ?? null) : null,
@@ -2204,7 +2446,8 @@ const make = Effect.gen(function* () {
   return IssueAutomationService.of({
     getState: buildSnapshot,
     subscribe,
-    saveConnector,
+    startConnectorAuth,
+    finishConnectorAuth,
     deleteConnector,
     refreshScopes,
     listRemoteIssues,

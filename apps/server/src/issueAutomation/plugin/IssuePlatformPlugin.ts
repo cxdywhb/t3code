@@ -1,3 +1,4 @@
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type * as Effect from "effect/Effect";
 import type {
   IssueAutomationBrowseFilter,
@@ -7,19 +8,20 @@ import type {
   IssueAutomationRemoteComment,
   IssueAutomationRemoteScope,
   IssueAutomationWriteBackAction,
+  IssueAutomationWriteKind,
   IssueAutomationWriteBackResult,
 } from "@t3tools/contracts";
 
 export interface PlatformCredentials {
   readonly baseUrl: string;
-  readonly account: string;
-  readonly secret: string;
+  readonly withClient: <A>(
+    operation: string,
+    run: (client: Client) => Promise<A>,
+  ) => Effect.Effect<A, IssueAutomationError>;
 }
 
 export interface PlatformProbeResult {
-  readonly normalizedBaseUrl: string;
-  readonly viewerName: string;
-  readonly serverVersion: string | null;
+  readonly writeActions: ReadonlyArray<IssueAutomationWriteKind>;
   readonly scopes: ReadonlyArray<IssueAutomationRemoteScope>;
 }
 

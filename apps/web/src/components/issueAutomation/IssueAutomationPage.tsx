@@ -199,6 +199,9 @@ export function IssueAutomationPage() {
   const canConfirmRepair = useAtomValue(
     issueAutomationEnvironment.confirmRepair.permissionAtom(environmentId),
   );
+  const canConfigureConnector = useAtomValue(
+    issueAutomationEnvironment.startConnectorAuth.permissionAtom(environmentId),
+  );
   const canWriteBack = useAtomValue(
     issueAutomationEnvironment.writeBack.permissionAtom(environmentId),
   );
@@ -425,7 +428,10 @@ export function IssueAutomationPage() {
     IssueAutomationListRemoteIssuesResult | IssueAutomationScanProfileIssuesResult,
     unknown
   >(
-    environmentId !== null && activeConnector !== null && effectiveScopeId.length > 0
+    environmentId !== null &&
+      activeConnector !== null &&
+      activeConnector.status !== "disconnected" &&
+      effectiveScopeId.length > 0
       ? scannedProfile
         ? issueAutomationEnvironment.scanProfileIssues({
             environmentId,
@@ -962,15 +968,20 @@ export function IssueAutomationPage() {
             >
               {activeConnector ? (
                 <span className="hidden items-center gap-1.5 text-xs text-muted-foreground xl:inline-flex">
-                  <span aria-hidden className="size-2 rounded-full bg-primary" />
-                  <span className="max-w-48 truncate">
-                    {activeConnector.name} · {activeConnector.viewerName ?? activeConnector.account}
-                  </span>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-2 rounded-full",
+                      activeConnector.status === "connected" ? "bg-primary" : "bg-warning",
+                    )}
+                  />
+                  <span className="max-w-48 truncate">{activeConnector.name}</span>
                 </span>
               ) : (
                 <Button
                   size="xs"
                   variant="outline"
+                  disabled={!canConfigureConnector}
                   onClick={() => {
                     setEditingConnector(null);
                     setConnectorModalOpen(true);
@@ -981,7 +992,20 @@ export function IssueAutomationPage() {
                 </Button>
               )}
 
-              {activeConnector ? (
+              {activeConnector?.status === "disconnected" ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!canConfigureConnector}
+                  onClick={() => {
+                    setEditingConnector(activeConnector);
+                    setConnectorModalOpen(true);
+                  }}
+                >
+                  <Plug2Icon className="size-3.5" />
+                  <T>Authorize MCP</T>
+                </Button>
+              ) : activeConnector ? (
                 <Button
                   size="xs"
                   variant="outline"
@@ -1057,7 +1081,7 @@ export function IssueAutomationPage() {
                   </EmptyTitle>
                   <EmptyDescription>
                     <T>
-                      Connect your internal ZenTao server, bind products to multiple local code
+                      Connect your ZenTao MCP service, bind products to multiple local code
                       repositories, and dispatch local AI models for unattended root-cause
                       diagnosis, isolated Worktree fixes, and automatic comment write-back.
                     </T>
@@ -1065,6 +1089,7 @@ export function IssueAutomationPage() {
                 </EmptyHeader>
                 <EmptyContent>
                   <Button
+                    disabled={!canConfigureConnector}
                     onClick={() => {
                       setEditingConnector(null);
                       setConnectorModalOpen(true);
@@ -1840,6 +1865,7 @@ export function IssueAutomationPage() {
             <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-24 sm:px-7">
               <IssueAutomationRulesView
                 environmentId={environmentId}
+                canConfigureConnector={canConfigureConnector}
                 platforms={snapshot.platforms}
                 connectors={snapshot.connectors}
                 profiles={snapshot.profiles}

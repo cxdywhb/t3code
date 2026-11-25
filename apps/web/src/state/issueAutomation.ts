@@ -108,9 +108,15 @@ function createIssueAutomationAtoms() {
               page,
             },
           }),
-    saveConnector: createEnvironmentRpcCommand(connectionAtomRuntime, {
-      label: "issue-automation:save-connector",
-      tag: WS_METHODS.issueAutomationSaveConnector,
+    startConnectorAuth: createEnvironmentRpcCommand(connectionAtomRuntime, {
+      label: "issue-automation:start-connector-auth",
+      tag: WS_METHODS.issueAutomationStartConnectorAuth,
+      scheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    finishConnectorAuth: createEnvironmentRpcCommand(connectionAtomRuntime, {
+      label: "issue-automation:finish-connector-auth",
+      tag: WS_METHODS.issueAutomationFinishConnectorAuth,
       scheduler,
       concurrency: serialPerEnvironment,
       onSettled: (target, registry) =>

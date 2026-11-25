@@ -31,6 +31,8 @@ export function IssueAutomationRepairSyncDialog({
   environmentId,
   cwd,
   writingBack,
+  supportsComment,
+  supportsResolve,
   onSync,
 }: {
   readonly task: IssueAutomationTask;
@@ -39,6 +41,8 @@ export function IssueAutomationRepairSyncDialog({
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
   readonly writingBack: boolean;
+  readonly supportsComment: boolean;
+  readonly supportsResolve: boolean;
   readonly onSync: (action: IssueAutomationSyncRepairAction) => Promise<boolean>;
 }) {
   const gt = useGT();
@@ -46,9 +50,12 @@ export function IssueAutomationRepairSyncDialog({
   const [comment, setComment] = useState(false);
   const [resolve, setResolve] = useState(false);
   const [buildId, setBuildId] = useState<string | null>(null);
-  const writeComment = comment && task.commentSyncedAt === null;
+  const writeComment = supportsComment && comment && task.commentSyncedAt === null;
   const canResolve =
-    detail?.status === "active" && task.stateSyncedAt === null && detail.availableBuilds.length > 0;
+    supportsResolve &&
+    detail?.status === "active" &&
+    task.stateSyncedAt === null &&
+    detail.availableBuilds.length > 0;
   const build =
     resolve && canResolve ? detail.availableBuilds.find((item) => item.id === buildId) : undefined;
   const canSubmit = (writeComment || build !== undefined) && (!resolve || build !== undefined);
@@ -102,7 +109,7 @@ export function IssueAutomationRepairSyncDialog({
               <Checkbox
                 checked={writeComment}
                 onCheckedChange={setComment}
-                disabled={writingBack || task.commentSyncedAt !== null}
+                disabled={writingBack || !supportsComment || task.commentSyncedAt !== null}
               />
               <T>Write repair comment</T>
               {task.commentSyncedAt ? (

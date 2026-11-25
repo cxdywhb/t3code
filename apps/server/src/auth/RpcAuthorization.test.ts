@@ -106,6 +106,15 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod("server.getSettings")).toBe(AuthOrchestrationReadScope);
   });
 
+  it("requires settings access for both steps of tracker authorization", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueAutomationStartConnectorAuth)).toBe(
+      AuthSettingsWriteScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueAutomationFinishConnectorAuth)).toBe(
+      AuthSettingsWriteScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

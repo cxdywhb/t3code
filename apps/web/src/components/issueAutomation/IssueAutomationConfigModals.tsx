@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -14,6 +15,7 @@ import {
   type IssueAutomationPlatformDescriptor,
   type IssueAutomationProfile,
   type IssueAutomationRemoteScope,
+  type IssueAutomationStartConnectorAuthResult,
   type ModelSelection,
   type ProjectId,
 } from "@t3tools/contracts";
@@ -25,6 +27,7 @@ import {
   ChevronRightIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
+  ExternalLinkIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderOpenIcon,
@@ -44,6 +47,7 @@ import {
 import { SecretInput } from "~/components/settings/SecretInput";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn, newProjectId } from "~/lib/utils";
+import { ensureLocalApi } from "~/localApi";
 import { waitForProject } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { issueAutomationEnvironment } from "~/state/issueAutomation";
@@ -576,7 +580,13 @@ export function ConnectorModal({
   readonly initial: IssueAutomationConnector | null;
 }) {
   const gt = useGT();
-  const saveConnector = useAtomCommand(issueAutomationEnvironment.saveConnector, {
+  const canAuthorize = useAtomValue(
+    issueAutomationEnvironment.startConnectorAuth.permissionAtom(environmentId),
+  );
+  const startAuthorization = useAtomCommand(issueAutomationEnvironment.startConnectorAuth, {
+    reportFailure: false,
+  });
+  const finishAuthorization = useAtomCommand(issueAutomationEnvironment.finishConnectorAuth, {
     reportFailure: false,
   });
 
@@ -587,10 +597,12 @@ export function ConnectorModal({
     IssueAutomationPlatformKind.make("zentao");
 
   const [platform, setPlatform] = useState<string>(defaultPlatform);
-  const [name, setName] = useState(initial?.name ?? "内部禅道");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [mcpUrl, setMcpUrl] = useState(initial?.mcpUrl ?? "");
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
-  const [account, setAccount] = useState(initial?.account ?? "");
-  const [secret, setSecret] = useState("");
+  const [authorization, setAuthorization] =
+    useState<IssueAutomationStartConnectorAuthResult | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -598,41 +610,76 @@ export function ConnectorModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!baseUrl.trim() || !account.trim()) return;
+    if (
+      !canAuthorize ||
+      busy ||
+      (authorization ? !callbackUrl.trim() : !mcpUrl.trim() || !name.trim())
+    )
+      return;
     setBusy(true);
     setErrorText(null);
-    const res = await saveConnector({
+    if (authorization) {
+      const result = await finishAuthorization({
+        environmentId,
+        input: {
+          attemptId: authorization.attemptId,
+          callbackUrl: Redacted.make(callbackUrl.trim()),
+        },
+      });
+      setBusy(false);
+      if (result._tag === "Success") {
+        onOpenChange(false);
+      } else {
+        const error = squashAtomCommandFailure(result);
+        setErrorText(
+          error instanceof Error ? error.message : gt("Connection verification failed."),
+        );
+      }
+      return;
+    }
+
+    const result = await startAuthorization({
       environmentId,
       input: {
         ...(initial ? { id: initial.id } : {}),
         platform: IssueAutomationPlatformKind.make(platform),
-        name: name.trim() || "内部禅道",
+        name: name.trim(),
+        mcpUrl: mcpUrl.trim(),
         baseUrl: baseUrl.trim(),
-        account: account.trim(),
-        ...(secret.trim() ? { secret: secret.trim() } : {}),
       },
     });
     setBusy(false);
-    if (res._tag === "Failure") {
-      const err = squashAtomCommandFailure(res);
-      setErrorText(err instanceof Error ? err.message : gt("Connection verification failed."));
-      return;
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      setErrorText(error instanceof Error ? error.message : gt("Connection verification failed."));
+    } else {
+      setAuthorization(result.value);
     }
-    onOpenChange(false);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) onOpenChange(next);
+      }}
+    >
       <DialogPopup className="max-w-lg" style={MODAL_POPUP_STYLE}>
         <DialogHeader className="shrink-0">
           <DialogTitle>
             {initial ? <T>Edit platform connection</T> : <T>Connect issue platform</T>}
           </DialogTitle>
           <DialogDescription>
-            <T>
-              Credentials are encrypted on the local T3 server and verified immediately against your
-              tracker.
-            </T>
+            {authorization ? (
+              <T>
+                Approve access in your browser. It then opens a page that may not load: copy that
+                page's address and paste it here.
+              </T>
+            ) : initial?.mcpUrl === null ? (
+              <T>Connect the same ZenTao instance through MCP to restore its existing rules.</T>
+            ) : (
+              <T>Enter your ZenTao MCP service URL, then authorize in your browser.</T>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -642,96 +689,114 @@ export function ConnectorModal({
             className="min-w-0 space-y-4"
             onSubmit={(e) => void handleSubmit(e)}
           >
-            <div className="space-y-1.5">
-              <Label>
-                <T>Platform adapter</T>
-              </Label>
-              <Select
-                value={platform}
-                onValueChange={(next) => {
-                  if (next) setPlatform(next);
-                }}
-              >
-                <SelectTrigger aria-label={gt("Platform adapter")}>
-                  <SelectValue>{selectedPlatformDesc?.displayName ?? platform}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup style={SELECTOR_SCROLL_LIST_STYLE}>
-                  {platforms.map((item) => (
-                    <SelectItem
-                      key={item.platform}
-                      value={item.platform}
-                      disabled={!item.implemented}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span>{item.displayName}</span>
-                        {!item.implemented ? (
-                          <Badge variant="outline" size="sm">
-                            <T>Plugin slot</T>
-                          </Badge>
-                        ) : null}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="connector-name">
-                <T>Display name</T>
-              </Label>
-              <Input
-                id="connector-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={gt("e.g. Internal ZenTao")}
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="connector-url">
-                <T>Server URL</T>
-              </Label>
-              <Input
-                id="connector-url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={gt("https://zentao.example.com/zentao")}
-                required
-              />
-              <p className="text-xs text-muted-foreground">
-                <T>Paste the root address or any bug-browse page URL.</T>
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="connector-account">
-                  <T>Account</T>
-                </Label>
-                <Input
-                  id="connector-account"
-                  value={account}
-                  onChange={(e) => setAccount(e.target.value)}
-                  placeholder={gt("Username")}
-                  required
-                />
+            {authorization ? (
+              <div className="grid gap-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    void ensureLocalApi().shell.openExternal(authorization.authorizationUrl)
+                  }
+                >
+                  <ExternalLinkIcon aria-hidden />
+                  <T>Open sign-in page</T>
+                </Button>
+                <label className="grid gap-1.5 text-sm">
+                  <T>Address of the page your browser opened</T>
+                  <Input
+                    value={callbackUrl}
+                    onChange={(e) => setCallbackUrl(e.target.value)}
+                    inputMode="url"
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={16_384}
+                    disabled={busy}
+                    required
+                  />
+                </label>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="connector-secret">
-                  <T>Password or token</T>
-                </Label>
-                <SecretInput
-                  id="connector-secret"
-                  configured={initial?.hasSecret === true}
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  placeholder={gt("Password")}
-                  required={!initial?.hasSecret}
-                />
-              </div>
-            </div>
+            ) : (
+              <fieldset disabled={busy} className="grid min-w-0 gap-4">
+                <div className="space-y-1.5">
+                  <Label>
+                    <T>Platform adapter</T>
+                  </Label>
+                  <Select
+                    value={platform}
+                    onValueChange={(next) => {
+                      if (next) setPlatform(next);
+                    }}
+                  >
+                    <SelectTrigger aria-label={gt("Platform adapter")}>
+                      <SelectValue>{selectedPlatformDesc?.displayName ?? platform}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup style={SELECTOR_SCROLL_LIST_STYLE}>
+                      {platforms.map((item) => (
+                        <SelectItem
+                          key={item.platform}
+                          value={item.platform}
+                          disabled={!item.implemented}
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span>{item.displayName}</span>
+                            {!item.implemented ? (
+                              <Badge variant="outline" size="sm">
+                                <T>Plugin slot</T>
+                              </Badge>
+                            ) : null}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="connector-name">
+                    <T>Display name</T>
+                  </Label>
+                  <Input
+                    id="connector-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={gt("e.g. Internal ZenTao")}
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="connector-mcp-url">
+                    <T>MCP service URL</T>
+                  </Label>
+                  <Input
+                    id="connector-mcp-url"
+                    value={mcpUrl}
+                    onChange={(e) => setMcpUrl(e.target.value)}
+                    placeholder="https://mcp.example.com/zentao/mcp"
+                    type="url"
+                    spellCheck={false}
+                    required
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="connector-web-url">
+                    <T>ZenTao web URL (optional)</T>
+                  </Label>
+                  <Input
+                    id="connector-web-url"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="https://zentao.example.com/zentao"
+                    type="url"
+                    spellCheck={false}
+                    aria-describedby="connector-web-url-help"
+                  />
+                  <p id="connector-web-url-help" className="text-xs text-muted-foreground">
+                    <T>T3 uses this address for links that open Bugs in ZenTao.</T>
+                  </p>
+                </div>
+              </fieldset>
+            )}
 
             {errorText ? (
               <Alert variant="error">
@@ -751,8 +816,26 @@ export function ConnectorModal({
           >
             <T>Cancel</T>
           </Button>
-          <DialogAction form="issue-automation-connector-form" type="submit" disabled={busy}>
-            {busy ? <T>Verifying…</T> : <T>Verify & save</T>}
+          {authorization ? (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setAuthorization(null);
+                setCallbackUrl("");
+                setErrorText(null);
+              }}
+            >
+              <T>Start over</T>
+            </Button>
+          ) : null}
+          <DialogAction
+            form="issue-automation-connector-form"
+            type="submit"
+            disabled={busy || !canAuthorize}
+          >
+            {busy ? <T>Verifying…</T> : authorization ? <T>Verify & save</T> : <T>Authorize MCP</T>}
           </DialogAction>
         </DialogFooter>
       </DialogPopup>
@@ -1191,7 +1274,7 @@ export function ProfileModal({
                     <SelectPopup style={SELECTOR_SCROLL_LIST_STYLE}>
                       {connectors.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
-                          {c.name} ({c.account})
+                          {c.name}
                         </SelectItem>
                       ))}
                     </SelectPopup>

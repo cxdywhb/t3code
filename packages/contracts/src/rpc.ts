@@ -235,7 +235,9 @@ import {
   IssueAutomationProfile,
   IssueAutomationRefreshScopesInput,
   IssueAutomationRemoteIssueDetail,
-  IssueAutomationSaveConnectorInput,
+  IssueAutomationStartConnectorAuthInput,
+  IssueAutomationStartConnectorAuthResult,
+  IssueAutomationFinishConnectorAuthInput,
   IssueAutomationSaveProfileInput,
   IssueAutomationScanProfileIssuesInput,
   IssueAutomationScanProfileIssuesResult,
@@ -727,7 +729,8 @@ export const WS_METHODS = {
   // Pluggable issue automation methods
   issueAutomationGetState: "issueAutomation.getState",
   issueAutomationSubscribe: "issueAutomation.subscribe",
-  issueAutomationSaveConnector: "issueAutomation.saveConnector",
+  issueAutomationStartConnectorAuth: "issueAutomation.startConnectorAuth",
+  issueAutomationFinishConnectorAuth: "issueAutomation.finishConnectorAuth",
   issueAutomationDeleteConnector: "issueAutomation.deleteConnector",
   issueAutomationRefreshScopes: "issueAutomation.refreshScopes",
   issueAutomationListRemoteIssues: "issueAutomation.listRemoteIssues",
@@ -1590,11 +1593,23 @@ const WsIssueAutomationSubscribeRpc = Rpc.make(WS_METHODS.issueAutomationSubscri
   stream: true,
 });
 
-const WsIssueAutomationSaveConnectorRpc = Rpc.make(WS_METHODS.issueAutomationSaveConnector, {
-  payload: IssueAutomationSaveConnectorInput,
-  success: IssueAutomationConnector,
-  error: IssueAutomationRpcError,
-});
+const WsIssueAutomationStartConnectorAuthRpc = Rpc.make(
+  WS_METHODS.issueAutomationStartConnectorAuth,
+  {
+    payload: IssueAutomationStartConnectorAuthInput,
+    success: IssueAutomationStartConnectorAuthResult,
+    error: IssueAutomationRpcError,
+  },
+);
+
+const WsIssueAutomationFinishConnectorAuthRpc = Rpc.make(
+  WS_METHODS.issueAutomationFinishConnectorAuth,
+  {
+    payload: IssueAutomationFinishConnectorAuthInput,
+    success: IssueAutomationConnector,
+    error: IssueAutomationRpcError,
+  },
+);
 
 const WsIssueAutomationDeleteConnectorRpc = Rpc.make(WS_METHODS.issueAutomationDeleteConnector, {
   payload: IssueAutomationDeleteConnectorInput,
@@ -2857,7 +2872,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribePromptSuggestionRpc,
   WsIssueAutomationGetStateRpc,
   WsIssueAutomationSubscribeRpc,
-  WsIssueAutomationSaveConnectorRpc,
+  WsIssueAutomationStartConnectorAuthRpc,
+  WsIssueAutomationFinishConnectorAuthRpc,
   WsIssueAutomationDeleteConnectorRpc,
   WsIssueAutomationRefreshScopesRpc,
   WsIssueAutomationListRemoteIssuesRpc,

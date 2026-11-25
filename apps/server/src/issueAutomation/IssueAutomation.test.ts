@@ -7,6 +7,7 @@ import {
   CheckpointScopeId,
   EventId,
   IssueAutomationPlatformKind,
+  IssueAutomationConnectorId,
   MessageId,
   NodeId,
   ProjectId,
@@ -14,6 +15,7 @@ import {
   RunId,
   ThreadId,
   type IssueAutomationSaveProfileInput,
+  type IssueAutomationConnector,
   type IssueAutomationTaskId,
   type IssueAutomationWriteBackAction,
   type OrchestrationProjectShell,
@@ -359,9 +361,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       normalizeBaseUrl: (url) => url,
       probeAndListScopes: () =>
         Effect.succeed({
-          normalizedBaseUrl: baseUrl,
-          viewerName: "test",
-          serverVersion: null,
+          writeActions: ["comment", "resolve"],
           scopes: [scope],
         }),
       listIssues: ({ page, pageSize, browseType, keyword, scopeId }) => {
@@ -526,13 +526,22 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
     );
     yield* Effect.gen(function* () {
       const service = yield* IssueAutomationService.IssueAutomationService;
-      const connector = yield* service.saveConnector({
+      const repository = yield* IssueAutomationRepository.IssueAutomationRepository;
+      const connector = {
+        id: IssueAutomationConnectorId.make("example-connector"),
         platform,
         name: "ZenTao",
         baseUrl,
-        account: "test",
-        secret: "connector-secret",
-      });
+        mcpUrl: "https://mcp.example.com/zentao/mcp",
+        writeActions: ["comment", "resolve"],
+        status: "connected",
+        viewerName: null,
+        serverVersion: null,
+        statusDetail: null,
+        scopes: [scope],
+        updatedAt: DateTime.formatIso(at),
+      } satisfies IssueAutomationConnector;
+      yield* repository.upsertConnector(connector);
       const input = {
         connectorId: connector.id,
         name: scope.name,
@@ -819,7 +828,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       expect(persisted.profiles.find((profile) => profile.id === rule.id)?.policy).toEqual(
         diagnosticPolicy,
       );
-    }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provide(dependencies))));
+    }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
   }),
 );
 
