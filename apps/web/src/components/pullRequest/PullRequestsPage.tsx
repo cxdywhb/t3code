@@ -83,6 +83,7 @@ import { pullRequestPanelReference } from "./usePullRequestDetail";
 import { usePullRequestIntentPrefetch } from "./usePullRequestIntentPrefetch";
 import {
   usePullRequestDisplayGroups,
+  usePullRequestOriginOnlyControl,
   usePullRequestQueryFilters,
   usePullRequestScope,
   type PullRequestsSearch,
@@ -206,6 +207,7 @@ export function PullRequestsPage() {
   );
   const {
     capableEnvironments,
+    originOnlyKey,
     scopedEnvironmentId,
     environmentKey,
     capabilityKnown,
@@ -224,6 +226,13 @@ export function PullRequestsPage() {
     expectedHosts,
     projectsKnown,
   } = usePullRequestScope(search, hostReads);
+  const originOnlyEnvironments =
+    scopedEnvironmentId === null
+      ? capableEnvironments
+      : capableEnvironments.filter(
+          (environment) => environment.environmentId === scopedEnvironmentId,
+        );
+  const originOnlyControl = usePullRequestOriginOnlyControl(originOnlyEnvironments);
   const rightPanelRef = capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(rightPanelRef);
   const rightPanelState = useRightPanelStore((state) =>
@@ -334,7 +343,7 @@ export function PullRequestsPage() {
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
-  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
+  const scopeKey = `${environmentKey}:${originOnlyKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
   const [page, setPage] = useState<{
@@ -1419,6 +1428,12 @@ export function PullRequestsPage() {
       onProject={(projectId, environmentId) =>
         updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })
       }
+      originOnly={originOnlyControl.checked}
+      originOnlyVisible={originOnlyControl.visible}
+      originOnlyDisabled={originOnlyControl.disabled}
+      onOriginOnly={(next) => {
+        void originOnlyControl.toggle(next);
+      }}
     />
   );
   const columnProps = {

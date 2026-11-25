@@ -143,6 +143,7 @@ vi.mock("./settings-environment-filter", () => ({
 }));
 
 import {
+  SettingsEnvironmentSourceControlRouteScreen,
   SettingsThreadsRouteScreen,
   SettingsWorktreesRouteScreen,
 } from "./SettingsServerControlsRouteScreen";
@@ -235,5 +236,23 @@ describe("SettingsServerControlsRouteScreen", () => {
       (button) => button.textContent === "Auto-settle merged threads",
     )!;
     expect(autoSettle.disabled).toBe(true);
+  });
+
+  it("renders and toggles use origin remote only on the source control screen", async () => {
+    act(() => root.render(<SettingsEnvironmentSourceControlRouteScreen />));
+    const originOnly = [...container.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find(
+      (button) => button.textContent === "Use origin remote only",
+    );
+    expect(originOnly).toBeDefined();
+    expect(originOnly?.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => {
+      originOnly?.click();
+    });
+
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      environmentId: "local",
+      input: { patch: { pullRequestOriginOnly: false } },
+    });
   });
 });

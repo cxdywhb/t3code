@@ -22,6 +22,7 @@ import {
   CheckCircle2Icon,
   ClockIcon,
   EyeIcon,
+  GitForkIcon,
   GlobeIcon,
   LayersIcon,
   PenLineIcon,
@@ -35,6 +36,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 import {
+  useId,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -53,7 +55,10 @@ import {
   PullRequestStateGlyph,
 } from "~/components/pullRequest/pullRequestPresentation";
 import { PULL_REQUEST_STATE_PRESENTATION } from "~/components/pullRequest/pullRequestIcons";
-import { usePullRequestScope } from "~/components/pullRequest/usePullRequestListView";
+import {
+  usePullRequestOriginOnlyControl,
+  usePullRequestScope,
+} from "~/components/pullRequest/usePullRequestListView";
 import { RelativeTime } from "~/components/RelativeTime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { WorkspaceInspectorDrawer } from "~/components/WorkspaceInspectorDrawer";
@@ -91,8 +96,10 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Sheet, SheetPopup } from "../ui/sheet";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PrReviewAnalyticsView } from "./PrReviewAnalyticsView";
 import {
   isPrReviewStageActive,
@@ -220,6 +227,8 @@ export function PrReviewWorkstationPage() {
     },
     EMPTY_HOST_AVAILABILITY,
   );
+  const originOnlySwitchId = useId();
+  const originOnlyControl = usePullRequestOriginOnlyControl(scope.capableEnvironments);
 
   const listTargets = scope.environmentQueries.map(({ environmentId: envId, projectIds }) => ({
     environmentId: envId,
@@ -630,6 +639,49 @@ export function PrReviewWorkstationPage() {
                         ))}
                       </SelectPopup>
                     </Select>
+                  ) : null}
+
+                  {originOnlyControl.visible ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <label
+                            htmlFor={originOnlySwitchId}
+                            className={cn(
+                              "inline-flex min-h-9 select-none items-center gap-2 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground shadow-xs/5 transition-colors sm:min-h-8",
+                              originOnlyControl.disabled
+                                ? "cursor-not-allowed opacity-60"
+                                : "cursor-pointer hover:text-foreground",
+                            )}
+                          >
+                            <GitForkIcon
+                              aria-hidden="true"
+                              className="size-3.5 shrink-0 opacity-80"
+                            />
+                            <span>
+                              <T>Origin only</T>
+                            </span>
+                            <Switch
+                              id={originOnlySwitchId}
+                              size="sm"
+                              aria-label={gt("Origin only")}
+                              checked={originOnlyControl.checked}
+                              mixed={originOnlyControl.mixed}
+                              disabled={originOnlyControl.disabled}
+                              onCheckedChange={(checked) => {
+                                void originOnlyControl.toggle(Boolean(checked));
+                              }}
+                            />
+                          </label>
+                        }
+                      />
+                      <TooltipPopup side="bottom" className="max-w-xs">
+                        <T>
+                          Ignore upstream remotes and list PRs only from each repository&apos;s
+                          origin remote
+                        </T>
+                      </TooltipPopup>
+                    </Tooltip>
                   ) : null}
                 </div>
 

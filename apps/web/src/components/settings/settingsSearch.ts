@@ -1271,6 +1271,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("pull request merge squash rebase last selected")],
   },
   {
+    id: "pull-request-origin-only",
+    title: msg("Use origin remote only"),
+    to: "/settings/source-control",
+    scope: "project-defaults",
+    searchTerms: [msg("pull request pr mr origin upstream fork remote ignore only")],
+  },
+  {
     id: "issue-trackers",
     title: msg("Issue trackers"),
     to: "/settings/source-control",

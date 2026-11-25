@@ -108,6 +108,7 @@ import {
   ThreadId,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
+  type ServerSettings as ServerSettingsContract,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -1542,6 +1543,17 @@ export const layerWsRpc = (
           Effect.orDie,
           Effect.map((id) => CommandId.make(`server:${tag}:${id}`)),
         );
+      const pullRequestOriginOnlyKey = (settings: ServerSettingsContract) =>
+        JSON.stringify([
+          settings.pullRequestOriginOnly,
+          Object.entries(settings.projectSettingsOverrides)
+            .flatMap(([projectId, overrides]) =>
+              overrides.pullRequestOriginOnly === undefined
+                ? []
+                : ([[projectId, overrides.pullRequestOriginOnly]] as const),
+            )
+            .toSorted(([left], [right]) => left.localeCompare(right)),
+        ]);
       const resolvePullRequestSyncKey = (reference: PullRequestRef) =>
         reference.host !== undefined && reference.repository.includes("/")
           ? Effect.succeed(pullRequestSyncKey(reference))
@@ -2866,6 +2878,9 @@ export const layerWsRpc = (
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
+            const previousOriginOnlyKey = pullRequestOriginOnlyKey(
+              yield* serverSettings.getSettings,
+            );
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),
@@ -2875,6 +2890,9 @@ export const layerWsRpc = (
             const settings = yield* providerInstanceMutation === undefined
               ? serverSettings.updateSettings(nextPatch)
               : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
+            if (pullRequestOriginOnlyKey(settings) !== previousOriginOnlyKey) {
+              yield* pullRequests.invalidate({}, { notifyReaders: true }).pipe(Effect.ignore);
+            }
             return ServerSettings.redactServerSettingsForClient(settings, settingsClient);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,

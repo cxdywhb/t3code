@@ -285,6 +285,63 @@ export function repositoryGroupingDisplayNameOf(identity: RepositoryIdentity): s
     : identity.displayName;
 }
 
+export function resolveOriginOnlyRepositoryIdentity(
+  identity: RepositoryIdentity | null | undefined,
+  originOnly: boolean,
+  options?: {
+    readonly recognizeProvider?: (remoteUrl: string) => SourceControlProviderKind | undefined;
+  },
+): RepositoryIdentity | null {
+  if (identity == null) return null;
+  if (!originOnly) return identity;
+  if (identity.origin === undefined) {
+    return identity.locator.remoteName === "origin" ? identity : null;
+  }
+  const canonicalKey = identity.origin.canonicalKey;
+  const originRemoteUrl = identity.origin.remoteUrl ?? `https://${canonicalKey}`;
+  const pathFromKey = canonicalKey.split("/").slice(1).join("/");
+  const displayName =
+    identity.origin.displayName ?? (pathFromKey.length > 0 ? pathFromKey : undefined);
+  const pathSegments = (displayName ?? pathFromKey)
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const owner = pathSegments[0];
+  const name = pathSegments.at(-1);
+  const primaryHost = identity.canonicalKey.split("/")[0]?.toLowerCase();
+  const originHost = canonicalKey.split("/")[0]?.toLowerCase();
+  const recognizedOriginProvider =
+    options?.recognizeProvider?.(originRemoteUrl) ??
+    options?.recognizeProvider?.(`https://${canonicalKey}`);
+  const provider =
+    recognizedOriginProvider !== undefined && recognizedOriginProvider !== "unknown"
+      ? recognizedOriginProvider
+      : originHost !== undefined && originHost === primaryHost
+        ? identity.provider
+        : (recognizedOriginProvider ?? identity.provider);
+  const {
+    webUrl: _webUrl,
+    origin: _origin,
+    displayName: _displayName,
+    owner: _owner,
+    name: _name,
+    provider: _provider,
+    ...rest
+  } = identity;
+  return {
+    ...rest,
+    canonicalKey,
+    locator: {
+      source: "git-remote",
+      remoteName: "origin",
+      remoteUrl: originRemoteUrl,
+    },
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(owner !== undefined ? { owner } : {}),
+    ...(name !== undefined ? { name } : {}),
+  };
+}
+
 export const ScopedProjectRef = Schema.Struct({
   environmentId: EnvironmentId,
   projectId: ProjectId,

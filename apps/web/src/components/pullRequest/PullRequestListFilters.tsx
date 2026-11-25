@@ -15,6 +15,7 @@ import {
   CircleXIcon,
   EyeOffIcon,
   FolderGit2Icon,
+  GitForkIcon,
   LayersIcon,
   ListFilterIcon,
   SearchIcon,
@@ -540,6 +541,10 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId,
   unavailable,
   onProject,
+  originOnly = true,
+  originOnlyVisible = false,
+  originOnlyDisabled = false,
+  onOriginOnly,
 }: {
   onOpenChange?: (open: boolean) => void;
   state: PullRequestListState;
@@ -564,6 +569,10 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId: EnvironmentId | undefined;
   unavailable: ReadonlyMap<string, string>;
   onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
+  originOnly?: boolean;
+  originOnlyVisible?: boolean;
+  originOnlyDisabled?: boolean;
+  onOriginOnly?: (originOnly: boolean) => void;
 }) {
   const gt = useGT();
   const resolve = useMessages();
@@ -574,6 +583,7 @@ export function PullRequestFiltersMenu({
     host,
     server,
     projectId,
+    originOnlyVisible && !originOnly,
     filters.draft,
     filters.review,
     filters.checks,
@@ -708,6 +718,27 @@ export function PullRequestFiltersMenu({
             else if (projectId !== undefined) onProject(undefined, undefined);
           }}
         />
+        {originOnlyVisible ? (
+          <>
+            <MenuSeparator />
+            <MenuCheckboxItem
+              variant="switch"
+              checked={originOnly}
+              disabled={originOnlyDisabled}
+              onCheckedChange={(next) => onOriginOnly?.(next)}
+            >
+              <span className="flex items-center gap-2">
+                <GitForkIcon
+                  aria-hidden
+                  className="-mx-0.5 size-3.5 text-muted-foreground opacity-80"
+                />
+                <span>
+                  <T>Origin remote only</T>
+                </span>
+              </span>
+            </MenuCheckboxItem>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );

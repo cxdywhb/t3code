@@ -72,6 +72,9 @@ import {
   type PullRequestThreadCommentsInput,
   type PullRequestThreadCommentsResult,
   type PullRequestUpdateInput,
+  DEFAULT_SERVER_SETTINGS,
+  resolveOriginOnlyRepositoryIdentity,
+  type ServerSettings as ServerSettingsContract,
   type SourceControlProviderInfo,
   SourceControlProviderKind,
   type ThreadPullRequestKey,
@@ -380,6 +383,7 @@ interface WorkspaceProjects {
   >;
   readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
   readonly refinedProjectIdsByHost: ReadonlyMap<string, ReadonlyArray<ProjectId>>;
+  readonly originOnlyFiltered: boolean;
 }
 
 // Inherited by fibers forked inside the scope, so it is closed, not just dropped, when the scope ends.
@@ -928,17 +932,46 @@ export const make = Effect.gen(function* () {
     ).pipe(Effect.map((resolved) => new Map(resolved)));
   });
 
+  const readServerSettings = serverSettings.getSettings.pipe(
+    Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+  );
+
+  const originOnlySettingsKey = (settings: ServerSettingsContract) =>
+    JSON.stringify([
+      settings.pullRequestOriginOnly,
+      Object.entries(settings.projectSettingsOverrides)
+        .flatMap(([projectId, overrides]) =>
+          overrides.pullRequestOriginOnly === undefined
+            ? []
+            : ([[projectId, overrides.pullRequestOriginOnly]] as const),
+        )
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    ]);
+
   const listWorkspaceProjects = (
     filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host">,
+    options?: { readonly ignoreOriginOnly?: boolean },
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
     Effect.flatMap(sharedProjectReads, (shared) => {
-      if (shared === null || !shared.open) return readWorkspaceProjects(filter);
-      const key = JSON.stringify([filter.projectId, filter.projectIds, filter.host]);
-      const existing = shared.reads.get(key);
-      if (existing !== undefined) return existing;
-      return Effect.cached(readWorkspaceProjects(filter)).pipe(
-        Effect.tap((read) => Effect.sync(() => shared.reads.set(key, read))),
-        Effect.flatten,
+      if (shared === null || !shared.open) return readWorkspaceProjects(filter, options);
+      return Effect.flatMap(
+        options?.ignoreOriginOnly
+          ? Effect.succeed("ignored")
+          : readServerSettings.pipe(Effect.map(originOnlySettingsKey)),
+        (settingsKey) => {
+          const key = JSON.stringify([
+            filter.projectId,
+            filter.projectIds,
+            filter.host,
+            settingsKey,
+          ]);
+          const existing = shared.reads.get(key);
+          if (existing !== undefined) return existing;
+          return Effect.cached(readWorkspaceProjects(filter, options)).pipe(
+            Effect.tap((read) => Effect.sync(() => shared.reads.set(key, read))),
+            Effect.flatten,
+          );
+        },
       );
     });
 
@@ -958,39 +991,74 @@ export const make = Effect.gen(function* () {
 
   const readWorkspaceProjects = (
     filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host">,
+    options?: { readonly ignoreOriginOnly?: boolean },
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
-    (filter.projectId === undefined
-      ? projects.listShells(
-          filter.projectIds === undefined ? undefined : { projectIds: filter.projectIds },
-        )
-      : projects.getShell(filter.projectId).pipe(Effect.map(Option.toArray))
+    (options?.ignoreOriginOnly
+      ? Effect.succeed<ServerSettingsContract | null>(null)
+      : readServerSettings
     ).pipe(
-      Effect.mapError(
-        (error) =>
-          new PullRequestOperationError({
-            operation: "listProjects",
-            detail: "The project list could not be read.",
-            cause: error,
+      Effect.flatMap((settings) =>
+        (filter.projectId === undefined
+          ? projects.listShells(
+              filter.projectIds === undefined ? undefined : { projectIds: filter.projectIds },
+            )
+          : projects.getShell(filter.projectId).pipe(Effect.map(Option.toArray))
+        ).pipe(
+          Effect.mapError(
+            (error) =>
+              new PullRequestOperationError({
+                operation: "listProjects",
+                detail: "The project list could not be read.",
+                cause: error,
+              }),
+          ),
+          Effect.flatMap((projects) =>
+            Effect.forEach(
+              projects,
+              (project) =>
+                project.repositoryIdentity != null
+                  ? Effect.succeed(project)
+                  : repositoryIdentities
+                      .resolve(project.workspaceRoot)
+                      .pipe(
+                        Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity })),
+                      ),
+              { concurrency: REPOSITORY_CONCURRENCY },
+            ),
+          ),
+          Effect.map((projects) => {
+            let originOnlyFiltered = false;
+            const filtered =
+              settings === null
+                ? projects
+                : projects.map((project) => {
+                    if (
+                      !resolveProjectSettings(settings, project.id).settings.pullRequestOriginOnly
+                    ) {
+                      return project;
+                    }
+                    const repositoryIdentity = resolveOriginOnlyRepositoryIdentity(
+                      project.repositoryIdentity,
+                      true,
+                      {
+                        recognizeProvider: (remoteUrl) =>
+                          sourceControlDefinitions.recognizeRemote(remoteUrl)?.kind,
+                      },
+                    );
+                    if (repositoryIdentity === project.repositoryIdentity) return project;
+                    originOnlyFiltered = true;
+                    return { ...project, repositoryIdentity };
+                  });
+            return { projects: filtered, originOnlyFiltered };
           }),
-      ),
-      Effect.flatMap((projects) =>
-        Effect.forEach(
-          projects,
-          (project) =>
-            project.repositoryIdentity != null
-              ? Effect.succeed(project)
-              : repositoryIdentities
-                  .resolve(project.workspaceRoot)
-                  .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity }))),
-          { concurrency: REPOSITORY_CONCURRENCY },
+          Effect.flatMap(({ projects, originOnlyFiltered }) =>
+            resolveRemoteHosts(projects, filter).pipe(
+              Effect.map((remoteHosts) => ({ remoteHosts, projects, originOnlyFiltered })),
+            ),
+          ),
         ),
       ),
-      Effect.flatMap((projects) =>
-        resolveRemoteHosts(projects, filter).pipe(
-          Effect.map((remoteHosts) => ({ remoteHosts, projects })),
-        ),
-      ),
-      Effect.map(({ remoteHosts, projects }) => {
+      Effect.map(({ remoteHosts, projects, originOnlyFiltered }) => {
         const supported: SupportedProject[] = [];
         const unimplemented = new Map<
           string,
@@ -1057,21 +1125,96 @@ export const make = Effect.gen(function* () {
                 : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
           });
         }
-        return { projects, supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
+        return {
+          projects,
+          supported,
+          unimplemented,
+          viewerRoots,
+          refinedProjectIdsByHost,
+          originOnlyFiltered,
+        };
       }),
     );
 
   // Azure derives organization from the checkout; require the matching repository.
-  const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
-    listWorkspaceProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
-        const own = supported[0];
-        const repository = ref.repository.trim();
-        const host = ref.host?.trim().toLowerCase();
-        if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
-          if (host === undefined || host === own.host) return Effect.succeed(own);
-        }
-        if (host === undefined) {
+  const requireProject = (
+    ref: PullRequestRef,
+  ): Effect.Effect<SupportedProject, PullRequestError> => {
+    const repository = ref.repository.trim();
+    const host = ref.host?.trim().toLowerCase();
+    const referenceKey = host === undefined ? undefined : `${host}/${repository}`.toLowerCase();
+    const repositoryKey =
+      referenceKey === undefined
+        ? undefined
+        : sourceControlDefinitions.canonicalRepositoryKey(referenceKey);
+    const matchesExactRoute = (
+      own: SupportedProject | undefined,
+      route: SupportedProject | undefined,
+    ) =>
+      route !== undefined &&
+      (route === own ||
+        route.repository.toLowerCase() === repository.toLowerCase() ||
+        (repositoryKey !== undefined && route.repositoryKey === repositoryKey));
+    const lookupProject = (ignoreOriginOnly: boolean) =>
+      listWorkspaceProjects({ projectId: ref.projectId }, { ignoreOriginOnly }).pipe(
+        Effect.flatMap(({ supported, originOnlyFiltered: ownFiltered }) => {
+          const own = supported[0];
+          if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
+            if (host === undefined || host === own.host) {
+              return Effect.succeed({
+                own,
+                route: own as SupportedProject | undefined,
+                originOnlyFiltered: ownFiltered,
+              });
+            }
+          }
+          if (host === undefined || referenceKey === undefined || repositoryKey === undefined) {
+            return Effect.succeed({
+              own,
+              route: undefined as SupportedProject | undefined,
+              originOnlyFiltered: ownFiltered,
+            });
+          }
+          // A host that spells one repository several ways (Azure's SSH and legacy clone hosts)
+          // can differ from the browser URL's host. Compare the complete repository identity
+          // before narrowing those checkouts by host.
+          return listWorkspaceProjects(
+            sourceControlDefinitions.findByRepositoryKey(referenceKey) ? {} : { host },
+            { ignoreOriginOnly },
+          ).pipe(
+            Effect.map(({ supported, originOnlyFiltered: hostFiltered }) => {
+              const onHost = supported.filter((candidate) => candidate.host === host);
+              const route =
+                supported.find(
+                  (candidate) =>
+                    candidate.repositoryKey !== null && candidate.repositoryKey === repositoryKey,
+                ) ??
+                onHost.find(
+                  (candidate) =>
+                    candidate.repositoryKey === null &&
+                    candidate.repository.toLowerCase() === repository.toLowerCase(),
+                ) ??
+                onHost.find((candidate) => candidate.repositoryKey === null);
+              return { own, route, originOnlyFiltered: ownFiltered || hostFiltered };
+            }),
+          );
+        }),
+      );
+    return lookupProject(false).pipe(
+      Effect.filterOrElse(
+        (primary) => matchesExactRoute(primary.own, primary.route) || !primary.originOnlyFiltered,
+        (primary) =>
+          lookupProject(true).pipe(
+            Effect.map((fallback) =>
+              fallback.route !== undefined
+                ? fallback
+                : { ...fallback, own: fallback.own ?? primary.own, route: primary.route },
+            ),
+          ),
+      ),
+      Effect.flatMap(({ own, route }): Effect.Effect<SupportedProject, PullRequestError> => {
+        if (host === undefined || referenceKey === undefined) {
+          if (route !== undefined) return Effect.succeed(route);
           if (own === undefined) {
             return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
           }
@@ -1082,138 +1225,112 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        const referenceKey = `${host}/${repository}`.toLowerCase();
-        const repositoryKey = sourceControlDefinitions.canonicalRepositoryKey(referenceKey);
-        // A host that spells one repository several ways (Azure's SSH and legacy clone hosts)
-        // can differ from the browser URL's host. Compare the complete repository identity
-        // before narrowing those checkouts by host.
-        return listWorkspaceProjects(
-          sourceControlDefinitions.findByRepositoryKey(referenceKey) ? {} : { host },
-        ).pipe(
-          Effect.flatMap(({ supported }) => {
-            const onHost = supported.filter((candidate) => candidate.host === host);
-            const route =
-              supported.find(
-                (candidate) =>
-                  candidate.repositoryKey !== null && candidate.repositoryKey === repositoryKey,
-              ) ??
-              onHost.find(
-                (candidate) =>
-                  candidate.repositoryKey === null &&
-                  candidate.repository.toLowerCase() === repository.toLowerCase(),
-              ) ??
-              onHost.find((candidate) => candidate.repositoryKey === null);
-            if (route === undefined) {
-              return Effect.gen(function* () {
-                const publicHost = sourceControlDefinitions.findByPublicHost(host);
-                const api = publicHost === undefined ? null : registry.get(publicHost.kind);
-                if (publicHost !== undefined && api?.readsPublicHostWithoutCheckout) {
-                  const selected = yield* projects.getShell(ref.projectId).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new PullRequestOperationError({
-                          operation: "resolveRepository",
-                          detail: "The selected project could not be read.",
-                          cause,
-                        }),
-                    ),
-                  );
-                  if (Option.isSome(selected)) {
-                    return {
-                      cursorKey: listCursorKey(host, repository),
-                      project: selected.value,
-                      api: withRateLimitBackoff(api, host, rateLimits),
-                      kind: publicHost.kind,
-                      repository,
-                      host,
-                      remote: sourceControlDefinitions.repositoryKeyFromRemote(
-                        `https://${host}/${repository}`,
-                      ),
-                      repositoryKey: null,
-                    };
-                  }
-                }
-                for (const kind of registry.kinds) {
-                  const candidateApi = registry.get(kind);
-                  if (!candidateApi?.readsConfiguredHostWithoutCheckout) continue;
-                  if (candidateApi.servesHost?.(host) === false) continue;
-                  const configured = yield* candidateApi.readsConfiguredHostWithoutCheckout(host);
-                  if (!configured) continue;
-                  const selected = yield* projects
-                    .getShell(ref.projectId)
-                    .pipe(Effect.orElseSucceed(() => Option.none()));
-                  const fallbackShell: OrchestrationProjectShell = Option.getOrElse(
-                    selected,
-                    () => ({
-                      id: ref.projectId,
-                      title: repository,
-                      workspaceRoot: ".",
-                      defaultModelSelection: null,
-                      scripts: [],
-                      createdAt: "1970-01-01T00:00:00.000Z",
-                      updatedAt: "1970-01-01T00:00:00.000Z",
+        if (route === undefined) {
+          return Effect.gen(function* () {
+            const publicHost = sourceControlDefinitions.findByPublicHost(host);
+            const api = publicHost === undefined ? null : registry.get(publicHost.kind);
+            if (publicHost !== undefined && api?.readsPublicHostWithoutCheckout) {
+              const selected = yield* projects.getShell(ref.projectId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new PullRequestOperationError({
+                      operation: "resolveRepository",
+                      detail: "The selected project could not be read.",
+                      cause,
                     }),
-                  );
-                  return {
-                    cursorKey: listCursorKey(host, repository),
-                    project: fallbackShell,
-                    api: withRateLimitBackoff(candidateApi, host, rateLimits),
-                    kind,
-                    repository,
-                    host,
-                    remote: sourceControlDefinitions.repositoryKeyFromRemote(
-                      `https://${host}/${repository}`,
-                    ),
-                    repositoryKey: null,
-                  };
-                }
-                const owner =
-                  publicHost ?? sourceControlDefinitions.findByRepositoryKey(referenceKey);
-                const readable = owner === undefined ? null : registry.get(owner.kind);
-                if (
-                  readable !== null &&
-                  !readable.readsPublicHostWithoutCheckout &&
-                  readable.servesHost?.(host) !== false
-                ) {
-                  // Without repository keys, any checkout on the host routes the read.
-                  return yield* new PullRequestUnavailableError(
-                    readable.repositoryKey === undefined
-                      ? { reason: "repository-without-project", host }
-                      : { reason: "repository-without-project", repository },
-                  );
-                }
-                return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
-              });
+                ),
+              );
+              if (Option.isSome(selected)) {
+                return {
+                  cursorKey: listCursorKey(host, repository),
+                  project: selected.value,
+                  api: withRateLimitBackoff(api, host, rateLimits),
+                  kind: publicHost.kind,
+                  repository,
+                  host,
+                  remote: sourceControlDefinitions.repositoryKeyFromRemote(
+                    `https://${host}/${repository}`,
+                  ),
+                  repositoryKey: null,
+                };
+              }
             }
-            return Effect.succeed(
-              route.repositoryKey !== null ||
-                route.repository.toLowerCase() === repository.toLowerCase()
-                ? route
-                : {
-                    ...route,
-                    ...(ref.projectId.startsWith("cloud:")
-                      ? {
-                          project: {
-                            id: ref.projectId,
-                            title: repository,
-                            workspaceRoot: route.project.workspaceRoot,
-                            defaultModelSelection: null,
-                            scripts: [],
-                            createdAt: "1970-01-01T00:00:00.000Z",
-                            updatedAt: "1970-01-01T00:00:00.000Z",
-                          },
-                        }
-                      : {}),
-                    repository,
-                    remote: sourceControlDefinitions.repositoryKeyFromRemote(
-                      `https://${host}/${repository}`,
-                    ),
-                  },
-            );
-          }),
+            for (const kind of registry.kinds) {
+              const candidateApi = registry.get(kind);
+              if (!candidateApi?.readsConfiguredHostWithoutCheckout) continue;
+              if (candidateApi.servesHost?.(host) === false) continue;
+              const configured = yield* candidateApi.readsConfiguredHostWithoutCheckout(host);
+              if (!configured) continue;
+              const selected = yield* projects
+                .getShell(ref.projectId)
+                .pipe(Effect.orElseSucceed(() => Option.none()));
+              const fallbackShell: OrchestrationProjectShell = Option.getOrElse(selected, () => ({
+                id: ref.projectId,
+                title: repository,
+                workspaceRoot: ".",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: "1970-01-01T00:00:00.000Z",
+                updatedAt: "1970-01-01T00:00:00.000Z",
+              }));
+              return {
+                cursorKey: listCursorKey(host, repository),
+                project: fallbackShell,
+                api: withRateLimitBackoff(candidateApi, host, rateLimits),
+                kind,
+                repository,
+                host,
+                remote: sourceControlDefinitions.repositoryKeyFromRemote(
+                  `https://${host}/${repository}`,
+                ),
+                repositoryKey: null,
+              };
+            }
+            const owner = publicHost ?? sourceControlDefinitions.findByRepositoryKey(referenceKey);
+            const readable = owner === undefined ? null : registry.get(owner.kind);
+            if (
+              readable !== null &&
+              !readable.readsPublicHostWithoutCheckout &&
+              readable.servesHost?.(host) !== false
+            ) {
+              // Without repository keys, any checkout on the host routes the read.
+              return yield* new PullRequestUnavailableError(
+                readable.repositoryKey === undefined
+                  ? { reason: "repository-without-project", host }
+                  : { reason: "repository-without-project", repository },
+              );
+            }
+            return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+          });
+        }
+        return Effect.succeed(
+          route.repositoryKey !== null ||
+            route.repository.toLowerCase() === repository.toLowerCase()
+            ? route
+            : {
+                ...route,
+                ...(ref.projectId.startsWith("cloud:")
+                  ? {
+                      project: {
+                        id: ref.projectId,
+                        title: repository,
+                        workspaceRoot: route.project.workspaceRoot,
+                        defaultModelSelection: null,
+                        scripts: [],
+                        createdAt: "1970-01-01T00:00:00.000Z",
+                        updatedAt: "1970-01-01T00:00:00.000Z",
+                      },
+                    }
+                  : {}),
+                repository,
+                remote: sourceControlDefinitions.repositoryKeyFromRemote(
+                  `https://${host}/${repository}`,
+                ),
+              },
         );
       }),
     );
+  };
 
   const canonicalRef = Effect.fn("PullRequestService.canonicalRef")(function* <
     I extends PullRequestRef,
@@ -1229,13 +1346,13 @@ export const make = Effect.gen(function* () {
 
   // A failed read keeps the tools: their calls report the failure.
   const servesProject: PullRequestService["Service"]["servesProject"] = (projectId) =>
-    listWorkspaceProjects({ projectId }).pipe(
+    listWorkspaceProjects({ projectId }, { ignoreOriginOnly: true }).pipe(
       Effect.map(({ supported }) => supported.length > 0),
       Effect.orElseSucceed(() => true),
     );
 
   const addressedProject: PullRequestService["Service"]["addressedProject"] = (projectId) =>
-    listWorkspaceProjects({ projectId }).pipe(
+    listWorkspaceProjects({ projectId }, { ignoreOriginOnly: true }).pipe(
       Effect.map(({ projects, supported }) => {
         const own = supported[0];
         if (own === undefined) return projects.find((project) => project.id === projectId);
@@ -1954,7 +2071,10 @@ export const make = Effect.gen(function* () {
     "PullRequestService.routingIdentity",
   )(function* (input) {
     const host = input.host.toLowerCase();
-    const { supported } = yield* listWorkspaceProjects({ host });
+    let { supported, originOnlyFiltered } = yield* listWorkspaceProjects({ host });
+    if (supported.length === 0 && originOnlyFiltered) {
+      ({ supported } = yield* listWorkspaceProjects({ host }, { ignoreOriginOnly: true }));
+    }
     const project = supported.find(
       (candidate) => registry.get(candidate.api.kind)?.getRoutingIdentity !== undefined,
     );
@@ -3334,7 +3454,8 @@ export const make = Effect.gen(function* () {
       number,
     } as PullRequestRef;
   };
-  const statsCacheKey = (key: string) => JSON.stringify([listingsEpoch, key]);
+  const statsCacheKey = (key: string, originOnlyKey = "") =>
+    JSON.stringify([listingsEpoch, originOnlyKey, key]);
   const recentStats = new Map<
     string,
     { readonly at: number; readonly value: PullRequestDiffStat }
@@ -3477,6 +3598,7 @@ export const make = Effect.gen(function* () {
     (key: string) => {
       const [
         ,
+        ,
         state,
         involvement,
         filters,
@@ -3488,6 +3610,7 @@ export const make = Effect.gen(function* () {
         cursorEntries,
       ] = JSON.parse(key) as [
         number,
+        string,
         string,
         string | null,
         ReadonlyArray<string | ReadonlyArray<string> | null> | null,
@@ -3515,38 +3638,44 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_CACHE_TTL : Duration.zero),
     },
   );
-  const list: PullRequestService["Service"]["list"] = (input) => {
-    const key = JSON.stringify([
-      listingsEpoch,
-      input.state,
-      input.involvement ?? null,
-      input.filters === undefined
-        ? null
-        : [
-            input.filters.draft ?? null,
-            input.filters.review ?? null,
-            input.filters.checks ?? null,
-            input.filters.author ?? null,
-            input.filters.labels ?? null,
-            input.filters.excludedLabels ?? null,
-          ],
-      input.projectId ?? null,
-      input.projectIds === undefined ? null : [...input.projectIds].sort(),
-      input.host ?? null,
-      input.limit ?? null,
-      input.query ?? null,
-      input.cursors === undefined
-        ? null
-        : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
-    ]);
-    // A replacement reader can join a lookup still finishing its previous reader's cancellation.
-    return Cache.get(listCache, key).pipe(
-      Effect.catchCauseIf(
-        (cause) => Cause.hasInterruptsOnly(cause),
-        (_cause) => Cache.get(listCache, key),
-      ),
+  const list: PullRequestService["Service"]["list"] = (input) =>
+    readServerSettings.pipe(
+      Effect.flatMap((settings) => {
+        const key = JSON.stringify([
+          listingsEpoch,
+          originOnlySettingsKey(settings),
+          input.state,
+          input.involvement ?? null,
+          input.filters === undefined
+            ? null
+            : [
+                input.filters.draft ?? null,
+                input.filters.review ?? null,
+                input.filters.checks ?? null,
+                input.filters.author ?? null,
+                input.filters.labels ?? null,
+                input.filters.excludedLabels ?? null,
+              ],
+          input.projectId ?? null,
+          input.projectIds === undefined ? null : [...input.projectIds].sort(),
+          input.host ?? null,
+          input.limit ?? null,
+          input.query ?? null,
+          input.cursors === undefined
+            ? null
+            : Object.entries(input.cursors).toSorted(([left], [right]) =>
+                left.localeCompare(right),
+              ),
+        ]);
+        // A replacement reader can join a lookup still finishing its previous reader's cancellation.
+        return Cache.get(listCache, key).pipe(
+          Effect.catchCauseIf(
+            (cause) => Cause.hasInterruptsOnly(cause),
+            (_cause) => Cache.get(listCache, key),
+          ),
+        );
+      }),
     );
-  };
 
   const checksCache = yield* Cache.makeWith(
     (key: string) => {
@@ -3614,43 +3743,49 @@ export const make = Effect.gen(function* () {
   );
 
   const detailCache = yield* Cache.makeWith(
-    (key: string) => {
-      const statsKey = statsCacheKey(key);
-      return detailUncached(refOfCacheKey(key)).pipe(
-        Effect.tap(
-          Effect.fn("PullRequestService.recordDetailStats")(function* (value: PullRequestDetail) {
-            // GitHub and Azure detail include the same checks; the checks TTL counts from their observation.
-            // Azure detail answers a failed policy read with no checks, which must not be cached.
-            if (
-              (value.provider === "github" ||
-                (value.provider === "azure-devops" && value.checks.length > 0)) &&
-              value.observedAt !== undefined &&
-              !(yield* Cache.has(checksCache, key))
-            ) {
-              yield* Cache.set(checksCache, key, {
-                state: value.state,
-                checks: value.checks,
-                observedAt: value.observedAt,
-                ...(value.workflowApprovalsRequired === undefined
-                  ? {}
-                  : { workflowApprovalsRequired: value.workflowApprovalsRequired }),
-              });
-            }
-            recordStats(
-              statsKey,
-              {
-                projectId: value.projectId,
-                repository: value.repository,
-                number: value.number,
-                additions: value.additions,
-                deletions: value.deletions,
-              },
-              yield* Clock.currentTimeMillis,
-            );
-          }),
-        ),
-      );
-    },
+    (key: string) =>
+      readServerSettings.pipe(
+        Effect.map(originOnlySettingsKey),
+        Effect.flatMap((originOnlyKey) => {
+          const statsKey = statsCacheKey(key, originOnlyKey);
+          return detailUncached(refOfCacheKey(key)).pipe(
+            Effect.tap(
+              Effect.fn("PullRequestService.recordDetailStats")(function* (
+                value: PullRequestDetail,
+              ) {
+                // GitHub and Azure detail include the same checks; the checks TTL counts from their observation.
+                // Azure detail answers a failed policy read with no checks, which must not be cached.
+                if (
+                  (value.provider === "github" ||
+                    (value.provider === "azure-devops" && value.checks.length > 0)) &&
+                  value.observedAt !== undefined &&
+                  !(yield* Cache.has(checksCache, key))
+                ) {
+                  yield* Cache.set(checksCache, key, {
+                    state: value.state,
+                    checks: value.checks,
+                    observedAt: value.observedAt,
+                    ...(value.workflowApprovalsRequired === undefined
+                      ? {}
+                      : { workflowApprovalsRequired: value.workflowApprovalsRequired }),
+                  });
+                }
+                recordStats(
+                  statsKey,
+                  {
+                    projectId: value.projectId,
+                    repository: value.repository,
+                    number: value.number,
+                    additions: value.additions,
+                    deletions: value.deletions,
+                  },
+                  yield* Clock.currentTimeMillis,
+                );
+              }),
+            ),
+          );
+        }),
+      ),
     {
       capacity: DETAIL_CACHE_CAPACITY,
       timeToLive: (exit) =>
@@ -3978,7 +4113,11 @@ export const make = Effect.gen(function* () {
 
   const listStatsCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, refs] = JSON.parse(key) as [number, ReadonlyArray<[string, string, number, number]>];
+      const [, , refs] = JSON.parse(key) as [
+        number,
+        string,
+        ReadonlyArray<[string, string, number, number]>,
+      ];
       return listStatsUncached({
         refs: refs.map(([projectId, repository, number]) => ({ projectId, repository, number })),
       } as unknown as PullRequestListStatsInput).pipe(
@@ -3992,9 +4131,10 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_STATS_CACHE_TTL : Duration.zero),
     },
   );
-  const statsBatchKey = (refs: Iterable<PullRequestRef>) =>
+  const statsBatchKey = (refs: Iterable<PullRequestRef>, originOnlyKey: string) =>
     JSON.stringify([
       listingsEpoch,
+      originOnlyKey,
       [...refs]
         .map((ref) => [ref.projectId, ref.repository, ref.number, refEpoch(ref)] as const)
         .toSorted((left, right) =>
@@ -4006,10 +4146,11 @@ export const make = Effect.gen(function* () {
   )(function* (input: PullRequestListStatsInput) {
     if (input.refs.length === 0) return { stats: [] };
     const now = yield* Clock.currentTimeMillis;
+    const originOnlyKey = originOnlySettingsKey(yield* readServerSettings);
     const held: PullRequestDiffStat[] = [];
     const missing = new Map<string, PullRequestRef>();
     for (const ref of input.refs) {
-      const key = statsCacheKey(refCacheKey(ref));
+      const key = statsCacheKey(refCacheKey(ref), originOnlyKey);
       const cached = recentStats.get(key);
       if (cached !== undefined && now - cached.at < Duration.toMillis(LIST_STATS_CACHE_TTL)) {
         held.push(cached.value);
@@ -4018,7 +4159,7 @@ export const make = Effect.gen(function* () {
       }
     }
     if (missing.size === 0) return { stats: held };
-    const key = statsBatchKey(missing.values());
+    const key = statsBatchKey(missing.values(), originOnlyKey);
     const { result, at } = yield* Cache.get(listStatsCache, key).pipe(
       Effect.catchCauseIf(
         (cause) => Cause.hasInterruptsOnly(cause),

@@ -4,6 +4,9 @@ import {
   applyPullRequestDraftFilterChange,
   parsePullRequestQuery,
 } from "@t3tools/client-runtime/pull-request-query";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { DEFAULT_SERVER_SETTINGS, resolveOriginOnlyRepositoryIdentity } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
@@ -220,7 +223,18 @@ export function PullRequestsScreen(
   }
   const labelColors =
     knownFacets.environmentId === environmentId ? knownFacets.labelColors : facets.labelColors;
-  const projects = pullRequestProjectChoices(allProjects, {
+  const effectiveProjects = allProjects.map((project) => {
+    const settings = configs.get(project.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
+    if (!resolveProjectSettings(settings, project.id).settings.pullRequestOriginOnly)
+      return project;
+    return {
+      ...project,
+      repositoryIdentity: resolveOriginOnlyRepositoryIdentity(project.repositoryIdentity, true, {
+        recognizeProvider: (remoteUrl) => sourceControlClients.recognizeRemote(remoteUrl)?.kind,
+      }),
+    };
+  });
+  const projects = pullRequestProjectChoices(effectiveProjects, {
     environmentId,
     controls,
     environmentLabels: new Map(

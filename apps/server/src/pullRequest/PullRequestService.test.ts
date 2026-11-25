@@ -322,6 +322,7 @@ const sshAliasHost = {
 
 function makeService(input: {
   readonly settings?: ServerSettings;
+  readonly getSettings?: () => ServerSettings;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
@@ -333,7 +334,9 @@ function makeService(input: {
     Layer.build(
       Layer.mergeAll(
         Layer.mock(ServerSettingsService.ServerSettingsService)({
-          getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
+          getSettings: Effect.sync(
+            () => input.getSettings?.() ?? input.settings ?? DEFAULT_SERVER_SETTINGS,
+          ),
         }),
         Layer.succeed(
           PullRequestProviderRegistry.PullRequestProviderRegistry,
@@ -5688,4 +5691,335 @@ it.effect(
         },
       ]);
     }),
+);
+
+function forkProject(input: {
+  readonly id: string;
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly upstream: string;
+  readonly origin?: string;
+  readonly host?: string;
+}): OrchestrationProjectShell {
+  const host = input.host ?? "github.com";
+  return {
+    id: input.id as ProjectId,
+    title: input.title,
+    workspaceRoot: input.workspaceRoot,
+    repositoryIdentity: {
+      canonicalKey: `${host}/${input.upstream}`,
+      locator: {
+        source: "git-remote",
+        remoteName: "upstream",
+        remoteUrl: `https://${host}/${input.upstream}.git`,
+      },
+      provider: SourceControlProviderKind.make("github"),
+      displayName: input.upstream,
+      ...(input.origin === undefined
+        ? {}
+        : {
+            origin: {
+              canonicalKey: `${host}/${input.origin}`,
+              remoteUrl: `https://${host}/${input.origin}.git`,
+              displayName: input.origin,
+            },
+          }),
+    },
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-01T00:00:00Z",
+  };
+}
+
+it.effect(
+  "uses each project's origin remote across list, filterOptions, and listStats when pullRequestOriginOnly is enabled",
+  () =>
+    Effect.gen(function* () {
+      const listedRepos: string[] = [];
+      const labelRepos: string[] = [];
+      const statRepos: string[] = [];
+      const service = yield* makeService({
+        settings: { ...DEFAULT_SERVER_SETTINGS, pullRequestOriginOnly: true },
+        projects: [
+          forkProject({
+            id: "p1",
+            title: "forked app",
+            workspaceRoot: "/fork",
+            upstream: "upstream-org/app",
+            origin: "fork-user/app",
+          }),
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            listChangeRequests: (input) => {
+              listedRepos.push(input.repository);
+              return Effect.succeed({
+                items: [
+                  {
+                    ...changeRequest(12, "2026-07-05T00:00:00Z"),
+                    title: `PR in ${input.repository}`,
+                  },
+                ],
+                truncated: false,
+                continues: false,
+              });
+            },
+            listRepositoryLabels: (input) => {
+              labelRepos.push(input.repository);
+              return Effect.succeed({
+                items: [{ name: `label:${input.repository}`, color: "0e8a16" }],
+                truncated: false,
+              });
+            },
+            listChangeRequestStats: (input) => {
+              statRepos.push(...input.changeRequests.map((ref) => ref.repository));
+              return Effect.succeed(
+                input.changeRequests.map((ref) => ({
+                  repository: ref.repository,
+                  number: ref.number,
+                  additions: 5,
+                  deletions: 2,
+                })),
+              );
+            },
+          }),
+        ],
+      });
+
+      const listed = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(listedRepos, ["fork-user/app"]);
+      assert.deepStrictEqual(
+        listed.entries.map((entry) => [entry.repository, entry.number]),
+        [["fork-user/app", 12]],
+      );
+
+      const options = yield* service.filterOptions({ kind: "labels" });
+      assert.deepStrictEqual(labelRepos, ["fork-user/app"]);
+      assert.deepStrictEqual(
+        options.labels.map((label) => label.name),
+        ["label:fork-user/app"],
+      );
+
+      const stats = yield* service.listStats({
+        refs: [{ projectId: "p1" as ProjectId, repository: "fork-user/app", number: 12 }],
+      });
+      assert.deepStrictEqual(statRepos, ["fork-user/app"]);
+      assert.strictEqual(stats.stats[0]?.additions, 5);
+    }),
+);
+
+it.effect("respects per-project pullRequestOriginOnly overrides in both directions", () =>
+  Effect.gen(function* () {
+    const listedGloballyOn: string[] = [];
+    const globalOn = yield* makeService({
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        pullRequestOriginOnly: true,
+        projectSettingsOverrides: {
+          ["p1" as ProjectId]: { pullRequestOriginOnly: false },
+        },
+      },
+      projects: [
+        forkProject({
+          id: "p1",
+          title: "opt-out",
+          workspaceRoot: "/p1",
+          upstream: "upstream-org/app",
+          origin: "fork-user/app",
+        }),
+        forkProject({
+          id: "p2",
+          title: "inherit-on",
+          workspaceRoot: "/p2",
+          upstream: "upstream-org/lib",
+          origin: "fork-user/lib",
+        }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: (input) => {
+            listedGloballyOn.push(input.repository);
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+    });
+
+    yield* globalOn.list({ state: "open" });
+    assert.deepStrictEqual(listedGloballyOn, ["upstream-org/app", "fork-user/lib"]);
+
+    const listedGloballyOff: string[] = [];
+    const globalOff = yield* makeService({
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        pullRequestOriginOnly: false,
+        projectSettingsOverrides: {
+          ["p1" as ProjectId]: { pullRequestOriginOnly: true },
+        },
+      },
+      projects: [
+        forkProject({
+          id: "p1",
+          title: "opt-in",
+          workspaceRoot: "/p1",
+          upstream: "upstream-org/app",
+          origin: "fork-user/app",
+        }),
+        forkProject({
+          id: "p2",
+          title: "inherit-off",
+          workspaceRoot: "/p2",
+          upstream: "upstream-org/lib",
+          origin: "fork-user/lib",
+        }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: (input) => {
+            listedGloballyOff.push(input.repository);
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+    });
+
+    yield* globalOff.list({ state: "open" });
+    assert.deepStrictEqual(listedGloballyOff, ["fork-user/app", "upstream-org/lib"]);
+  }),
+);
+
+it.effect(
+  "excludes upstream-only checkouts from list when pullRequestOriginOnly is enabled while keeping explicit upstream links working",
+  () =>
+    Effect.gen(function* () {
+      const listedRepos: string[] = [];
+      const service = yield* makeService({
+        settings: { ...DEFAULT_SERVER_SETTINGS, pullRequestOriginOnly: true },
+        projects: [
+          forkProject({
+            id: "p-upstream",
+            title: "upstream only",
+            workspaceRoot: "/upstream",
+            upstream: "upstream-org/only",
+          }),
+          forkProject({
+            id: "p-fork",
+            title: "forked",
+            workspaceRoot: "/fork",
+            upstream: "upstream-org/shared",
+            origin: "fork-user/shared",
+          }),
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            listChangeRequests: (input) => {
+              listedRepos.push(input.repository);
+              return Effect.succeed({
+                items: [changeRequest(10, "2026-07-05T00:00:00Z")],
+                truncated: false,
+                continues: false,
+              });
+            },
+            getChangeRequest: (input) =>
+              Effect.succeed({
+                ...hostedChangeRequest(`Detail ${input.repository}#${input.number}`),
+                number: input.number,
+                title: `${input.repository}#${input.number}`,
+              }),
+          }),
+        ],
+      });
+
+      const listed = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(listedRepos, ["fork-user/shared"]);
+      assert.deepStrictEqual(
+        listed.entries.map((entry) => [entry.projectId, entry.repository]),
+        [["p-fork", "fork-user/shared"]],
+      );
+
+      assert.isTrue(yield* service.servesProject("p-upstream" as ProjectId));
+      assert.strictEqual(
+        (yield* service.addressedProject("p-upstream" as ProjectId))?.repositoryIdentity
+          ?.canonicalKey,
+        "github.com/upstream-org/only",
+      );
+
+      const explicitUpstreamOnly = yield* service.detail({
+        projectId: "p-upstream" as ProjectId,
+        host: "github.com",
+        repository: "upstream-org/only",
+        number: 77,
+      });
+      assert.strictEqual(explicitUpstreamOnly.title, "upstream-org/only#77");
+
+      const explicitForkUpstream = yield* service.detail({
+        projectId: "p-fork" as ProjectId,
+        host: "github.com",
+        repository: "upstream-org/shared",
+        number: 88,
+      });
+      assert.strictEqual(explicitForkUpstream.title, "upstream-org/shared#88");
+    }),
+);
+
+it.effect("busts list and listStats caches dynamically when pullRequestOriginOnly changes", () =>
+  Effect.gen(function* () {
+    let originOnly = false;
+    const service = yield* makeService({
+      getSettings: () => ({ ...DEFAULT_SERVER_SETTINGS, pullRequestOriginOnly: originOnly }),
+      projects: [
+        forkProject({
+          id: "p1",
+          title: "forked",
+          workspaceRoot: "/fork",
+          upstream: "upstream-org/app",
+          origin: "fork-user/app",
+        }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: (input) =>
+            Effect.succeed({
+              items: [
+                changeRequest(input.repository === "fork-user/app" ? 2 : 1, "2026-07-05T00:00:00Z"),
+              ],
+              truncated: false,
+              continues: false,
+            }),
+          listChangeRequestStats: (input) =>
+            Effect.succeed(
+              input.changeRequests.map((ref) => ({
+                repository: ref.repository,
+                number: ref.number,
+                additions: ref.repository === "fork-user/app" ? 20 : 10,
+                deletions: 0,
+              })),
+            ),
+        }),
+      ],
+    });
+
+    const firstList = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(
+      firstList.entries.map((entry) => [entry.repository, entry.number]),
+      [["upstream-org/app", 1]],
+    );
+    const firstStats = yield* service.listStats({
+      refs: [{ projectId: "p1" as ProjectId, repository: "fork-user/app", number: 2 }],
+    });
+    assert.deepStrictEqual(firstStats.stats, []);
+
+    originOnly = true;
+
+    const secondList = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(
+      secondList.entries.map((entry) => [entry.repository, entry.number]),
+      [["fork-user/app", 2]],
+    );
+    const secondStats = yield* service.listStats({
+      refs: [{ projectId: "p1" as ProjectId, repository: "fork-user/app", number: 2 }],
+    });
+    assert.strictEqual(secondStats.stats[0]?.additions, 20);
+  }),
 );

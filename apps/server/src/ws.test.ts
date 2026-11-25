@@ -12,6 +12,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
+  AuthSettingsWriteScope,
   type ManagedPolicySummary,
   type WorkflowRun,
   type WorkflowStep,
@@ -3176,4 +3177,89 @@ it.effect("a session that can only read sees a workflow run but cannot steer it"
     );
     assert.deepEqual(calls, []);
   }).pipe(Effect.provide(layerWorkflowRpcTest), Effect.scoped),
+);
+
+const settingsUpdateRpcs = WsRpcGroup.omit(
+  ...[...WsRpcGroup.requests.keys()].filter(
+    (
+      tag,
+    ): tag is Exclude<
+      keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+      typeof WS_METHODS.serverUpdateSettings
+    > => tag !== WS_METHODS.serverUpdateSettings,
+  ),
+);
+
+const makeSettingsClient = Effect.fn("test.makeSettingsClient")(function* (
+  invalidations: Array<{ readonly input: unknown; readonly options: unknown }>,
+) {
+  const scopes = [AuthSettingsWriteScope];
+  const services = Layer.mergeAll(
+    layerUnusedConfigRpcServices,
+    Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+    Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+    Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+    Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+    Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+    Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+    Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+    Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+    Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+    ServerSettings.layerTest({}),
+    Layer.mock(PullRequestService.PullRequestService)({
+      invalidate: (input, options) => Effect.sync(() => invalidations.push({ input, options })),
+    }),
+  );
+  return yield* RpcTest.makeClient(settingsUpdateRpcs).pipe(
+    Effect.provide(
+      layerWsRpc(
+        {
+          sessionId: AuthSessionId.make("settings-test"),
+          subject: "settings-test",
+          method: "browser-session-cookie",
+          scopes,
+        },
+        {},
+        yield* ServerBrowser.ServerBrowser,
+        () => Effect.void,
+        { secretReferences: true },
+      ).pipe(Layer.provide(services), Layer.merge(RpcAuthorization.layer(scopes))),
+    ),
+  );
+});
+
+it.effect(
+  "invalidates pull requests when global or per-project pullRequestOriginOnly changes",
+  () =>
+    Effect.gen(function* () {
+      const invalidations: Array<{ readonly input: unknown; readonly options: unknown }> = [];
+      const client = yield* makeSettingsClient(invalidations);
+
+      yield* client[WS_METHODS.serverUpdateSettings]({
+        patch: { defaultAutoPull: true },
+      });
+      assert.deepEqual(invalidations, []);
+
+      yield* client[WS_METHODS.serverUpdateSettings]({
+        patch: { pullRequestOriginOnly: false },
+      });
+      assert.deepEqual(invalidations, [{ input: {}, options: { notifyReaders: true } }]);
+
+      yield* client[WS_METHODS.serverUpdateSettings]({
+        patch: { pullRequestOriginOnly: false },
+      });
+      assert.strictEqual(invalidations.length, 1);
+
+      yield* client[WS_METHODS.serverUpdateSettings]({
+        patch: {
+          projectSettingsOverrides: {
+            ["project-1" as ProjectId]: { pullRequestOriginOnly: true },
+          },
+        },
+      });
+      assert.deepEqual(invalidations, [
+        { input: {}, options: { notifyReaders: true } },
+        { input: {}, options: { notifyReaders: true } },
+      ]);
+    }).pipe(Effect.provide(layerWorkflowRpcTest), Effect.scoped),
 );

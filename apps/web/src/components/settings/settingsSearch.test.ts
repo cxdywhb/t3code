@@ -100,6 +100,20 @@ describe("searchSettings", () => {
     }
   });
 
+  it("finds the origin-only pull request setting by origin and upstream keywords", () => {
+    for (const query of ["origin", "upstream"]) {
+      expect(searchSettings(query)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "pull-request-origin-only",
+            to: "/settings/source-control",
+            scope: "project-defaults",
+          }),
+        ]),
+      );
+    }
+  });
+
   it("finds the Scheduled tasks page", () => {
     expect(searchSettings("scheduled tasks")[0]).toMatchObject({
       id: "scheduled-tasks",

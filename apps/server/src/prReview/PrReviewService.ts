@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  resolveOriginOnlyRepositoryIdentity,
   CommandId,
   MessageId,
   PositiveInt,
@@ -326,8 +327,15 @@ const make = Effect.gen(function* () {
     const matched = allShells.find((shell) => {
       const identity = shell.repositoryIdentity;
       if (!identity) return false;
+      const targetRepo = target.repository.trim().toLowerCase();
       const selector = sourceControlDefinitions.repositorySelector(identity);
-      return selector?.toLowerCase() === target.repository.trim().toLowerCase();
+      const originSelector = sourceControlDefinitions.repositorySelector(
+        resolveOriginOnlyRepositoryIdentity(identity, true, {
+          recognizeProvider: (remoteUrl) =>
+            sourceControlDefinitions.recognizeRemote(remoteUrl)?.kind,
+        }),
+      );
+      return selector?.toLowerCase() === targetRepo || originSelector?.toLowerCase() === targetRepo;
     });
     if (matched) {
       return {

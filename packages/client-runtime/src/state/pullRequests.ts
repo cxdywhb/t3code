@@ -1283,6 +1283,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       label: "environment-data:pull-requests:filter-options",
       tag: WS_METHODS.pullRequestsFilterOptions,
       staleTimeMs: 5 * 60_000,
+      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
     }),
     detail,
     detailReadVersion,

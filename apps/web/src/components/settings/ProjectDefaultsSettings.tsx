@@ -111,6 +111,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
+  const mixedOriginOnly = useScopedSettingsMixed(["pullRequestOriginOnly"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const unavailable = connectedEnvironments.length === 0;
@@ -556,6 +557,32 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                   </SelectItem>
                 </SelectPopup>
               </Select>
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["pullRequestOriginOnly"]}
+            mixed={mixedOriginOnly}
+            {...searchableSetting("pull-request-origin-only")}
+            description={gt(
+              "Ignore upstream remotes and list pull requests only from each repository's origin remote. Explicit links to upstream pull requests still open.",
+            )}
+            resetAction={
+              !settings.pullRequestOriginOnly ? (
+                <SettingResetButton
+                  ariaLabel={gt("Reset origin remote preference to default")}
+                  tooltip={gt("Use origin remote only")}
+                  onClick={() => updateSettings({ pullRequestOriginOnly: true })}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label={gt("Use origin remote only")}
+                mixed={mixedOriginOnly}
+                checked={mixedOriginOnly ? false : settings.pullRequestOriginOnly}
+                onCheckedChange={(enabled) => updateSettings({ pullRequestOriginOnly: enabled })}
+              />
             }
           />
         </>

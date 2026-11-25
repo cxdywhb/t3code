@@ -16,6 +16,7 @@ import {
   globalIdleCompaction,
   idleCompactionPatch,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
+  ProjectSettingsOverrides,
   requiredScopesForProjectMutation,
   resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
@@ -558,5 +559,24 @@ describe("server model preferences", () => {
     const input = { favorites: [], providerModelPreferences: {} };
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
+  });
+});
+
+describe("pullRequestOriginOnly setting", () => {
+  const decodeProjectOverride = Schema.decodeUnknownSync(ProjectSettingsOverrides);
+
+  it("defaults to true and supports patches and project overrides", () => {
+    expect(DEFAULT_SERVER_SETTINGS.pullRequestOriginOnly).toBe(true);
+    expect(decodeServerSettings({}).pullRequestOriginOnly).toBe(true);
+    expect(decodeServerSettings({ pullRequestOriginOnly: false }).pullRequestOriginOnly).toBe(
+      false,
+    );
+    expect(decodeServerSettingsPatch({ pullRequestOriginOnly: false })).toEqual({
+      pullRequestOriginOnly: false,
+    });
+    expect(PROJECT_SCOPED_SERVER_SETTING_KEYS).toContain("pullRequestOriginOnly");
+    expect(decodeProjectOverride({ pullRequestOriginOnly: false })).toEqual({
+      pullRequestOriginOnly: false,
+    });
   });
 });
