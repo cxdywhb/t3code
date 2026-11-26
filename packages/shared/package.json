@@ -11,6 +11,22 @@
       "types": "./src/pullRequestAnchor.ts",
       "import": "./src/pullRequestAnchor.ts"
     },
+    "./issueAutomationScan": {
+      "types": "./src/issueAutomationScan.ts",
+      "import": "./src/issueAutomationScan.ts"
+    },
+    "./issueAutomationTitle": {
+      "types": "./src/issueAutomationTitle.ts",
+      "import": "./src/issueAutomationTitle.ts"
+    },
+    "./issueAutomationWriteBack": {
+      "types": "./src/issueAutomationWriteBack.ts",
+      "import": "./src/issueAutomationWriteBack.ts"
+    },
+    "./legacyIssueAutomationSummary": {
+      "types": "./src/legacyIssueAutomationSummary.ts",
+      "import": "./src/legacyIssueAutomationSummary.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

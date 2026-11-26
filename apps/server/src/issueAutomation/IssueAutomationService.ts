@@ -5,15 +5,19 @@ import * as NodePath from "node:path";
 
 import {
   CommandId,
+  isIssueAutomationFeishuWebhook,
+  isOrchestrationV2WorkActive,
   IssueAutomationConnectorId,
   IssueAutomationError,
   IssueAutomationProfileId,
   IssueAutomationTaskId,
   IssueTrackerKind,
   MessageId,
+  T3_APP_BASE_NAME,
   type IssueAutomationActionMode,
   type IssueAutomationAnalyzeIssuesInput,
   type IssueAutomationAnalyzeIssuesResult,
+  type IssueAutomationConfirmRepairInput,
   type IssueAutomationCancelTaskInput,
   type IssueAutomationConnector,
   type IssueAutomationDeleteConnectorInput,
@@ -21,6 +25,7 @@ import {
   type IssueAutomationGetRemoteIssueDetailInput,
   type IssueAutomationListRemoteIssuesInput,
   type IssueAutomationListRemoteIssuesResult,
+  type IssueAutomationMessageSummary,
   type IssueAutomationModelStrategy,
   type IssueAutomationPolicy,
   type IssueAutomationProfile,
@@ -28,12 +33,16 @@ import {
   type IssueAutomationRemoteIssue,
   type IssueAutomationRemoteIssueDetail,
   type IssueAutomationRepoBinding,
-  type IssueAutomationSaveConnectorInput,
+  type IssueAutomationStartConnectorAuthInput,
+  type IssueAutomationStartConnectorAuthResult,
+  type IssueAutomationFinishConnectorAuthInput,
   type IssueAutomationSaveProfileInput,
+  type IssueAutomationScanProfileIssuesInput,
+  type IssueAutomationScanProfileIssuesResult,
   type IssueAutomationSetProfileEnabledInput,
   type IssueAutomationStage,
   type IssueAutomationStateSnapshot,
-  type IssueAutomationStepLog,
+  type IssueAutomationSyncRepairAction,
   type IssueAutomationTask,
   type IssueAutomationTriggerPollInput,
   type IssueAutomationTriggerPollResult,
@@ -41,24 +50,38 @@ import {
   type IssueAutomationWriteBackResult,
   type ModelSelection,
   type OrchestrationProjectShell,
+  type OrchestrationV2ThreadProjection,
   type ProjectId,
+  type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
+import {
+  matchesIssueAutomationFilter,
+  scanIssueAutomationPage,
+} from "@t3tools/shared/issueAutomationScan";
+import {
+  formatIssueAutomationWriteBackComment,
+  ISSUE_AUTOMATION_COMMENT_MARKER,
+} from "@t3tools/shared/issueAutomationWriteBack";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as RcMap from "effect/RcMap";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -66,8 +89,21 @@ import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { diagnosisThreadId, isDiagnosisThread } from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectService from "../project/ProjectService.ts";
+import { buildZenTaoBugWebUrl } from "./connectors/zentao/ZenTaoClient.ts";
+import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
+import {
+  automaticMcpCallback,
+  McpAuthorization,
+  McpConnectionError,
+  parseMcpCallback,
+  parseMcpUrl,
+  readStoredOAuth,
+  type StoredOAuth,
+} from "./IssueAutomationMcp.ts";
 import * as IssueAutomationRepository from "./IssueAutomationRepository.ts";
+import { buildManualRepairPrompt } from "./ManualRepairPrompt.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
 import type {
   IssuePlatformPlugin,
@@ -77,15 +113,37 @@ import type {
 } from "./plugin/IssuePlatformPlugin.ts";
 import * as PluginRegistry from "./plugin/PluginRegistry.ts";
 
-const BOT_SIGNATURE_MARKER = "[T3-Auto-Analysis]";
 const THREAD_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
 const POLL_TICK_INTERVAL = Duration.seconds(30);
 const isIssueAutomationError = Schema.is(IssueAutomationError);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const encodeSecretJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 function connectorSecretKey(id: IssueAutomationConnectorId): string {
-  return `issue-automation-connector-${id}-secret`;
+  return `issue-automation-connector-${id}-oauth`;
+}
+
+const isMcpConnectionError = Schema.is(McpConnectionError);
+
+function mcpError(operation: string, cause: unknown): IssueAutomationError {
+  if (isMcpConnectionError(cause)) {
+    return new IssueAutomationError({
+      operation: cause.needsAuthorization ? "reauthorizeConnector" : operation,
+      detail: cause.message,
+    });
+  }
+  return new IssueAutomationError({
+    operation,
+    detail: "无法连接禅道 MCP，请检查地址、服务和授权配置。",
+  });
+}
+
+function profileForClient({
+  feishuWebhookSecretId: _secretId,
+  ...profile
+}: IssueAutomationRepository.StoredProfile): IssueAutomationProfile {
+  return profile;
 }
 
 function formatModelLabel(selection: ModelSelection): string {
@@ -212,29 +270,31 @@ function buildCrossReviewPrompt(input: {
   ].join("\n");
 }
 
-function formatWriteBackComment(input: {
-  readonly assignedModelLabel: string;
-  readonly worktreeBranch: string | null;
-  readonly diagnosisReport: string;
-  readonly reviewReport: string | null;
-}): string {
-  const sections = [
-    `## 🤖 自动诊断分析报告`,
-    `- **执行模型**: \`${input.assignedModelLabel}\``,
-    ...(input.worktreeBranch ? [`- **本地修复分支**: \`${input.worktreeBranch}\``] : []),
-    "",
-    input.diagnosisReport.trim(),
-  ];
-  if (input.reviewReport && input.reviewReport.trim().length > 0) {
-    sections.push("", "## 🔍 异构模型交叉审查意见", input.reviewReport.trim());
-  }
-  sections.push("", `\`${BOT_SIGNATURE_MARKER}\``);
-  return sections.join("\n");
-}
-
 function isTerminalStage(stage: IssueAutomationStage): boolean {
   return (
     stage === "completed" || stage === "needs_human" || stage === "failed" || stage === "cancelled"
+  );
+}
+
+function blocksNewTask(task: IssueAutomationTask): boolean {
+  return (
+    !isTerminalStage(task.stage) ||
+    (task.repairOfTaskId !== undefined && task.stage === "needs_human")
+  );
+}
+
+type TaskContinuation =
+  | { readonly kind: "retry"; readonly threadId: ThreadId | null; readonly attemptNumber: number }
+  | { readonly kind: "repair"; readonly diagnosisReport: string };
+
+function hasRunBackgroundWork(projection: OrchestrationV2ThreadProjection, runId: RunId): boolean {
+  return (
+    projection.providerThreads.some((thread) =>
+      thread.pendingBackgroundTasks?.some((task) => task.runId === runId),
+    ) ||
+    projection.subagents.some(
+      (task) => task.runId === runId && isOrchestrationV2WorkActive(task.status),
+    )
   );
 }
 
@@ -243,8 +303,14 @@ export class IssueAutomationService extends Context.Service<
   {
     readonly getState: Effect.Effect<IssueAutomationStateSnapshot, IssueAutomationError>;
     readonly subscribe: Stream.Stream<IssueAutomationStateSnapshot, IssueAutomationError>;
-    readonly saveConnector: (
-      input: IssueAutomationSaveConnectorInput,
+    readonly startConnectorAuth: (
+      input: IssueAutomationStartConnectorAuthInput,
+    ) => Effect.Effect<IssueAutomationStartConnectorAuthResult, IssueAutomationError>;
+    readonly finishConnectorAuth: (
+      input: IssueAutomationFinishConnectorAuthInput,
+    ) => Effect.Effect<IssueAutomationConnector, IssueAutomationError>;
+    readonly handleConnectorAuthCallback: (
+      callback: URL,
     ) => Effect.Effect<IssueAutomationConnector, IssueAutomationError>;
     readonly deleteConnector: (
       input: IssueAutomationDeleteConnectorInput,
@@ -255,6 +321,9 @@ export class IssueAutomationService extends Context.Service<
     readonly listRemoteIssues: (
       input: IssueAutomationListRemoteIssuesInput,
     ) => Effect.Effect<IssueAutomationListRemoteIssuesResult, IssueAutomationError>;
+    readonly scanProfileIssues: (
+      input: IssueAutomationScanProfileIssuesInput,
+    ) => Effect.Effect<IssueAutomationScanProfileIssuesResult, IssueAutomationError>;
     readonly getRemoteIssueDetail: (
       input: IssueAutomationGetRemoteIssueDetailInput,
     ) => Effect.Effect<IssueAutomationRemoteIssueDetail, IssueAutomationError>;
@@ -276,6 +345,9 @@ export class IssueAutomationService extends Context.Service<
     readonly cancelTask: (
       input: IssueAutomationCancelTaskInput,
     ) => Effect.Effect<void, IssueAutomationError>;
+    readonly confirmRepair: (
+      input: IssueAutomationConfirmRepairInput,
+    ) => Effect.Effect<void, IssueAutomationError>;
     readonly writeBack: (
       input: IssueAutomationWriteBackInput,
     ) => Effect.Effect<IssueAutomationWriteBackResult, IssueAutomationError>;
@@ -287,18 +359,28 @@ const make = Effect.gen(function* () {
   const repo = yield* IssueAutomationRepository.IssueAutomationRepository;
   const plugins = yield* PluginRegistry.IssuePlatformPluginRegistry;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const httpClient = yield* HttpClient.HttpClient;
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitWorkflow.GitWorkflowService;
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const threadIssues = yield* ThreadIssueService.ThreadIssueService;
   const serviceScope = yield* Effect.scope;
+  const clock = yield* Clock.Clock;
 
   const updatesPubSub = yield* PubSub.unbounded<IssueAutomationStateSnapshot>();
   const activeTaskFibers = yield* Ref.make<ReadonlyMap<IssueAutomationTaskId, Fiber.Fiber<void>>>(
     new Map(),
   );
   const globalSemaphore = yield* Semaphore.make(3);
+  const connectorLocks = yield* RcMap.make({
+    lookup: (_id: IssueAutomationConnectorId) => Semaphore.make(1),
+  });
+  const profileWrites = yield* Semaphore.make(1);
+  const taskWrites = yield* Semaphore.make(1);
+  const taskStarts = yield* Semaphore.make(1);
+  const repairWrites = yield* Semaphore.make(1);
+  const pendingCancellations = new Set<IssueAutomationTaskId>();
   const profileSemaphores = new Map<string, { max: number; sem: Semaphore.Semaphore }>();
 
   const getProfileSemaphore = Effect.fn("IssueAutomationService.getProfileSemaphore")(function* (
@@ -326,47 +408,113 @@ const make = Effect.gen(function* () {
           cause,
         });
 
-  const hasConnectorSecret = (id: IssueAutomationConnectorId) =>
-    secrets.get(connectorSecretKey(id)).pipe(
-      Effect.map(Option.isSome),
-      Effect.orElseSucceed(() => false),
+  const getConnector = Effect.fn("IssueAutomationService.getConnector")(
+    (id: IssueAutomationConnectorId) => repo.getConnector(id),
+    Effect.mapError(mapRepoErr("readConnector")),
+  );
+
+  const withConnectorLock = <A, E>(id: IssueAutomationConnectorId, effect: Effect.Effect<A, E>) =>
+    Effect.scoped(
+      Effect.flatMap(RcMap.get(connectorLocks, id), (lock) => lock.withPermits(1)(effect)),
     );
+
+  const storeConnectorOAuth = Effect.fn("IssueAutomationService.storeConnectorOAuth")(function* (
+    key: string,
+    mcpUrl: string,
+    oauth: StoredOAuth,
+  ) {
+    const serialized = yield* encodeSecretJson({
+      mcpUrl,
+      ...oauth,
+    }).pipe(Effect.mapError(() => mcpError("encodeConnectorSecret", undefined)));
+    yield* secrets
+      .set(key, encoder.encode(serialized))
+      .pipe(Effect.mapError(mapRepoErr("storeConnectorSecret")));
+  });
+
+  const markDisconnected = Effect.fn("IssueAutomationService.markDisconnected")(function* (
+    connector: IssueAutomationConnector,
+    detail: string,
+  ) {
+    yield* repo
+      .upsertConnector({ ...connector, status: "disconnected", statusDetail: detail })
+      .pipe(Effect.mapError(mapRepoErr("disconnectConnector")));
+    yield* publishSnapshot;
+  });
+
+  const credentialsFor = (
+    connector: IssueAutomationConnector,
+    mcpUrl: string,
+  ): PlatformCredentials => ({
+    baseUrl: connector.baseUrl,
+    withClient: (operation, run) =>
+      withConnectorLock(
+        connector.id,
+        Effect.gen(function* () {
+          const current = yield* getConnector(connector.id);
+          if (
+            current?.mcpUrl !== mcpUrl ||
+            current.baseUrl !== connector.baseUrl ||
+            current.status === "disconnected"
+          ) {
+            return yield* new IssueAutomationError({
+              operation: "readConnector",
+              detail: "禅道 MCP 连接已变更或未授权，请刷新页面或重新授权。",
+            });
+          }
+          const secretKey = connectorSecretKey(connector.id);
+          const stored = yield* secrets
+            .get(secretKey)
+            .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
+          const oauth = Option.isSome(stored)
+            ? readStoredOAuth(decoder.decode(stored.value), mcpUrl)
+            : undefined;
+          if (!oauth) {
+            const detail = "禅道 MCP 授权已失效，请重新授权。";
+            yield* markDisconnected(current, detail);
+            return yield* new IssueAutomationError({ operation: "reauthorizeConnector", detail });
+          }
+
+          const session = new McpAuthorization(new URL(mcpUrl), NodeCrypto.randomUUID(), oauth);
+          const outcome = yield* Effect.result(
+            Effect.tryPromise({
+              try: (signal) => session.withClient(signal, run),
+              catch: (cause) => mcpError(operation, cause),
+            }),
+          );
+          const credentials = session.credentials;
+          if (session.tokensChanged && credentials) {
+            yield* storeConnectorOAuth(secretKey, mcpUrl, credentials);
+          }
+          if (outcome._tag === "Failure") {
+            if (outcome.failure.operation === "reauthorizeConnector") {
+              yield* markDisconnected(current, outcome.failure.detail);
+            }
+            return yield* outcome.failure;
+          }
+          return outcome.success;
+        }),
+      ),
+  });
 
   const readConnectorCredentials = Effect.fn("IssueAutomationService.readConnectorCredentials")(
     function* (connectorId: IssueAutomationConnectorId) {
-      const connectors = yield* repo
-        .listConnectors(hasConnectorSecret)
-        .pipe(Effect.mapError(mapRepoErr("readConnector")));
-      const connector = connectors.find((item) => item.id === connectorId);
-      if (!connector) {
+      const connector = yield* getConnector(connectorId);
+      if (!connector?.mcpUrl || connector.status === "disconnected") {
         return yield* new IssueAutomationError({
           operation: "readConnector",
-          detail: "未找到对应的问题平台连接配置",
-        });
-      }
-      const storedSecret = yield* secrets
-        .get(connectorSecretKey(connector.id))
-        .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
-      if (Option.isNone(storedSecret)) {
-        return yield* new IssueAutomationError({
-          operation: "readConnectorSecret",
-          detail: `平台连接 "${connector.name}" 尚未配置密码或凭据已清除`,
+          detail: "请先连接或重新授权禅道 MCP。",
         });
       }
       const plugin = yield* plugins.requirePlugin(connector.platform);
-      const credentials: PlatformCredentials = {
-        baseUrl: connector.baseUrl,
-        account: connector.account,
-        secret: decoder.decode(storedSecret.value),
-      };
-      return { connector, plugin, credentials };
+      return { connector, plugin, credentials: credentialsFor(connector, connector.mcpUrl) };
     },
   );
 
   const buildSnapshot: Effect.Effect<IssueAutomationStateSnapshot, IssueAutomationError> =
     Effect.gen(function* () {
       const [connectors, profiles, tasks, runningMap] = yield* Effect.all([
-        repo.listConnectors(hasConnectorSecret).pipe(Effect.mapError(mapRepoErr("listConnectors"))),
+        repo.listConnectors.pipe(Effect.mapError(mapRepoErr("listConnectors"))),
         repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles"))),
         repo.listTasks(1000).pipe(Effect.mapError(mapRepoErr("listTasks"))),
         Ref.get(activeTaskFibers),
@@ -374,9 +522,11 @@ const make = Effect.gen(function* () {
       return {
         platforms: plugins.descriptors,
         connectors,
-        profiles,
+        profiles: profiles.map(profileForClient),
         tasks,
-        activeRunCount: runningMap.size,
+        activeRunCount:
+          runningMap.size +
+          tasks.filter((task) => task.stage === "cancelling" && !runningMap.has(task.id)).length,
       };
     });
 
@@ -384,6 +534,39 @@ const make = Effect.gen(function* () {
     Effect.flatMap((snapshot) => PubSub.publish(updatesPubSub, snapshot)),
     Effect.ignore,
   );
+
+  const notifyTaskEnded = Effect.fn("IssueAutomationService.notifyTaskEnded")(function* (
+    task: IssueAutomationTask,
+    hasConfirmedRepair: boolean,
+  ) {
+    if (!task.profileId) return;
+    const profileId = task.profileId;
+    const getWebhook = Effect.gen(function* () {
+      const profile = yield* repo.getProfile(profileId);
+      if (
+        !profile?.feishuNotification?.enabled ||
+        !profile.feishuWebhookSecretId ||
+        profile.connectorId !== task.connectorId ||
+        profile.scopeId !== task.scopeId
+      )
+        return;
+      const webhook = yield* secrets.get(profile.feishuWebhookSecretId);
+      return Option.isSome(webhook) ? decoder.decode(webhook.value) : "";
+    }).pipe(profileWrites.withPermits(1));
+    const delivered = yield* sendFeishuTaskNotification(httpClient, getWebhook, task, {
+      appDisplayName: config.desktopAppDisplayName ?? T3_APP_BASE_NAME,
+      hasConfirmedRepair,
+    });
+    if (!delivered) {
+      yield* repo
+        .appendTaskStep(task.id, {
+          at: yield* nowIso,
+          stage: task.stage,
+          message: "飞书通知发送失败，请检查值守规则中的群机器人 Webhook",
+        })
+        .pipe(Effect.ignore);
+    }
+  });
 
   const updateTaskState = Effect.fn("IssueAutomationService.updateTaskState")(function* (
     task: IssueAutomationTask,
@@ -394,33 +577,51 @@ const make = Effect.gen(function* () {
       readonly message: string;
     },
   ) {
-    const at = yield* nowIso;
-    const nextStage = patch.stage ?? task.stage;
-    const appendedSteps: ReadonlyArray<IssueAutomationStepLog> = stepMessage
-      ? [
-          ...task.steps,
-          {
-            at,
-            stage: stepMessage.stage ?? nextStage,
-            ...(stepMessage.modelLabel ? { modelLabel: stepMessage.modelLabel } : {}),
-            message: stepMessage.message,
-          },
-        ]
-      : (patch.steps ?? task.steps);
-    const updated: IssueAutomationTask = {
-      ...task,
-      ...patch,
-      stage: nextStage,
-      steps: appendedSteps,
-      updatedAt: at,
-      completedAt:
-        patch.completedAt !== undefined
-          ? patch.completedAt
-          : isTerminalStage(nextStage) && task.completedAt === null
-            ? at
-            : task.completedAt,
-    };
-    yield* repo.upsertTask(updated).pipe(Effect.mapError(mapRepoErr("upsertTask")));
+    const updated = yield* taskWrites.withPermits(1)(
+      Effect.gen(function* () {
+        const latest =
+          (yield* repo.getTask(task.id).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? task;
+        const nextStage = patch.stage ?? latest.stage;
+        const confirmsRepair =
+          latest.repairOfTaskId !== undefined &&
+          latest.stage === "needs_human" &&
+          nextStage === "completed" &&
+          patch.repairConfirmedAt !== undefined;
+        if (
+          nextStage !== latest.stage &&
+          ((isTerminalStage(latest.stage) && !confirmsRepair) ||
+            (latest.stage === "cancelling" && nextStage !== "cancelled"))
+        ) {
+          return latest;
+        }
+        const at = yield* nowIso;
+        const updated: IssueAutomationTask = {
+          ...latest,
+          ...patch,
+          stage: nextStage,
+          steps: stepMessage
+            ? [
+                ...latest.steps,
+                {
+                  at,
+                  stage: stepMessage.stage ?? nextStage,
+                  ...(stepMessage.modelLabel ? { modelLabel: stepMessage.modelLabel } : {}),
+                  message: stepMessage.message,
+                },
+              ]
+            : (patch.steps ?? latest.steps),
+          updatedAt: at,
+          completedAt:
+            patch.completedAt !== undefined
+              ? patch.completedAt
+              : isTerminalStage(nextStage)
+                ? (latest.completedAt ?? at)
+                : latest.completedAt,
+        };
+        yield* repo.upsertTask(updated).pipe(Effect.mapError(mapRepoErr("upsertTask")));
+        return updated;
+      }),
+    );
     yield* publishSnapshot;
     return updated;
   });
@@ -454,39 +655,93 @@ const make = Effect.gen(function* () {
       readonly modelSelection: ModelSelection;
       readonly workspaceStrategy: ThreadLaunchService.ThreadLaunchWorkspaceStrategy;
       readonly prompt: string;
+      readonly summary: IssueAutomationMessageSummary;
+      readonly existingThreadId?: ThreadId | undefined;
+      readonly onStarted: (
+        threadId: ThreadId,
+        runId: RunId,
+      ) => Effect.Effect<void, IssueAutomationError>;
     }) {
       const commandId = CommandId.make(`issue-automation:${NodeCrypto.randomUUID()}`);
       const messageId = MessageId.make(NodeCrypto.randomUUID());
-      const launched = yield* threadLaunch.launch({
+      const message = {
+        messageId,
+        text: input.prompt,
+        attachments: [],
+        context: { version: 1, records: [], issueAutomation: input.summary },
+      } as const;
+      const sender = {
         commandId,
         projectId: input.projectId,
-        title: input.title,
         modelSelection: input.modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        workspaceStrategy: input.workspaceStrategy,
-        initialMessage: {
-          messageId,
-          text: input.prompt,
-          attachments: [],
-        },
         createdBy: "user",
         creationSource: "web",
-      });
+      } as const;
+      // A cancel can interrupt the wait once the accepted run can be addressed by id.
+      const { threadId, runId } = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          let threadId: ThreadId;
+          let runId: RunId | undefined;
+          if (input.existingThreadId !== undefined) {
+            threadId = input.existingThreadId;
+            const sent = yield* threadManagement.sendToThread({
+              ...sender,
+              ...message,
+              threadId,
+              mode: "queue",
+              freshContext: true,
+            });
+            runId = sent.run.id;
+          } else {
+            const launched = yield* threadLaunch.launch({
+              ...sender,
+              title: input.title,
+              ...(input.summary.mode === "diagnose"
+                ? { threadId: diagnosisThreadId(NodeCrypto.randomUUID()) }
+                : {}),
+              runtimeMode: input.summary.mode === "diagnose" ? "approval-required" : "full-access",
+              interactionMode: "default",
+              workspaceStrategy: input.workspaceStrategy,
+              initialMessage: message,
+            });
+            threadId = launched.threadId;
+            runId = launched.projection.runs.find((run) => run.userMessageId === messageId)?.id;
+          }
+          if (runId === undefined) {
+            return yield* new IssueAutomationError({
+              operation: "runModelTurn",
+              detail: "未找到刚启动的模型轮次",
+            });
+          }
+          yield* input.onStarted(threadId, runId);
+          return { threadId, runId };
+        }),
+      );
 
       const waited = yield* threadManagement.waitForThread({
         projectId: input.projectId,
-        threadId: launched.threadId,
+        threadId,
+        runId,
         timeoutMs: THREAD_WAIT_TIMEOUT_MS,
         untilDelegatedWorkSettled: true,
       });
 
-      const projection = yield* threadManagement.getThreadProjection(launched.threadId);
+      const projection = yield* threadManagement.getThreadProjection(threadId);
+      const result = waited.resultRun;
+      const resultMessage = projection.messages.find(
+        (message) => message.id === result?.userMessageId,
+      );
+      const terminalRun =
+        result &&
+        (input.existingThreadId === undefined ||
+          result.userMessageId === messageId ||
+          resultMessage?.delegatedCompletion?.parentRunId === runId)
+          ? result
+          : waited.run;
       const assistantMessages = projection.messages.filter(
-        (m) => m.role === "assistant" && m.text.trim().length > 0,
+        (m) => m.runId === terminalRun?.id && m.role === "assistant" && m.text.trim().length > 0,
       );
       const latestText = assistantMessages.at(-1)?.text.trim() ?? "";
-      const terminalRun = waited.resultRun ?? waited.run ?? projection.runs.at(-1) ?? null;
 
       if (waited.timedOut) {
         return yield* new IssueAutomationError({
@@ -507,10 +762,18 @@ const make = Effect.gen(function* () {
         });
       }
       return {
-        threadId: launched.threadId,
+        threadId,
         worktreePath: projection.thread.worktreePath,
         branch: projection.thread.branch,
         reportText: latestText || "（模型已完成运行，请点击关联会话查看详细操作记录）",
+        hasConfirmedChanges:
+          terminalRun?.status === "completed" &&
+          projection.checkpoints.some(
+            (checkpoint) =>
+              checkpoint.runId === terminalRun.id &&
+              checkpoint.status === "ready" &&
+              (checkpoint.filesTotal?.count ?? checkpoint.files.length) > 0,
+          ),
       };
     },
   );
@@ -521,23 +784,44 @@ const make = Effect.gen(function* () {
     models: IssueAutomationModelStrategy,
     policy: IssueAutomationPolicy,
     maxConcurrency: number,
+    continuation?: TaskContinuation,
   ) {
+    const retry = continuation?.kind === "retry" ? continuation : undefined;
+    const repair = continuation?.kind === "repair" ? continuation : undefined;
     const profileSem = yield* getProfileSemaphore(
       initialTask.profileId ?? initialTask.connectorId,
       maxConcurrency,
     );
 
-    yield* globalSemaphore.withPermits(1)(
+    let current = initialTask;
+    const recordPrimaryRun = Effect.fn("IssueAutomationService.recordPrimaryRun")(function* (
+      threadId: ThreadId,
+      runId: RunId,
+    ) {
+      current = yield* updateTaskState(current, { primaryThreadId: threadId, primaryRunId: runId });
+    });
+    const recordReviewRun = Effect.fn("IssueAutomationService.recordReviewRun")(function* (
+      threadId: ThreadId,
+      runId: RunId,
+    ) {
+      current = yield* updateTaskState(current, { reviewThreadId: threadId, reviewRunId: runId });
+    });
+    let hasConfirmedRepair = false;
+    const withGlobalPermit = globalSemaphore.withPermits(1);
+    const finishedTask = yield* withGlobalPermit(
       profileSem.withPermits(1)(
         Effect.gen(function* () {
-          let current = yield* updateTaskState(
+          current = yield* updateTaskState(
             initialTask,
             { stage: "enriching", lastError: null },
             {
               stage: "enriching",
-              message: `正在从平台拉取 ${initialTask.displayKey} 完整详情与报错截图...`,
+              message: repair
+                ? `正在刷新 ${initialTask.displayKey} 的缺陷信息，准备沿用已有诊断...`
+                : `正在从平台拉取 ${initialTask.displayKey} 完整详情与报错截图...`,
             },
           );
+          if (current.stage === "cancelling" || isTerminalStage(current.stage)) return current;
 
           const { connector, plugin, credentials } = yield* readConnectorCredentials(
             current.connectorId,
@@ -548,31 +832,30 @@ const make = Effect.gen(function* () {
             issueKey: current.issueKey,
           });
 
-          const downloadedImages = yield* downloadIssueImages(
-            plugin,
-            credentials,
-            current.id,
-            detail.imageUrls,
-          );
+          const issueDetails = {
+            issueTitle: detail.title,
+            issueUrl: detail.url,
+            moduleName: detail.moduleName,
+            severity: detail.severity,
+            priority: detail.priority,
+            issueStatus: detail.status,
+            assignee: detail.assignee,
+            remoteUpdatedMarker: detail.updatedAt,
+          };
+          const downloadedImages = repair
+            ? []
+            : yield* downloadIssueImages(plugin, credentials, current.id, detail.imageUrls);
 
           // Step 2: Multi-Repository Routing
           current = yield* updateTaskState(
             current,
-            {
-              stage: "routing",
-              issueTitle: detail.title,
-              moduleName: detail.moduleName,
-              severity: detail.severity,
-              priority: detail.priority,
-              issueStatus: detail.status,
-              assignee: detail.assignee,
-              remoteUpdatedMarker: detail.updatedAt,
-            },
+            { ...issueDetails, stage: "routing" },
             {
               stage: "routing",
               ...(models.triageModel ? { modelLabel: formatModelLabel(models.triageModel) } : {}),
-              message:
-                downloadedImages.length > 0
+              message: repair
+                ? "已刷新缺陷信息，继续使用原诊断的代码库"
+                : downloadedImages.length > 0
                   ? `已解析详情并下载 ${String(downloadedImages.length)} 张内网截图，正在执行多代码库定位...`
                   : "已拉取完整重现步骤与历史记录，正在匹配目标本地代码库...",
             },
@@ -582,17 +865,25 @@ const make = Effect.gen(function* () {
             .listShells()
             .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<OrchestrationProjectShell>));
 
-          const route = resolveTargetRepositories({
-            binding,
-            availableProjects: allProjects,
-            moduleName: detail.moduleName,
-            issueTitle: detail.title,
-            stepsMarkdown: detail.stepsMarkdown,
-          });
+          const route = continuation
+            ? {
+                targetProjectId: binding.primaryProjectId,
+                referenceProjectIds: binding.linkedProjectIds.filter(
+                  (id) => id !== binding.primaryProjectId,
+                ),
+                matchedReason: "沿用上次诊断的代码库",
+              }
+            : resolveTargetRepositories({
+                binding,
+                availableProjects: allProjects,
+                moduleName: detail.moduleName,
+                issueTitle: detail.title,
+                stepsMarkdown: detail.stepsMarkdown,
+              });
 
           const targetProject = allProjects.find((p) => p.id === route.targetProjectId);
           if (!targetProject) {
-            current = yield* updateTaskState(
+            return yield* updateTaskState(
               current,
               {
                 stage: "failed",
@@ -600,7 +891,6 @@ const make = Effect.gen(function* () {
               },
               { stage: "failed", message: "定位本地代码库失败：目标仓库不存在或已移除" },
             );
-            return;
           }
 
           const referenceProjects = route.referenceProjectIds
@@ -615,7 +905,8 @@ const make = Effect.gen(function* () {
           const chosenModelLabel = formatModelLabel(chosenPrimaryModel);
 
           const slugTick = yield* Clock.currentTimeMillis;
-          const branchSlug = `fix/${connector.platform}-${detail.key}-${String(slugTick).slice(-5)}`;
+          const branchSuffix = repair ? current.id.slice(-12) : String(slugTick).slice(-5);
+          const branchSlug = `fix/${connector.platform}-${detail.key}-${branchSuffix}`;
           let workspaceStrategy: ThreadLaunchService.ThreadLaunchWorkspaceStrategy = {
             type: "root",
           };
@@ -644,20 +935,39 @@ const make = Effect.gen(function* () {
             {
               stage: "diagnosing",
               modelLabel: chosenModelLabel,
-              message: `${route.matchedReason} -> [${targetProject.title}]，已调度模型 ${chosenModelLabel} 开始深度分析${policy.actionMode === "diagnose_only" ? "" : `（隔离分支 ${branchSlug}）`}`,
+              message: repair
+                ? `已调度模型 ${chosenModelLabel} 在隔离分支 ${branchSlug} 基于已有诊断开始修复`
+                : `${route.matchedReason} -> [${targetProject.title}]，已调度模型 ${chosenModelLabel} 开始深度分析${policy.actionMode === "diagnose_only" ? "" : `（隔离分支 ${branchSlug}）`}`,
             },
           );
+          if (current.stage === "cancelling" || isTerminalStage(current.stage)) return current;
 
-          const prompt = buildDiagnosisPrompt({
-            detail,
-            actionMode: policy.actionMode,
-            targetProject,
-            referenceProjects,
-            downloadedImagePaths: downloadedImages,
-            customInstructions: policy.customPromptInstructions,
-          });
+          const prompt = repair
+            ? buildManualRepairPrompt({
+                detail,
+                diagnosisReport: repair.diagnosisReport,
+                referenceProjects,
+                customInstructions: policy.customPromptInstructions,
+              })
+            : buildDiagnosisPrompt({
+                detail,
+                actionMode: policy.actionMode,
+                targetProject,
+                referenceProjects,
+                downloadedImagePaths: downloadedImages,
+                customInstructions: policy.customPromptInstructions,
+              });
+          const summary = {
+            mode: policy.actionMode === "diagnose_only" ? "diagnose" : "repair",
+            scopeName: detail.scopeName,
+            moduleName: detail.moduleName,
+            platform: connector.platform,
+            issueKey: detail.displayKey,
+            issueUrl: detail.url,
+            ...(retry === undefined ? {} : { attemptNumber: retry.attemptNumber }),
+          } satisfies IssueAutomationMessageSummary;
 
-          const threadTitle = `[自动诊断] ${detail.displayKey} ${detail.title.slice(0, 60)}`;
+          const threadTitle = `[${repair ? "手动修复" : "自动诊断"}] ${detail.displayKey} ${detail.title.slice(0, 60)}`;
           let primaryOutcome = yield* Effect.result(
             runModelTurnAndExtractText({
               projectId: targetProject.id,
@@ -665,6 +975,9 @@ const make = Effect.gen(function* () {
               modelSelection: chosenPrimaryModel,
               workspaceStrategy,
               prompt,
+              summary,
+              existingThreadId: retry?.threadId ?? undefined,
+              onStarted: recordPrimaryRun,
             }),
           );
 
@@ -675,7 +988,7 @@ const make = Effect.gen(function* () {
             const fallbackBranch =
               policy.actionMode === "diagnose_only"
                 ? null
-                : `fix/${connector.platform}-${detail.key}-fb-${String(fbTick).slice(-4)}`;
+                : `fix/${connector.platform}-${detail.key}-fb-${repair ? branchSuffix : String(fbTick).slice(-4)}`;
             const fallbackWorkspace: ThreadLaunchService.ThreadLaunchWorkspaceStrategy =
               fallbackBranch === null
                 ? { type: "root" }
@@ -704,6 +1017,9 @@ const make = Effect.gen(function* () {
                 modelSelection: models.fallbackModel,
                 workspaceStrategy: fallbackWorkspace,
                 prompt,
+                summary,
+                existingThreadId: retry?.threadId ?? undefined,
+                onStarted: recordPrimaryRun,
               }),
             );
           }
@@ -713,15 +1029,18 @@ const make = Effect.gen(function* () {
               primaryOutcome.failure instanceof Error
                 ? primaryOutcome.failure.message
                 : String(primaryOutcome.failure);
-            current = yield* updateTaskState(
+            return yield* updateTaskState(
               current,
               { stage: "failed", lastError: errMsg },
-              { stage: "failed", message: `模型诊断执行失败: ${errMsg}` },
+              { stage: "failed", message: `模型${repair ? "修复" : "诊断"}执行失败: ${errMsg}` },
             );
-            return;
           }
 
           const solved = primaryOutcome.success;
+          hasConfirmedRepair =
+            policy.actionMode !== "diagnose_only" &&
+            solved.worktreePath !== null &&
+            solved.hasConfirmedChanges;
 
           // Link issue to the T3 Thread for seamless cross-navigation in native UI
           yield* threadIssues
@@ -751,7 +1070,9 @@ const make = Effect.gen(function* () {
             {
               stage: "diagnosing",
               modelLabel: current.assignedModelLabel,
-              message: "主力模型已完成根因定位与验证，已生成结构化诊断报告",
+              message: repair
+                ? "已生成基于原诊断的修复报告"
+                : "主力模型已完成根因定位与验证，已生成结构化诊断报告",
             },
           );
 
@@ -788,6 +1109,8 @@ const make = Effect.gen(function* () {
                   detail,
                   diagnosisReport: solved.reportText,
                 }),
+                summary: { ...summary, mode: "review" },
+                onStarted: recordReviewRun,
               }),
             );
 
@@ -818,15 +1141,29 @@ const make = Effect.gen(function* () {
 
           const needsHumanReview = reviewReport !== null && reviewReport.includes("【需人工复核】");
 
+          if (repair) {
+            return yield* updateTaskState(
+              current,
+              hasConfirmedRepair
+                ? { stage: "needs_human" }
+                : { stage: "failed", lastError: "未检测到本次修复产生的代码变更" },
+              {
+                message: hasConfirmedRepair
+                  ? "隔离工作树中的修复已完成，等待人工审查"
+                  : "未检测到本次修复产生的代码变更，请查看会话或重试",
+              },
+            );
+          }
+
           // Step 5: Write-back to ZenTao / Issue Platform
-          if (policy.autoWriteComment) {
+          if (policy.autoWriteComment && connector.writeActions.includes("comment")) {
             current = yield* updateTaskState(
               current,
               { stage: "writing_back" },
               { stage: "writing_back", message: "正在将结构化诊断报告写回问题平台..." },
             );
 
-            const formattedComment = formatWriteBackComment({
+            const formattedComment = formatIssueAutomationWriteBackComment({
               assignedModelLabel: current.assignedModelLabel,
               worktreeBranch: current.worktreeBranch,
               diagnosisReport: solved.reportText,
@@ -848,7 +1185,7 @@ const make = Effect.gen(function* () {
               );
               const syncedAt = yield* nowIso;
               if (wbResult._tag === "Success") {
-                current = yield* updateTaskState(
+                return yield* updateTaskState(
                   current,
                   {
                     stage: "completed",
@@ -861,7 +1198,6 @@ const make = Effect.gen(function* () {
                     message: "已自动回写诊断报告并将平台问题状态标记为「已解决」",
                   },
                 );
-                return;
               }
             }
 
@@ -880,7 +1216,7 @@ const make = Effect.gen(function* () {
               const finalStage: IssueAutomationStage = needsHumanReview
                 ? "needs_human"
                 : "completed";
-              current = yield* updateTaskState(
+              return yield* updateTaskState(
                 current,
                 { stage: finalStage, commentSyncedAt: syncedAt },
                 {
@@ -890,12 +1226,11 @@ const make = Effect.gen(function* () {
                     : "已成功将诊断分析报告自动写回平台评论",
                 },
               );
-              return;
             }
           }
 
           const finalStage: IssueAutomationStage = needsHumanReview ? "needs_human" : "completed";
-          yield* updateTaskState(
+          return yield* updateTaskState(
             current,
             { stage: finalStage },
             {
@@ -906,13 +1241,9 @@ const make = Effect.gen(function* () {
         }).pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
-              ? updateTaskState(
-                  initialTask,
-                  { stage: "cancelled" },
-                  { stage: "cancelled", message: "任务已被取消" },
-                ).pipe(Effect.asVoid)
+              ? Effect.interrupt
               : updateTaskState(
-                  initialTask,
+                  current,
                   {
                     stage: "failed",
                     lastError: Cause.pretty(cause).slice(0, 400),
@@ -921,12 +1252,15 @@ const make = Effect.gen(function* () {
                     stage: "failed",
                     message: `执行过程中发生异常: ${Cause.pretty(cause).slice(0, 200)}`,
                   },
-                ).pipe(Effect.asVoid),
+                ),
           ),
-          Effect.ignore,
+          Effect.option,
         ),
       ),
     );
+    if (Option.isSome(finishedTask) && isTerminalStage(finishedTask.value.stage)) {
+      yield* notifyTaskEnded(finishedTask.value, hasConfirmedRepair);
+    }
   });
 
   const spawnTaskExecution = Effect.fn("IssueAutomationService.spawnTaskExecution")(function* (
@@ -935,8 +1269,13 @@ const make = Effect.gen(function* () {
     models: IssueAutomationModelStrategy,
     policy: IssueAutomationPolicy,
     maxConcurrency: number,
+    continuation?: TaskContinuation,
   ) {
-    const fiber = yield* executeTaskPipeline(task, binding, models, policy, maxConcurrency).pipe(
+    const registered = yield* Deferred.make<void>();
+    const fiber = yield* Deferred.await(registered).pipe(
+      Effect.andThen(
+        executeTaskPipeline(task, binding, models, policy, maxConcurrency, continuation),
+      ),
       Effect.ensuring(
         Ref.update(activeTaskFibers, (current) => {
           const next = new Map(current);
@@ -944,6 +1283,7 @@ const make = Effect.gen(function* () {
           return next;
         }).pipe(Effect.andThen(publishSnapshot)),
       ),
+      Effect.interruptible,
       Effect.forkIn(serviceScope),
     );
 
@@ -952,8 +1292,9 @@ const make = Effect.gen(function* () {
       next.set(task.id, fiber);
       return next;
     });
+    yield* Deferred.succeed(registered, undefined);
     yield* publishSnapshot;
-  });
+  }, Effect.uninterruptible);
 
   const enrichRemoteIssuesWithTasks = (
     connectorId: IssueAutomationConnectorId,
@@ -1003,12 +1344,7 @@ const make = Effect.gen(function* () {
     const credResult = yield* Effect.result(readConnectorCredentials(profile.connectorId));
     if (credResult._tag === "Failure") {
       yield* repo
-        .upsertProfile({
-          ...profile,
-          lastPolledAt: polledAt,
-          lastPollError: credResult.failure.detail,
-          updatedAt: polledAt,
-        })
+        .recordProfilePoll(profile.id, polledAt, credResult.failure.detail)
         .pipe(Effect.ignore);
       yield* publishSnapshot;
       return { enqueuedCount: 0, skippedCount: 0 };
@@ -1028,25 +1364,13 @@ const make = Effect.gen(function* () {
 
     if (pageResult._tag === "Failure") {
       yield* repo
-        .upsertProfile({
-          ...profile,
-          lastPolledAt: polledAt,
-          lastPollError: pageResult.failure.detail,
-          updatedAt: polledAt,
-        })
+        .recordProfilePoll(profile.id, polledAt, pageResult.failure.detail)
         .pipe(Effect.ignore);
       yield* publishSnapshot;
       return { enqueuedCount: 0, skippedCount: 0 };
     }
 
-    yield* repo
-      .upsertProfile({
-        ...profile,
-        lastPolledAt: polledAt,
-        lastPollError: null,
-        updatedAt: polledAt,
-      })
-      .pipe(Effect.ignore);
+    yield* repo.recordProfilePoll(profile.id, polledAt, null).pipe(Effect.ignore);
 
     const existingTasks = yield* repo.listTasks(300).pipe(Effect.orElseSucceed(() => []));
     let enqueuedCount = 0;
@@ -1057,25 +1381,7 @@ const make = Effect.gen(function* () {
         skippedCount += 1;
         continue;
       }
-      if (profile.filter.onlyUnconfirmed && item.confirmed) {
-        skippedCount += 1;
-        continue;
-      }
-      if (
-        profile.filter.maxSeverity !== null &&
-        item.severity !== null &&
-        item.severity > profile.filter.maxSeverity
-      ) {
-        skippedCount += 1;
-        continue;
-      }
-      if (
-        profile.filter.assignedToAccount &&
-        profile.filter.assignedToAccount.trim().length > 0 &&
-        !(item.assignee ?? "")
-          .toLowerCase()
-          .includes(profile.filter.assignedToAccount.trim().toLowerCase())
-      ) {
+      if (!matchesIssueAutomationFilter(item, profile.filter)) {
         skippedCount += 1;
         continue;
       }
@@ -1084,7 +1390,7 @@ const make = Effect.gen(function* () {
       const priorForIssue = existingTasks.filter(
         (t) => t.connectorId === connector.id && t.issueKey === item.key,
       );
-      const hasActive = priorForIssue.some((t) => !isTerminalStage(t.stage));
+      const hasActive = priorForIssue.some(blocksNewTask);
       const alreadyHandledVersion = priorForIssue.some(
         (t) =>
           (t.stage === "completed" || t.stage === "needs_human") &&
@@ -1101,7 +1407,7 @@ const make = Effect.gen(function* () {
       );
       if (
         detailCheck._tag === "Success" &&
-        detailCheck.success.comments.some((c) => c.body.includes(BOT_SIGNATURE_MARKER))
+        detailCheck.success.comments.some((c) => c.body.includes(ISSUE_AUTOMATION_COMMENT_MARKER))
       ) {
         skippedCount += 1;
         continue;
@@ -1155,25 +1461,52 @@ const make = Effect.gen(function* () {
         updatedAt: createdAt,
         completedAt: null,
       };
-      yield* repo.upsertTask(task).pipe(Effect.mapError(mapRepoErr("enqueuePollTask")));
-      yield* spawnTaskExecution(
-        task,
-        profile.repositories,
-        profile.models,
-        profile.policy,
-        profile.filter.maxConcurrency,
+      const enqueued = yield* taskStarts.withPermits(1)(
+        Effect.gen(function* () {
+          const latest = yield* repo
+            .listIssueTasks(connector.id, item.key)
+            .pipe(Effect.mapError(mapRepoErr("listIssueTasks")));
+          if (latest.some(blocksNewTask)) return false;
+          yield* repo.upsertTask(task).pipe(Effect.mapError(mapRepoErr("enqueuePollTask")));
+          yield* spawnTaskExecution(
+            task,
+            profile.repositories,
+            profile.models,
+            profile.policy,
+            profile.filter.maxConcurrency,
+          );
+          return true;
+        }),
       );
-      enqueuedCount += 1;
+      if (enqueued) enqueuedCount += 1;
+      else skippedCount += 1;
     }
 
     return { enqueuedCount, skippedCount };
   });
 
+  yield* repo.listConnectors.pipe(
+    Effect.flatMap((connectors) =>
+      Effect.forEach(connectors, (connector) =>
+        secrets.remove(`issue-automation-connector-${connector.id}-secret`).pipe(Effect.ignore),
+      ),
+    ),
+    Effect.ignore,
+  );
+
   yield* Effect.gen(function* () {
-    const profiles = yield* repo.listProfiles.pipe(Effect.orElseSucceed(() => []));
+    const [profiles, connectors] = yield* Effect.all([
+      repo.listProfiles.pipe(Effect.orElseSucceed(() => [])),
+      repo.listConnectors.pipe(Effect.orElseSucceed(() => [])),
+    ]);
+    const available = new Set(
+      connectors
+        .filter((connector) => connector.status !== "disconnected")
+        .map((connector) => connector.id),
+    );
     const nowMs = yield* Clock.currentTimeMillis;
     for (const profile of profiles) {
-      if (!profile.enabled) continue;
+      if (!profile.enabled || !available.has(profile.connectorId)) continue;
       const lastMs = profile.lastPolledAt ? Date.parse(profile.lastPolledAt) : 0;
       const intervalMs = profile.filter.pollIntervalMinutes * 60 * 1000;
       if (!Number.isFinite(lastMs) || nowMs - lastMs >= intervalMs) {
@@ -1186,109 +1519,313 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  const saveConnector: IssueAutomationService["Service"]["saveConnector"] = Effect.fn(
-    "IssueAutomationService.saveConnector",
+  interface AuthorizationAttempt {
+    readonly input: IssueAutomationStartConnectorAuthInput;
+    readonly connectorId: IssueAutomationConnectorId;
+    readonly previousMcpUrl: string | null;
+    readonly expiresAt: number;
+    readonly session: McpAuthorization;
+    readonly automatic: boolean;
+    readonly result: Deferred.Deferred<IssueAutomationConnector, IssueAutomationError>;
+    started: boolean;
+  }
+
+  const authorizationAttempts = new Map<string, AuthorizationAttempt>();
+  const expiredAuthorization = () =>
+    new IssueAutomationError({
+      operation: "finishConnectorAuth",
+      detail: "授权已过期或已使用，请重新授权。",
+    });
+
+  const getAuthorizationAttempt = Effect.fn("IssueAutomationService.getAuthorizationAttempt")(
+    function* (attemptId: string) {
+      const attempt = authorizationAttempts.get(attemptId);
+      const now = yield* clock.currentTimeMillis;
+      if (!attempt || attempt.expiresAt <= now) {
+        authorizationAttempts.delete(attemptId);
+        return yield* expiredAuthorization();
+      }
+      return { attempt, remainingMs: attempt.expiresAt - now };
+    },
+  );
+
+  const startConnectorAuth: IssueAutomationService["Service"]["startConnectorAuth"] = Effect.fn(
+    "IssueAutomationService.startConnectorAuth",
   )(function* (input) {
     const plugin = yield* plugins.requirePlugin(input.platform);
-    const connectorId = input.id ?? IssueAutomationConnectorId.make(NodeCrypto.randomUUID());
-    const rawBaseUrl = input.baseUrl.trim();
-
-    let secretText = input.secret?.trim();
-    if (!secretText) {
-      const existing = yield* secrets
-        .get(connectorSecretKey(connectorId))
-        .pipe(Effect.mapError(mapRepoErr("readStoredConnectorSecret")));
-      if (Option.isNone(existing)) {
-        return yield* new IssueAutomationError({
-          operation: "saveConnector",
-          detail: "首次连接请输入平台密码或认证令牌",
-        });
-      }
-      secretText = decoder.decode(existing.value);
+    const existing = input.id === undefined ? undefined : yield* getConnector(input.id);
+    if (input.id !== undefined && existing?.platform !== input.platform) {
+      return yield* new IssueAutomationError({
+        operation: "startConnectorAuth",
+        detail: "未找到对应的问题平台连接配置。",
+      });
     }
 
-    const savedBaseUrl = input.id
-      ? yield* repo
-          .getConnectorBaseUrl(input.id, input.platform)
-          .pipe(Effect.mapError(mapRepoErr("readConnector")))
-      : undefined;
-    const keepInstance =
-      savedBaseUrl !== undefined &&
-      plugin.normalizeBaseUrl(rawBaseUrl) === plugin.normalizeBaseUrl(savedBaseUrl);
-    const probe = yield* plugin.probeAndListScopes(
-      {
-        baseUrl: keepInstance ? savedBaseUrl : rawBaseUrl,
-        account: input.account.trim(),
-        secret: secretText,
-      },
-      keepInstance ? "saved" : "discover",
-    );
+    const normalized = yield* Effect.try({
+      try: () => ({
+        mcpUrl: parseMcpUrl(input.mcpUrl),
+        baseUrl: existing?.baseUrl ?? plugin.normalizeBaseUrl(input.baseUrl),
+      }),
+      catch: (cause) => mcpError("startConnectorAuth", cause),
+    });
+    const attemptId = NodeCrypto.randomUUID();
+    const callback = automaticMcpCallback(input.callbackBaseUrl);
+    const session = new McpAuthorization(normalized.mcpUrl, attemptId, undefined, callback);
+    yield* Effect.tryPromise({
+      try: (signal) => session.withClient(signal, (client) => client.listTools()),
+      catch: (cause) => mcpError("startConnectorAuth", cause),
+    }).pipe(Effect.catch((error) => (session.authorizationUrl ? Effect.void : Effect.fail(error))));
+    if (!session.authorizationUrl) {
+      return yield* new IssueAutomationError({
+        operation: "startConnectorAuth",
+        detail: "该 MCP 服务没有提供网页 OAuth 授权。",
+      });
+    }
 
-    yield* secrets
-      .set(connectorSecretKey(connectorId), encoder.encode(secretText))
-      .pipe(Effect.mapError(mapRepoErr("storeConnectorSecret")));
-
-    const updatedAt = yield* nowIso;
-    const connector: IssueAutomationConnector = {
-      id: connectorId,
-      platform: input.platform,
-      name: input.name.trim(),
-      baseUrl: keepInstance ? savedBaseUrl : probe.normalizedBaseUrl,
-      account: input.account.trim(),
-      hasSecret: true,
-      status: "connected",
-      viewerName: probe.viewerName,
-      serverVersion: probe.serverVersion,
-      statusDetail: null,
-      scopes: [...probe.scopes],
-      updatedAt,
+    const now = yield* clock.currentTimeMillis;
+    for (const [id, attempt] of authorizationAttempts) {
+      if (attempt.expiresAt <= now) authorizationAttempts.delete(id);
+    }
+    if (authorizationAttempts.size >= 100) {
+      return yield* new IssueAutomationError({
+        operation: "startConnectorAuth",
+        detail: "待完成的授权过多，请稍后重试。",
+      });
+    }
+    authorizationAttempts.set(attemptId, {
+      input: { ...input, mcpUrl: normalized.mcpUrl.href, baseUrl: normalized.baseUrl },
+      connectorId: input.id ?? IssueAutomationConnectorId.make(NodeCrypto.randomUUID()),
+      previousMcpUrl: existing?.mcpUrl ?? null,
+      expiresAt: now + 10 * 60_000,
+      session,
+      automatic: callback !== undefined,
+      result: yield* Deferred.make<IssueAutomationConnector, IssueAutomationError>(),
+      started: false,
+    });
+    return {
+      attemptId,
+      authorizationUrl: session.authorizationUrl,
+      automatic: callback !== undefined,
     };
-    yield* repo.upsertConnector(connector).pipe(Effect.mapError(mapRepoErr("saveConnector")));
-    yield* publishSnapshot;
-    return connector;
+  });
+
+  const saveAuthorizedConnector = Effect.fn("IssueAutomationService.saveAuthorizedConnector")(
+    function* (attempt: AuthorizationAttempt, code: string) {
+      const { input, connectorId, previousMcpUrl, session } = attempt;
+      const plugin = yield* plugins.requirePlugin(input.platform);
+      const probe = yield* plugin.probeAndListScopes({
+        baseUrl: input.baseUrl,
+        withClient: (operation, run) =>
+          Effect.tryPromise({
+            try: (signal) => session.withClient(signal, run, code),
+            catch: (cause) => mcpError(operation, cause),
+          }),
+      });
+      const oauth = session.credentials;
+      if (!oauth) {
+        return yield* new IssueAutomationError({
+          operation: "finishConnectorAuth",
+          detail: "禅道 MCP 未返回可用的 OAuth 凭据。",
+        });
+      }
+
+      return yield* withConnectorLock(
+        connectorId,
+        Effect.gen(function* () {
+          const previous = input.id === undefined ? undefined : yield* getConnector(connectorId);
+          if (input.id !== undefined && (!previous || previous.mcpUrl !== previousMcpUrl)) {
+            return yield* new IssueAutomationError({
+              operation: "finishConnectorAuth",
+              detail: "连接已被修改或删除，请重新授权。",
+            });
+          }
+          if (
+            previous &&
+            (previous.mcpUrl !== input.mcpUrl || previous.status === "disconnected")
+          ) {
+            const profiles = yield* repo.listProfiles.pipe(
+              Effect.mapError(mapRepoErr("listProfiles")),
+            );
+            const probesById = new Map(probe.scopes.map((scope) => [scope.id, scope.name]));
+            for (const profile of profiles) {
+              if (profile.connectorId !== connectorId) continue;
+              const expectedName =
+                previous.scopes.find((scope) => scope.id === profile.scopeId)?.name ??
+                profile.scopeName;
+              if (probesById.get(profile.scopeId) !== expectedName) {
+                return yield* new IssueAutomationError({
+                  operation: "finishConnectorAuth",
+                  detail: "此授权无法访问原有规则绑定的禅道产品，未切换连接。",
+                });
+              }
+            }
+          }
+
+          const connector: IssueAutomationConnector = {
+            id: connectorId,
+            platform: input.platform,
+            name: input.name,
+            baseUrl: input.baseUrl,
+            mcpUrl: input.mcpUrl,
+            writeActions: [...probe.writeActions],
+            status: "connected",
+            viewerName: null,
+            serverVersion: null,
+            statusDetail: null,
+            scopes: [...probe.scopes],
+            updatedAt: yield* nowIso,
+          };
+          const key = connectorSecretKey(connectorId);
+          const previousSecret = yield* secrets
+            .get(key)
+            .pipe(Effect.mapError(mapRepoErr("readConnectorSecret")));
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* storeConnectorOAuth(key, input.mcpUrl, oauth);
+              yield* repo.upsertConnector(connector).pipe(
+                Effect.mapError(mapRepoErr("saveConnector")),
+                Effect.tapError(() =>
+                  Option.isSome(previousSecret)
+                    ? secrets.set(key, previousSecret.value).pipe(Effect.ignore)
+                    : secrets.remove(key).pipe(Effect.ignore),
+                ),
+              );
+            }),
+          );
+          yield* publishSnapshot;
+          return connector;
+        }),
+      );
+    },
+  );
+
+  const redeemAuthorization = Effect.fn("IssueAutomationService.redeemAuthorization")(function* (
+    attemptId: string,
+    attempt: AuthorizationAttempt,
+    callbackUrl: string,
+  ) {
+    if (attempt.started) return yield* expiredAuthorization();
+    const code = yield* Effect.try({
+      try: () => parseMcpCallback(callbackUrl, attemptId, attempt.session.redirectUri),
+      catch: (cause) => mcpError("finishConnectorAuth", cause),
+    });
+    if (attempt.started || authorizationAttempts.get(attemptId) !== attempt) {
+      return yield* expiredAuthorization();
+    }
+    attempt.started = true;
+    const complete =
+      code === null
+        ? Effect.fail(
+            new IssueAutomationError({
+              operation: "finishConnectorAuth",
+              detail: "已取消禅道授权，请重新授权。",
+            }),
+          )
+        : saveAuthorizedConnector(attempt, code);
+    yield* complete.pipe(
+      Effect.onExit((outcome) => Deferred.done(attempt.result, outcome).pipe(Effect.asVoid)),
+      Effect.ignoreCause,
+      Effect.forkIn(serviceScope),
+    );
+    return yield* Deferred.await(attempt.result);
+  });
+
+  const handleConnectorAuthCallback: IssueAutomationService["Service"]["handleConnectorAuthCallback"] =
+    Effect.fn("IssueAutomationService.handleConnectorAuthCallback")(function* (callback) {
+      const attemptId = callback.searchParams.get("state");
+      if (!attemptId) return yield* expiredAuthorization();
+      const { attempt } = yield* getAuthorizationAttempt(attemptId);
+      if (!attempt.automatic) return yield* expiredAuthorization();
+      return yield* redeemAuthorization(attemptId, attempt, callback.href);
+    });
+
+  const finishConnectorAuth: IssueAutomationService["Service"]["finishConnectorAuth"] = Effect.fn(
+    "IssueAutomationService.finishConnectorAuth",
+  )(function* ({ attemptId, callbackUrl }) {
+    const { attempt, remainingMs } = yield* getAuthorizationAttempt(attemptId);
+    if (attempt.automatic && callbackUrl === undefined) {
+      return yield* Deferred.await(attempt.result).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.millis(remainingMs),
+          orElse: () => Effect.fail(expiredAuthorization()),
+        }),
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            if (!attempt.started) authorizationAttempts.delete(attemptId);
+          }),
+        ),
+      );
+    }
+    if (!attempt.automatic && callbackUrl !== undefined) {
+      return yield* redeemAuthorization(attemptId, attempt, Redacted.value(callbackUrl));
+    }
+    return yield* expiredAuthorization();
   });
 
   const deleteConnector: IssueAutomationService["Service"]["deleteConnector"] = Effect.fn(
     "IssueAutomationService.deleteConnector",
-  )(function* (input) {
-    yield* secrets.remove(connectorSecretKey(input.connectorId)).pipe(Effect.ignore);
-    yield* repo
-      .deleteConnector(input.connectorId)
-      .pipe(Effect.mapError(mapRepoErr("deleteConnector")));
-    yield* publishSnapshot;
-  });
+  )(
+    (input) =>
+      withConnectorLock(
+        input.connectorId,
+        Effect.gen(function* () {
+          const profiles = yield* repo.listProfiles.pipe(
+            Effect.mapError(mapRepoErr("listProfiles")),
+          );
+          yield* repo
+            .deleteConnector(input.connectorId)
+            .pipe(Effect.mapError(mapRepoErr("deleteConnector")));
+          yield* secrets.remove(connectorSecretKey(input.connectorId)).pipe(Effect.ignore);
+          for (const profile of profiles) {
+            if (profile.connectorId === input.connectorId && profile.feishuWebhookSecretId) {
+              yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
+            }
+          }
+          yield* publishSnapshot;
+        }),
+      ),
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const refreshScopes: IssueAutomationService["Service"]["refreshScopes"] = Effect.fn(
     "IssueAutomationService.refreshScopes",
   )(function* (input) {
     const { connector, plugin, credentials } = yield* readConnectorCredentials(input.connectorId);
-    const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials, "saved"));
-    const updatedAt = yield* nowIso;
-
-    const updated: IssueAutomationConnector =
-      probeResult._tag === "Success"
-        ? {
-            ...connector,
-            status: "connected",
-            viewerName: probeResult.success.viewerName,
-            serverVersion: probeResult.success.serverVersion,
-            statusDetail: null,
-            scopes: [...probeResult.success.scopes],
-            updatedAt,
-          }
-        : {
-            ...connector,
-            status: "error",
-            statusDetail: probeResult.failure.detail,
-            updatedAt,
-          };
-
-    yield* repo.upsertConnector(updated).pipe(Effect.mapError(mapRepoErr("refreshScopes")));
-    yield* publishSnapshot;
-    if (probeResult._tag === "Failure") {
-      return yield* probeResult.failure;
-    }
-    return updated;
+    const probeResult = yield* Effect.result(plugin.probeAndListScopes(credentials));
+    return yield* withConnectorLock(
+      connector.id,
+      Effect.gen(function* () {
+        const current = yield* getConnector(connector.id);
+        if (
+          current?.mcpUrl !== connector.mcpUrl ||
+          current.status === "disconnected" ||
+          current.updatedAt !== connector.updatedAt
+        ) {
+          if (probeResult._tag === "Failure") return yield* probeResult.failure;
+          return yield* new IssueAutomationError({
+            operation: "refreshScopes",
+            detail: "连接已变更，请刷新后重试。",
+          });
+        }
+        const updated: IssueAutomationConnector = {
+          ...current,
+          ...(probeResult._tag === "Success"
+            ? {
+                status: "connected",
+                statusDetail: null,
+                scopes: [...probeResult.success.scopes],
+                writeActions: [...probeResult.success.writeActions],
+              }
+            : { status: "error", statusDetail: probeResult.failure.detail }),
+          updatedAt: yield* nowIso,
+        };
+        yield* repo.upsertConnector(updated).pipe(Effect.mapError(mapRepoErr("refreshScopes")));
+        yield* publishSnapshot;
+        if (probeResult._tag === "Failure") return yield* probeResult.failure;
+        return updated;
+      }),
+    );
   });
 
   const listRemoteIssues: IssueAutomationService["Service"]["listRemoteIssues"] = Effect.fn(
@@ -1309,6 +1846,39 @@ const make = Effect.gen(function* () {
       total: page.total,
       page: page.page,
       pageSize: page.pageSize,
+    };
+  });
+
+  const scanProfileIssues: IssueAutomationService["Service"]["scanProfileIssues"] = Effect.fn(
+    "IssueAutomationService.scanProfileIssues",
+  )(function* (input) {
+    const profile = yield* repo
+      .getProfile(input.profileId)
+      .pipe(Effect.mapError(mapRepoErr("getProfile")));
+    if (!profile) {
+      return yield* new IssueAutomationError({
+        operation: "scanProfileIssues",
+        detail: "未找到对应的自动分析策略配置",
+      });
+    }
+    const { connector, plugin, credentials } = yield* readConnectorCredentials(profile.connectorId);
+    const { items, hasNextPage } = yield* scanIssueAutomationPage(
+      input.page ?? 1,
+      profile.filter,
+      (page, pageSize) =>
+        plugin.listIssues({
+          credentials,
+          scopeId: profile.scopeId,
+          browseType: profile.filter.browseType,
+          keyword: profile.filter.keyword ?? undefined,
+          page,
+          pageSize,
+        }),
+    );
+    const tasks = yield* repo.listTasks(250).pipe(Effect.orElseSucceed(() => []));
+    return {
+      issues: enrichRemoteIssuesWithTasks(connector.id, connector.platform, items, tasks),
+      hasNextPage,
     };
   });
 
@@ -1342,44 +1912,95 @@ const make = Effect.gen(function* () {
 
   const saveProfile: IssueAutomationService["Service"]["saveProfile"] = Effect.fn(
     "IssueAutomationService.saveProfile",
-  )(function* (input) {
-    const existingProfiles = yield* repo.listProfiles.pipe(
-      Effect.mapError(mapRepoErr("listProfiles")),
-    );
-    const prev = input.id ? existingProfiles.find((p) => p.id === input.id) : undefined;
-    const updatedAt = yield* nowIso;
-    const profile: IssueAutomationProfile = {
-      id: input.id ?? IssueAutomationProfileId.make(NodeCrypto.randomUUID()),
-      connectorId: input.connectorId,
-      name: input.name.trim(),
-      enabled: input.enabled,
-      scopeId: input.scopeId,
-      scopeName: input.scopeName,
-      repositories: input.repositories,
-      models: input.models,
-      filter: input.filter,
-      policy: input.policy,
-      lastPolledAt: prev?.lastPolledAt ?? null,
-      lastPollError: prev?.lastPollError ?? null,
-      updatedAt,
-    };
-    yield* repo.upsertProfile(profile).pipe(Effect.mapError(mapRepoErr("saveProfile")));
-    yield* publishSnapshot;
-    return profile;
-  });
+  )(
+    function* (input) {
+      const prev = input.id
+        ? yield* repo.getProfile(input.id).pipe(Effect.mapError(mapRepoErr("getProfile")))
+        : undefined;
+      const prevSecretId = prev?.feishuWebhookSecretId ?? null;
+      const draft = input.feishuNotification?.webhook;
+      const webhook = draft === undefined ? "" : Redacted.value(draft).trim();
+      const notificationEnabled =
+        input.feishuNotification?.enabled ?? prev?.feishuNotification?.enabled ?? false;
+      if (
+        (webhook && !isIssueAutomationFeishuWebhook(webhook)) ||
+        (notificationEnabled && !webhook && !prevSecretId)
+      ) {
+        return yield* new IssueAutomationError({
+          operation: "saveProfile",
+          detail: "请输入有效的飞书群机器人 Webhook",
+        });
+      }
+      const replacementSecretId = webhook
+        ? `issue-automation-feishu-${NodeCrypto.randomUUID()}`
+        : null;
+      const feishuWebhookSecretId = replacementSecretId ?? prevSecretId;
+      const profile: IssueAutomationRepository.StoredProfile = {
+        id: input.id ?? IssueAutomationProfileId.make(NodeCrypto.randomUUID()),
+        connectorId: input.connectorId,
+        name: input.name.trim(),
+        enabled: input.enabled,
+        scopeId: input.scopeId,
+        scopeName: input.scopeName,
+        repositories: input.repositories,
+        models: input.models,
+        filter: input.filter,
+        policy: input.policy,
+        feishuNotification: {
+          enabled: notificationEnabled,
+          hasWebhook: feishuWebhookSecretId !== null,
+        },
+        feishuWebhookSecretId,
+        lastPolledAt: prev?.lastPolledAt ?? null,
+        lastPollError: prev?.lastPollError ?? null,
+        updatedAt: yield* nowIso,
+      };
+      if (replacementSecretId) {
+        yield* secrets
+          .set(replacementSecretId, encoder.encode(webhook))
+          .pipe(Effect.mapError(mapRepoErr("storeFeishuWebhook")));
+      }
+      yield* repo.upsertProfile(profile).pipe(
+        Effect.tapError(() =>
+          replacementSecretId
+            ? secrets.remove(replacementSecretId).pipe(Effect.ignore)
+            : Effect.void,
+        ),
+        Effect.mapError(mapRepoErr("saveProfile")),
+      );
+      if (replacementSecretId && prevSecretId) {
+        yield* secrets.remove(prevSecretId).pipe(Effect.ignore);
+      }
+      yield* publishSnapshot;
+      return profileForClient(profile);
+    },
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const deleteProfile: IssueAutomationService["Service"]["deleteProfile"] = Effect.fn(
     "IssueAutomationService.deleteProfile",
-  )(function* (input) {
-    yield* repo.deleteProfile(input.profileId).pipe(Effect.mapError(mapRepoErr("deleteProfile")));
-    yield* publishSnapshot;
-  });
+  )(
+    function* (input) {
+      const profile = yield* repo
+        .getProfile(input.profileId)
+        .pipe(Effect.mapError(mapRepoErr("getProfile")));
+      yield* repo.deleteProfile(input.profileId).pipe(Effect.mapError(mapRepoErr("deleteProfile")));
+      if (profile?.feishuWebhookSecretId) {
+        yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
+      }
+      yield* publishSnapshot;
+    },
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const setProfileEnabled: IssueAutomationService["Service"]["setProfileEnabled"] = Effect.fn(
     "IssueAutomationService.setProfileEnabled",
   )(function* (input) {
-    const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
-    const found = profiles.find((p) => p.id === input.profileId);
+    const found = yield* repo
+      .getProfile(input.profileId)
+      .pipe(Effect.mapError(mapRepoErr("getProfile")));
     if (!found) {
       return yield* new IssueAutomationError({
         operation: "setProfileEnabled",
@@ -1387,15 +2008,15 @@ const make = Effect.gen(function* () {
       });
     }
     const updatedAt = yield* nowIso;
-    const next: IssueAutomationProfile = {
+    const next = {
       ...found,
       enabled: input.enabled,
       updatedAt,
     };
     yield* repo.upsertProfile(next).pipe(Effect.mapError(mapRepoErr("setProfileEnabled")));
     yield* publishSnapshot;
-    return next;
-  });
+    return profileForClient(next);
+  }, profileWrites.withPermits(1));
 
   const triggerPoll: IssueAutomationService["Service"]["triggerPoll"] = Effect.fn(
     "IssueAutomationService.triggerPoll",
@@ -1415,21 +2036,112 @@ const make = Effect.gen(function* () {
     "IssueAutomationService.analyzeIssues",
   )(function* (input) {
     const { connector } = yield* readConnectorCredentials(input.connectorId);
+    const sourceId = input.retryTaskId ?? input.repairFromTaskId;
+    const previous =
+      sourceId === undefined
+        ? undefined
+        : yield* repo.getTask(sourceId).pipe(Effect.mapError(mapRepoErr("getTask")));
+    const isRepair = input.repairFromTaskId !== undefined;
+    if (
+      sourceId !== undefined &&
+      (!previous ||
+        previous.actionMode !== "diagnose_only" ||
+        previous.connectorId !== connector.id ||
+        previous.scopeId !== input.scopeId ||
+        input.issueKeys.length !== 1 ||
+        input.issueKeys[0] !== previous.issueKey ||
+        (isRepair
+          ? input.retryTaskId !== undefined ||
+            previous.stage !== "completed" ||
+            !previous.diagnosisReport?.trim() ||
+            previous.targetProjectId === null
+          : previous.stage !== "cancelled"))
+    ) {
+      return yield* new IssueAutomationError({
+        operation: "analyzeIssues",
+        detail: isRepair
+          ? "只能从已完成的诊断报告开始修复同一缺陷"
+          : "只能重新诊断已取消的同一缺陷",
+      });
+    }
+    const previousThread =
+      previous?.primaryThreadId == null
+        ? undefined
+        : yield* threadManagement
+            .getThreadProjection(previous.primaryThreadId)
+            .pipe(
+              Effect.catch((cause) =>
+                isRepair ? Effect.undefined : Effect.fail(mapRepoErr("getRetryThread")(cause)),
+              ),
+            );
+    if (
+      !isRepair &&
+      previousThread &&
+      (!isDiagnosisThread(previousThread.thread.id) ||
+        previousThread.thread.runtimeMode !== "approval-required" ||
+        previousThread.thread.archivedAt !== null ||
+        previousThread.thread.deletedAt !== null ||
+        previousThread.thread.projectId !== previous?.targetProjectId ||
+        previousThread.thread.worktreePath !== null ||
+        previousThread.runs.some(
+          (run) => !ThreadManagementService.isTerminalRunStatus(run.status),
+        ) ||
+        previousThread.providerThreads.some(
+          (thread) => (thread.pendingBackgroundTasks?.length ?? 0) > 0,
+        ) ||
+        previousThread.subagents.some((task) => isOrchestrationV2WorkActive(task.status)))
+    ) {
+      return yield* new IssueAutomationError({
+        operation: "analyzeIssues",
+        detail: "只能复用已停止的只读诊断会话。请确认运行状态，旧会话请重新发起诊断。",
+      });
+    }
     const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
-    const matchedProfile = input.profileId
-      ? profiles.find((p) => p.id === input.profileId)
+    const requestedProfileId = isRepair ? previous?.profileId : input.profileId;
+    const matchedProfile = requestedProfileId
+      ? profiles.find((p) => p.id === requestedProfileId)
       : profiles.find((p) => p.connectorId === input.connectorId && p.scopeId === input.scopeId);
 
-    const repositories = input.overrideRepositories ?? matchedProfile?.repositories;
-    const models = input.overrideModels ?? matchedProfile?.models;
-    const policy: IssueAutomationPolicy = input.overridePolicy ??
+    const configuredRepositories = input.overrideRepositories ?? matchedProfile?.repositories;
+    const repositories = previous?.targetProjectId
+      ? {
+          primaryProjectId: previous.targetProjectId,
+          linkedProjectIds: [...previous.referenceProjectIds],
+          moduleMappings: [],
+        }
+      : configuredRepositories;
+    const configuredModels =
+      (isRepair ? undefined : input.overrideModels) ?? matchedProfile?.models;
+    const models = previousThread
+      ? {
+          primaryModel: previousThread.thread.modelSelection,
+          triageModel: null,
+          highSeverityModel: null,
+          reviewModel: isRepair ? (configuredModels?.reviewModel ?? null) : null,
+          fallbackModel: isRepair ? (configuredModels?.fallbackModel ?? null) : null,
+        }
+      : configuredModels;
+    const configuredPolicy: IssueAutomationPolicy = (isRepair ? undefined : input.overridePolicy) ??
       matchedProfile?.policy ?? {
         actionMode: "fix_worktree_review",
         autoWriteComment: true,
         baseBranch: null,
         customPromptInstructions: null,
       };
+    const policy = isRepair
+      ? { ...configuredPolicy, actionMode: "fix_worktree_review" as const, autoWriteComment: false }
+      : previous
+        ? {
+            ...configuredPolicy,
+            actionMode: "diagnose_only" as const,
+            autoWriteComment:
+              matchedProfile?.policy.actionMode === "diagnose_only" &&
+              matchedProfile.policy.autoWriteComment,
+          }
+        : configuredPolicy;
     const maxConcurrency = matchedProfile?.filter.maxConcurrency ?? 2;
+    const scopeName =
+      connector.scopes.find((scope) => scope.id === input.scopeId)?.name ?? input.scopeName;
 
     if (!repositories || !models) {
       return yield* new IssueAutomationError({
@@ -1439,7 +2151,30 @@ const make = Effect.gen(function* () {
     }
 
     const createdTasks: IssueAutomationTask[] = [];
-    for (const issueKey of input.issueKeys) {
+    for (const issueKey of new Set(input.issueKeys)) {
+      const history = yield* repo
+        .listIssueTasks(connector.id, issueKey)
+        .pipe(Effect.mapError(mapRepoErr("listIssueTasks")));
+      const latest = history[0];
+      const canRepairAgain =
+        isRepair &&
+        latest?.repairOfTaskId === previous?.id &&
+        (latest?.stage === "failed" || latest?.stage === "cancelled");
+      if (previous && latest?.id !== previous.id && !canRepairAgain) {
+        return yield* new IssueAutomationError({
+          operation: "analyzeIssues",
+          detail: "该缺陷已有更新的执行记录",
+        });
+      }
+      if (history.some(blocksNewTask)) {
+        if (isRepair) {
+          return yield* new IssueAutomationError({
+            operation: "analyzeIssues",
+            detail: "该缺陷已有正在执行的任务",
+          });
+        }
+        continue;
+      }
       const createdAt = yield* nowIso;
       const modelLabel = formatModelLabel(models.primaryModel);
       const task: IssueAutomationTask = {
@@ -1448,16 +2183,20 @@ const make = Effect.gen(function* () {
         connectorId: connector.id,
         platform: connector.platform,
         scopeId: input.scopeId,
-        scopeName: input.scopeName,
+        scopeName,
         issueKey,
         displayKey: `#${issueKey}`,
-        issueTitle: `问题 #${issueKey}`,
-        issueUrl: connector.baseUrl,
-        moduleName: null,
-        severity: null,
-        priority: null,
-        issueStatus: "active",
-        assignee: null,
+        issueTitle: previous?.issueTitle ?? `问题 #${issueKey}`,
+        issueUrl:
+          previous?.issueUrl ||
+          (connector.baseUrl && connector.platform === "zentao"
+            ? buildZenTaoBugWebUrl(connector.baseUrl, issueKey)
+            : connector.baseUrl),
+        moduleName: isRepair ? (previous?.moduleName ?? null) : null,
+        severity: isRepair ? (previous?.severity ?? null) : null,
+        priority: isRepair ? (previous?.priority ?? null) : null,
+        issueStatus: isRepair ? (previous?.issueStatus ?? "") : "",
+        assignee: isRepair ? (previous?.assignee ?? null) : null,
         trigger: "manual",
         actionMode: policy.actionMode,
         stage: "queued",
@@ -1467,6 +2206,7 @@ const make = Effect.gen(function* () {
         ),
         primaryThreadId: null,
         reviewThreadId: null,
+        ...(isRepair && previous ? { repairOfTaskId: previous.id } : {}),
         assignedModelLabel: modelLabel,
         worktreeBranch: null,
         diagnosisReport: null,
@@ -1480,7 +2220,9 @@ const make = Effect.gen(function* () {
             at: createdAt,
             stage: "queued",
             modelLabel,
-            message: "手动派发问题诊断任务，正在进入执行队列...",
+            message: isRepair
+              ? "已从诊断报告提交手动修复，正在进入执行队列..."
+              : "手动派发问题诊断任务，正在进入执行队列...",
           },
         ],
         createdAt,
@@ -1488,71 +2230,297 @@ const make = Effect.gen(function* () {
         completedAt: null,
       };
       yield* repo.upsertTask(task).pipe(Effect.mapError(mapRepoErr("createManualTask")));
-      yield* spawnTaskExecution(task, repositories, models, policy, maxConcurrency);
+      yield* spawnTaskExecution(
+        task,
+        repositories,
+        models,
+        policy,
+        maxConcurrency,
+        isRepair && previous?.diagnosisReport
+          ? { kind: "repair", diagnosisReport: previous.diagnosisReport }
+          : previous
+            ? {
+                kind: "retry",
+                threadId: previousThread?.thread.id ?? null,
+                attemptNumber: history.length + 1,
+              }
+            : undefined,
+      );
       createdTasks.push(task);
     }
 
     return { tasks: createdTasks };
-  });
+  }, taskStarts.withPermits(1));
+
+  const stopTaskRun = Effect.fn("IssueAutomationService.stopTaskRun")(
+    function* (projectId: ProjectId, threadId: ThreadId, runId: RunId) {
+      const projection = yield* threadManagement.getThreadProjection(threadId);
+      const run = projection.runs.find((run) => run.id === runId);
+      if (!run)
+        return yield* new IssueAutomationError({
+          operation: "cancelTask",
+          detail: "找不到需要停止的模型轮次",
+        });
+      const commandId = CommandId.make(`issue-automation-cancel:${NodeCrypto.randomUUID()}`);
+      const reason = "Cancelled from Issue Automation workbench";
+      const pendingWork = hasRunBackgroundWork(projection, runId);
+      if (run.status === "queued") {
+        yield* threadManagement.dispatch({ type: "queued-run.cancel", commandId, threadId, runId });
+      } else if (!ThreadManagementService.isTerminalRunStatus(run.status)) {
+        yield* threadManagement.interruptThread({
+          projectId,
+          commandId,
+          threadId,
+          runId,
+          reason,
+        });
+      } else if (pendingWork) {
+        yield* threadManagement.dispatch({
+          type: "run.interrupt",
+          commandId,
+          threadId,
+          runId,
+          reason,
+        });
+      }
+      const stopped = yield* threadManagement.waitForThread({
+        projectId,
+        threadId,
+        runId,
+        timeoutMs: 30_000,
+        ...(pendingWork ? { untilDelegatedWorkSettled: true } : {}),
+      });
+      if (
+        stopped.timedOut ||
+        !stopped.run ||
+        !ThreadManagementService.isTerminalRunStatus(stopped.run.status) ||
+        hasRunBackgroundWork(yield* threadManagement.getThreadProjection(threadId), runId)
+      ) {
+        return yield* new IssueAutomationError({
+          operation: "cancelTask",
+          detail: "模型尚未确认停止，请重试取消",
+        });
+      }
+    },
+    Effect.mapError(mapRepoErr("cancelTask")),
+  );
 
   const cancelTask: IssueAutomationService["Service"]["cancelTask"] = Effect.fn(
     "IssueAutomationService.cancelTask",
-  )(function* (input) {
-    const runningMap = yield* Ref.get(activeTaskFibers);
-    const fiber = runningMap.get(input.taskId);
-    if (fiber) {
-      yield* Fiber.interrupt(fiber);
-    }
-    const tasks = yield* repo.listTasks(250).pipe(Effect.mapError(mapRepoErr("listTasks")));
-    const found = tasks.find((t) => t.id === input.taskId);
-    if (found && found.primaryThreadId && found.targetProjectId) {
-      yield* threadManagement
-        .interruptThread({
-          projectId: found.targetProjectId,
-          commandId: CommandId.make(`issue-automation-cancel:${NodeCrypto.randomUUID()}`),
-          threadId: found.primaryThreadId,
-          reason: "Cancelled from Issue Automation workbench",
-        })
-        .pipe(Effect.ignore);
-    }
-    if (found && !isTerminalStage(found.stage)) {
-      yield* updateTaskState(
-        found,
-        { stage: "cancelled" },
-        { stage: "cancelled", message: "用户手动取消了该诊断任务" },
+  )(function* ({ taskId }) {
+    if (pendingCancellations.has(taskId)) return;
+    pendingCancellations.add(taskId);
+    const stopping = yield* Effect.gen(function* () {
+      const task = yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+      if (!task || isTerminalStage(task.stage)) return;
+      const cancelling = yield* updateTaskState(
+        task,
+        { stage: "cancelling", lastError: null },
+        task.stage === "cancelling"
+          ? undefined
+          : {
+              message: task.repairOfTaskId ? "正在停止本次修复" : "正在停止本次诊断",
+            },
       );
+      if (cancelling.stage !== "cancelling") return;
+
+      const fiber = (yield* Ref.get(activeTaskFibers)).get(taskId);
+      if (fiber) yield* Fiber.interrupt(fiber);
+      const linked =
+        (yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? cancelling;
+      const stop = yield* Effect.result(
+        Effect.gen(function* () {
+          if (!linked.targetProjectId) return;
+          if (linked.reviewThreadId && linked.reviewRunId) {
+            yield* stopTaskRun(linked.targetProjectId, linked.reviewThreadId, linked.reviewRunId);
+          }
+          if (linked.primaryThreadId && linked.primaryRunId) {
+            yield* stopTaskRun(linked.targetProjectId, linked.primaryThreadId, linked.primaryRunId);
+          }
+        }),
+      );
+      if (stop._tag === "Failure") {
+        yield* updateTaskState(linked, { lastError: stop.failure.detail });
+        return yield* stop.failure;
+      }
+      yield* updateTaskState(
+        linked,
+        { stage: "cancelled" },
+        {
+          message: linked.repairOfTaskId ? "已确认停止本次修复" : "已确认停止本次诊断",
+        },
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          pendingCancellations.delete(taskId);
+        }),
+      ),
+      Effect.interruptible,
+      Effect.forkIn(serviceScope),
+    );
+    yield* Fiber.join(stopping).pipe(Effect.interruptible);
+  }, Effect.uninterruptible);
+
+  yield* repo.listTasks(1000).pipe(
+    Effect.orElseSucceed(() => []),
+    Effect.flatMap((tasks) =>
+      Effect.forEach(
+        tasks.filter((task) => task.stage === "cancelling"),
+        (task) => cancelTask({ taskId: task.id }).pipe(Effect.ignore),
+        { concurrency: 3, discard: true },
+      ),
+    ),
+    Effect.forkScoped,
+  );
+
+  const confirmRepair: IssueAutomationService["Service"]["confirmRepair"] = Effect.fn(
+    "IssueAutomationService.confirmRepair",
+  )(function* ({ taskId }) {
+    const task = yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+    if (
+      task?.repairOfTaskId === undefined ||
+      (task.stage !== "needs_human" && !task.repairConfirmedAt)
+    ) {
+      return yield* new IssueAutomationError({
+        operation: "confirmRepair",
+        detail: "只有待审查的修复可以确认",
+      });
     }
-  });
+    if (task.repairConfirmedAt) return;
+    const repairConfirmedAt = yield* nowIso;
+    yield* updateTaskState(
+      task,
+      { stage: "completed", repairConfirmedAt },
+      {
+        message: "用户已确认修复，可选择同步到禅道",
+      },
+    );
+  }, repairWrites.withPermits(1));
+
+  const syncRepair = Effect.fn("IssueAutomationService.syncRepair")(function* (
+    connectorId: IssueAutomationConnectorId,
+    action: IssueAutomationSyncRepairAction,
+  ) {
+    const task = yield* repo.getTask(action.taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+    if (
+      task?.repairOfTaskId === undefined ||
+      task.connectorId !== connectorId ||
+      task.stage !== "completed" ||
+      !task.repairConfirmedAt ||
+      !task.diagnosisReport ||
+      (!action.writeComment && action.resolvedBuild === undefined)
+    ) {
+      return yield* new IssueAutomationError({
+        operation: "syncRepair",
+        detail: "请先确认修复并选择至少一项禅道同步操作",
+      });
+    }
+    const writeComment = action.writeComment && task.commentSyncedAt === null;
+    const resolvedBuild = task.stateSyncedAt === null ? action.resolvedBuild : undefined;
+    if (!writeComment && resolvedBuild === undefined) return { ok: true };
+
+    const { plugin, credentials } = yield* readConnectorCredentials(connectorId);
+    if (resolvedBuild !== undefined) {
+      const detail = yield* plugin.getIssueDetail({
+        credentials,
+        scopeId: task.scopeId,
+        issueKey: task.issueKey,
+      });
+      if (
+        detail.status !== "active" ||
+        !detail.availableBuilds.some((build) => build.id === resolvedBuild)
+      ) {
+        return yield* new IssueAutomationError({
+          operation: "syncRepair",
+          detail: "缺陷状态或解决版本已变更，请重新查看禅道详情",
+        });
+      }
+    }
+
+    const comment = writeComment
+      ? formatIssueAutomationWriteBackComment({ ...task, diagnosisReport: task.diagnosisReport })
+      : "";
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const result = yield* plugin.writeBack({
+          credentials,
+          action:
+            resolvedBuild !== undefined
+              ? {
+                  kind: "resolve",
+                  issueKey: task.issueKey,
+                  resolution: "fixed",
+                  resolvedBuild,
+                  ...(comment ? { comment } : {}),
+                }
+              : { kind: "comment", issueKey: task.issueKey, comment },
+        });
+        if (!result.ok) {
+          return yield* new IssueAutomationError({
+            operation: "syncRepair",
+            detail: "禅道未确认写入成功",
+          });
+        }
+        const syncedAt = yield* nowIso;
+        yield* updateTaskState(
+          task,
+          {
+            ...(writeComment ? { commentSyncedAt: syncedAt } : {}),
+            ...(resolvedBuild === undefined
+              ? {}
+              : { stateSyncedAt: syncedAt, issueStatus: "resolved" }),
+          },
+          { message: "已将所选修复结果同步到禅道" },
+        );
+        return result;
+      }),
+    );
+  }, repairWrites.withPermits(1));
 
   const writeBack: IssueAutomationService["Service"]["writeBack"] = Effect.fn(
     "IssueAutomationService.writeBack",
   )(function* (input) {
+    if (input.action.kind === "sync_repair") {
+      return yield* syncRepair(input.connectorId, input.action);
+    }
     const { plugin, credentials } = yield* readConnectorCredentials(input.connectorId);
+    const found =
+      input.action.kind !== "create" && input.action.taskId !== undefined
+        ? yield* repo.getTask(input.action.taskId).pipe(Effect.mapError(mapRepoErr("getTask")))
+        : undefined;
+    if (found?.repairOfTaskId !== undefined) {
+      return yield* new IssueAutomationError({
+        operation: "writeBack",
+        detail: "请在修复报告中同步修复结果",
+      });
+    }
     const result = yield* plugin.writeBack({
       credentials,
       action: input.action,
     });
 
-    if (input.action.kind !== "create" && input.action.taskId !== undefined) {
-      const targetTaskId = input.action.taskId;
-      const tasks = yield* repo.listTasks(250).pipe(Effect.orElseSucceed(() => []));
-      const found = tasks.find((t) => t.id === targetTaskId);
-      if (found) {
-        const syncedAt = yield* nowIso;
-        yield* updateTaskState(
-          found,
-          {
-            ...(input.action.kind === "comment" || input.action.comment
-              ? { commentSyncedAt: syncedAt }
-              : {}),
-            ...(input.action.kind !== "comment" ? { stateSyncedAt: syncedAt } : {}),
-          },
-          {
-            stage: found.stage,
-            message: `已向平台执行写入动作: ${input.action.kind}`,
-          },
-        );
-      }
+    if (
+      result.ok &&
+      found &&
+      input.action.kind !== "create" &&
+      found.connectorId === input.connectorId &&
+      found.issueKey === input.action.issueKey
+    ) {
+      const syncedAt = yield* nowIso;
+      yield* updateTaskState(
+        found,
+        {
+          ...(input.action.kind === "comment" || input.action.comment
+            ? { commentSyncedAt: syncedAt }
+            : {}),
+          ...(input.action.kind !== "comment" ? { stateSyncedAt: syncedAt } : {}),
+        },
+        {
+          stage: found.stage,
+          message: `已向平台执行写入动作: ${input.action.kind}`,
+        },
+      );
     }
 
     return result;
@@ -1568,10 +2536,13 @@ const make = Effect.gen(function* () {
   return IssueAutomationService.of({
     getState: buildSnapshot,
     subscribe,
-    saveConnector,
+    startConnectorAuth,
+    finishConnectorAuth,
+    handleConnectorAuthCallback,
     deleteConnector,
     refreshScopes,
     listRemoteIssues,
+    scanProfileIssues,
     getRemoteIssueDetail,
     saveProfile,
     deleteProfile,
@@ -1579,10 +2550,9 @@ const make = Effect.gen(function* () {
     triggerPoll,
     analyzeIssues,
     cancelTask,
+    confirmRepair,
     writeBack,
   });
 });
 
-export const layer = Layer.effect(IssueAutomationService, make).pipe(
-  Layer.provide(Layer.merge(IssueAutomationRepository.layer, PluginRegistry.layer)),
-);
+export const layer = Layer.effect(IssueAutomationService, make);

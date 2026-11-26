@@ -131,6 +131,10 @@ import Migration0117 from "./Migrations/117_WorkflowMailSender.ts";
 import Migration0118 from "./Migrations/118_WorkflowPools.ts";
 import Migration0119 from "./Migrations/119_IssueAutomation.ts";
 import Migration0120 from "./Migrations/120_PrReviewWorkstation.ts";
+import Migration0121 from "./Migrations/121_IssueAutomationFeishu.ts";
+import Migration0122 from "./Migrations/122_IssueAutomationRunLinks.ts";
+import Migration0123 from "./Migrations/123_IssueAutomationRepair.ts";
+import Migration0124 from "./Migrations/124_IssueAutomationMcp.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -254,6 +258,10 @@ const migrationEntries = [
   [118, "WorkflowPools", Migration0118],
   [119, "IssueAutomation", Migration0119],
   [120, "PrReviewWorkstation", Migration0120],
+  [121, "IssueAutomationFeishu", Migration0121],
+  [122, "IssueAutomationRunLinks", Migration0122],
+  [123, "IssueAutomationRepair", Migration0123],
+  [124, "IssueAutomationMcp", Migration0124],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -368,6 +376,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
         DELETE FROM effect_sql_migrations
         WHERE (migration_id IN (106, 108, 111, 112, 117) AND name = 'IssueAutomation')
            OR (migration_id IN (107, 109, 112, 113, 118) AND name = 'PrReviewWorkstation')
+           OR (migration_id = 110 AND name = 'IssueAutomationFeishu')
+           OR (migration_id = 111 AND name = 'IssueAutomationRunLinks')
+           OR (migration_id = 112 AND name = 'IssueAutomationRepair')
+           OR (migration_id = 113 AND name = 'IssueAutomationMcp')
       `;
     }
   }

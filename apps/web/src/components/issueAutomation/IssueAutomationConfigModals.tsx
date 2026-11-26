@@ -1,5 +1,10 @@
+import { useAtomValue } from "@effect/atom-react";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationOperateScope,
+  isIssueAutomationFeishuWebhook,
   IssueAutomationPlatformKind,
   type EnvironmentId,
   type IssueAutomationActionMode,
@@ -10,9 +15,12 @@ import {
   type IssueAutomationPlatformDescriptor,
   type IssueAutomationProfile,
   type IssueAutomationRemoteScope,
+  type IssueAutomationStartConnectorAuthResult,
   type ModelSelection,
   type ProjectId,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { T, useGT, Var } from "gt-react";
 import {
@@ -20,27 +28,37 @@ import {
   ChevronRightIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
+  ExternalLinkIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderOpenIcon,
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   OfficialModelPicker,
   useOfficialModelCatalog,
 } from "~/components/chat/OfficialModelPicker";
+import {
+  FolderPickerDialog,
+  useEnvironmentFolderPicker,
+} from "~/components/repositories/FolderPickerDialog";
 import { SecretInput } from "~/components/settings/SecretInput";
-import { SettingsGroup } from "~/components/settings/SettingsGroup";
-import { SettingsRow } from "~/components/settings/settingsLayout";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { cn, newProjectId } from "~/lib/utils";
+import { ensureLocalApi } from "~/localApi";
+import { waitForProject } from "~/state/entities";
+import { useEnvironment } from "~/state/environments";
 import { issueAutomationEnvironment } from "~/state/issueAutomation";
+import { projectEnvironment } from "~/state/projects";
+import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogAction,
@@ -75,7 +93,6 @@ import {
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { cn } from "~/lib/utils";
 import { sortScopesByIdDesc } from "./issueAutomationAnalytics.logic";
 import { useActionModeLabel } from "./issueAutomationPresentation";
 import { formatCompactParentPath, groupProjectsByParentFolder } from "./projectMenuGrouping.logic";
@@ -159,7 +176,7 @@ export function SearchableScopeMenu({
               </MenuItem>
             ) : (
               filtered.map((scope) => (
-                <MenuRadioItem key={scope.id} value={scope.id}>
+                <MenuRadioItem key={scope.id} value={scope.id} closeOnClick>
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="min-w-9 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                       #{scope.id}
@@ -403,7 +420,7 @@ export function SearchableProjectMenu({
                     {!isCollapsed ? (
                       <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
                         {group.projects.map((proj) => (
-                          <MenuRadioItem key={proj.id} value={proj.id}>
+                          <MenuRadioItem key={proj.id} value={proj.id} closeOnClick>
                             <span className="flex min-w-0 items-center gap-2">
                               <span className="min-w-0 flex-1 truncate">{proj.title}</span>
                               <MenuRadioItemIndicator />
@@ -425,13 +442,11 @@ export function SearchableProjectMenu({
 
 function SearchableMultiProjectMenu({
   projects,
-  primaryProjectId,
   selectedIds,
   onChange,
   ariaLabel,
 }: {
   readonly projects: ReadonlyArray<SelectableProjectOption>;
-  readonly primaryProjectId: string;
   readonly selectedIds: ReadonlyArray<ProjectId>;
   readonly onChange: (next: ReadonlyArray<ProjectId>) => void;
   readonly ariaLabel: string;
@@ -449,13 +464,17 @@ function SearchableMultiProjectMenu({
   } = useProjectFolderGroups(projects, query);
   const selectedSet = new Set(selectedIds);
   const summary =
-    selectedIds.length === 0
-      ? gt("None")
+    projects.length === 0 || selectedIds.length === 0
+      ? gt("Not linked")
       : selectedIds.map((id) => projects.find((p) => p.id === id)?.title ?? id).join(", ");
 
   return (
     <Menu>
-      <MenuTrigger aria-label={ariaLabel} render={<SelectButton size="sm" />}>
+      <MenuTrigger
+        aria-label={ariaLabel}
+        disabled={projects.length === 0}
+        render={<SelectButton size="sm" />}
+      >
         {summary}
       </MenuTrigger>
       <MenuPopup align="start" className="min-w-72 max-w-96">
@@ -505,9 +524,7 @@ function SearchableMultiProjectMenu({
           ) : (
             groups.map((group) => {
               const isCollapsed = !isSearching && collapsedSet.has(group.key);
-              const hasActiveSelection = group.projects.some(
-                (proj) => selectedSet.has(proj.id) || proj.id === primaryProjectId,
-              );
+              const hasActiveSelection = group.projects.some((proj) => selectedSet.has(proj.id));
               return (
                 <div key={group.key} className="not-first:mt-1">
                   <ProjectFolderGroupHeader
@@ -526,7 +543,6 @@ function SearchableMultiProjectMenu({
                           <MenuCheckboxItem
                             key={proj.id}
                             checked={checked}
-                            disabled={proj.id === primaryProjectId}
                             onCheckedChange={(next) => {
                               if (next) {
                                 onChange(checked ? selectedIds : [...selectedIds, proj.id]);
@@ -567,7 +583,14 @@ export function ConnectorModal({
   readonly onSaved?: ((connector: IssueAutomationConnector) => void) | undefined;
 }) {
   const gt = useGT();
-  const saveConnector = useAtomCommand(issueAutomationEnvironment.saveConnector, {
+  const callbackBaseUrl = Option.getOrUndefined(usePreparedConnection(environmentId))?.httpBaseUrl;
+  const canAuthorize = useAtomValue(
+    issueAutomationEnvironment.startConnectorAuth.permissionAtom(environmentId),
+  );
+  const startAuthorization = useAtomCommand(issueAutomationEnvironment.startConnectorAuth, {
+    reportFailure: false,
+  });
+  const finishAuthorization = useAtomCommand(issueAutomationEnvironment.finishConnectorAuth, {
     reportFailure: false,
   });
 
@@ -578,53 +601,119 @@ export function ConnectorModal({
     IssueAutomationPlatformKind.make("zentao");
 
   const [platform, setPlatform] = useState<string>(defaultPlatform);
-  const [name, setName] = useState(initial?.name ?? "内部禅道");
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
-  const [account, setAccount] = useState(initial?.account ?? "");
-  const [secret, setSecret] = useState("");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [mcpUrl, setMcpUrl] = useState(initial?.mcpUrl ?? "");
+  const [authorization, setAuthorization] =
+    useState<IssueAutomationStartConnectorAuthResult | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const pendingCallback = useRef<AbortController | null>(null);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancel the pending authorization RPC when the dialog unmounts.
+  useEffect(() => () => pendingCallback.current?.abort(), []);
 
   const selectedPlatformDesc = platforms.find((p) => p.platform === platform) ?? platforms[0];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!baseUrl.trim() || !account.trim()) return;
+    if (
+      !canAuthorize ||
+      busy ||
+      (authorization
+        ? authorization.automatic || !callbackUrl.trim()
+        : !mcpUrl.trim() || !name.trim())
+    )
+      return;
     setBusy(true);
     setErrorText(null);
-    const res = await saveConnector({
+    if (authorization) {
+      const result = await finishAuthorization({
+        environmentId,
+        input: {
+          attemptId: authorization.attemptId,
+          callbackUrl: Redacted.make(callbackUrl.trim()),
+        },
+      });
+      setBusy(false);
+      if (result._tag === "Success") {
+        onSaved?.(result.value);
+        onOpenChange(false);
+      } else {
+        const error = squashAtomCommandFailure(result);
+        setErrorText(
+          error instanceof Error ? error.message : gt("Connection verification failed."),
+        );
+      }
+      return;
+    }
+
+    const result = await startAuthorization({
       environmentId,
       input: {
         ...(initial ? { id: initial.id } : {}),
         platform: IssueAutomationPlatformKind.make(platform),
-        name: name.trim() || "内部禅道",
-        baseUrl: baseUrl.trim(),
-        account: account.trim(),
-        ...(secret.trim() ? { secret: secret.trim() } : {}),
+        name: name.trim(),
+        mcpUrl: mcpUrl.trim(),
+        baseUrl: initial?.baseUrl ?? "",
+        ...(callbackBaseUrl === undefined ? {} : { callbackBaseUrl }),
       },
     });
     setBusy(false);
-    if (res._tag === "Failure") {
-      const err = squashAtomCommandFailure(res);
-      setErrorText(err instanceof Error ? err.message : gt("Connection verification failed."));
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      setErrorText(error instanceof Error ? error.message : gt("Connection verification failed."));
       return;
     }
-    onSaved?.(res.value);
-    onOpenChange(false);
+    setAuthorization(result.value);
+    if (!result.value.automatic) return;
+
+    const controller = new AbortController();
+    pendingCallback.current = controller;
+    const completed = await finishAuthorization(
+      { environmentId, input: { attemptId: result.value.attemptId } },
+      { signal: controller.signal },
+    );
+    if (controller.signal.aborted) return;
+    pendingCallback.current = null;
+    if (completed._tag === "Success") {
+      onSaved?.(completed.value);
+      void window.desktopBridge?.revealWindow?.().catch(() => undefined);
+      onOpenChange(false);
+    } else {
+      setAuthorization(null);
+      const error = squashAtomCommandFailure(completed);
+      setErrorText(error instanceof Error ? error.message : gt("Connection verification failed."));
+    }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (busy) return;
+        if (!next) pendingCallback.current?.abort();
+        onOpenChange(next);
+      }}
+    >
       <DialogPopup className="max-w-lg" style={MODAL_POPUP_STYLE}>
         <DialogHeader className="shrink-0">
           <DialogTitle>
             {initial ? <T>Edit platform connection</T> : <T>Connect issue platform</T>}
           </DialogTitle>
           <DialogDescription>
-            <T>
-              Credentials are encrypted on the local T3 server and verified immediately against your
-              tracker.
-            </T>
+            {authorization?.automatic ? (
+              <T>T3 Code completes the connection after you approve access in your browser.</T>
+            ) : authorization ? (
+              <T>
+                Approve access in your browser. It then opens a page that may not load: copy that
+                page's address and paste it here.
+              </T>
+            ) : initial?.mcpUrl === null ? (
+              <T>Connect the same ZenTao instance through MCP to restore its existing rules.</T>
+            ) : (
+              <T>Enter your ZenTao MCP service URL, then authorize in your browser.</T>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -634,96 +723,99 @@ export function ConnectorModal({
             className="min-w-0 space-y-4"
             onSubmit={(e) => void handleSubmit(e)}
           >
-            <div className="space-y-1.5">
-              <Label>
-                <T>Platform adapter</T>
-              </Label>
-              <Select
-                value={platform}
-                onValueChange={(next) => {
-                  if (next) setPlatform(next);
-                }}
-              >
-                <SelectTrigger aria-label={gt("Platform adapter")}>
-                  <SelectValue>{selectedPlatformDesc?.displayName ?? platform}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup style={SELECTOR_SCROLL_LIST_STYLE}>
-                  {platforms.map((item) => (
-                    <SelectItem
-                      key={item.platform}
-                      value={item.platform}
-                      disabled={!item.implemented}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span>{item.displayName}</span>
-                        {!item.implemented ? (
-                          <Badge variant="outline" size="sm">
-                            <T>Plugin slot</T>
-                          </Badge>
-                        ) : null}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="connector-name">
-                <T>Display name</T>
-              </Label>
-              <Input
-                id="connector-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={gt("e.g. Internal ZenTao")}
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="connector-url">
-                <T>Server URL</T>
-              </Label>
-              <Input
-                id="connector-url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={gt("https://zentao.example.com/zentao")}
-                required
-              />
-              <p className="text-xs text-muted-foreground">
-                <T>Paste the root address or any bug-browse page URL.</T>
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="connector-account">
-                  <T>Account</T>
-                </Label>
-                <Input
-                  id="connector-account"
-                  value={account}
-                  onChange={(e) => setAccount(e.target.value)}
-                  placeholder={gt("Username")}
-                  required
-                />
+            {authorization ? (
+              <div className="grid gap-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    void ensureLocalApi().shell.openExternal(authorization.authorizationUrl)
+                  }
+                >
+                  <ExternalLinkIcon aria-hidden />
+                  <T>Open sign-in page</T>
+                </Button>
+                {!authorization.automatic ? (
+                  <label className="grid gap-1.5 text-sm">
+                    <T>Address of the page your browser opened</T>
+                    <Input
+                      value={callbackUrl}
+                      onChange={(e) => setCallbackUrl(e.target.value)}
+                      inputMode="url"
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={16_384}
+                      disabled={busy}
+                      required
+                    />
+                  </label>
+                ) : null}
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="connector-secret">
-                  <T>Password or token</T>
-                </Label>
-                <SecretInput
-                  id="connector-secret"
-                  configured={initial?.hasSecret === true}
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  placeholder={gt("Password")}
-                  required={!initial?.hasSecret}
-                />
-              </div>
-            </div>
+            ) : (
+              <fieldset disabled={busy} className="grid min-w-0 gap-4">
+                <div className="space-y-1.5">
+                  <Label>
+                    <T>Platform adapter</T>
+                  </Label>
+                  <Select
+                    value={platform}
+                    onValueChange={(next) => {
+                      if (next) setPlatform(next);
+                    }}
+                  >
+                    <SelectTrigger aria-label={gt("Platform adapter")}>
+                      <SelectValue>{selectedPlatformDesc?.displayName ?? platform}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup style={SELECTOR_SCROLL_LIST_STYLE}>
+                      {platforms.map((item) => (
+                        <SelectItem
+                          key={item.platform}
+                          value={item.platform}
+                          disabled={!item.implemented}
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span>{item.displayName}</span>
+                            {!item.implemented ? (
+                              <Badge variant="outline" size="sm">
+                                <T>Plugin slot</T>
+                              </Badge>
+                            ) : null}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="connector-name">
+                    <T>Display name</T>
+                  </Label>
+                  <Input
+                    id="connector-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={gt("e.g. Internal ZenTao")}
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="connector-mcp-url">
+                    <T>MCP service URL</T>
+                  </Label>
+                  <Input
+                    id="connector-mcp-url"
+                    value={mcpUrl}
+                    onChange={(e) => setMcpUrl(e.target.value)}
+                    placeholder="https://mcp.example.com/zentao/mcp"
+                    type="url"
+                    spellCheck={false}
+                    required
+                  />
+                </div>
+              </fieldset>
+            )}
 
             {errorText ? (
               <Alert variant="error">
@@ -739,17 +831,94 @@ export function ConnectorModal({
             type="button"
             variant="outline"
             disabled={busy}
-            onClick={() => onOpenChange(false)}
+            onClick={() => {
+              pendingCallback.current?.abort();
+              onOpenChange(false);
+            }}
           >
             <T>Cancel</T>
           </Button>
-          <DialogAction form="issue-automation-connector-form" type="submit" disabled={busy}>
-            {busy ? <T>Verifying…</T> : <T>Verify & save</T>}
-          </DialogAction>
+          {authorization ? (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                pendingCallback.current?.abort();
+                setAuthorization(null);
+                setCallbackUrl("");
+                setErrorText(null);
+              }}
+            >
+              <T>Start over</T>
+            </Button>
+          ) : null}
+          {!authorization?.automatic ? (
+            <DialogAction
+              form="issue-automation-connector-form"
+              type="submit"
+              disabled={busy || !canAuthorize}
+            >
+              {busy ? (
+                <T>Verifying…</T>
+              ) : authorization ? (
+                <T>Verify & save</T>
+              ) : (
+                <T>Authorize MCP</T>
+              )}
+            </DialogAction>
+          ) : null}
         </DialogFooter>
       </DialogPopup>
     </Dialog>
   );
+}
+
+function RuleSection({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="min-w-0 border-t border-border/60" open>
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground in-[details[open]>summary]:rotate-90"
+        />
+        <span className="max-w-[65%] shrink-0">{title}</span>
+        {summary && (
+          <span className="ms-auto min-w-0 truncate text-right text-xs font-normal text-muted-foreground">
+            {summary}
+          </span>
+        )}
+      </summary>
+      <div className="min-w-0 space-y-3 pb-4 sm:ps-5">{children}</div>
+    </details>
+  );
+}
+
+function RuleField({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-sm font-medium">{title}</span>
+      {children}
+    </div>
+  );
+}
+
+function focusRuleField(container: HTMLDivElement | null) {
+  if (!container) return;
+  const section = container.closest("details");
+  if (section) section.open = true;
+  (
+    container.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)") ??
+    section?.querySelector("summary")
+  )?.focus();
 }
 
 export function ProfileModal({
@@ -773,10 +942,23 @@ export function ProfileModal({
 }) {
   const gt = useGT();
   const actionModeLabel = useActionModeLabel();
+  const pressedWithPickerOpen = useRef(false);
   const saveProfile = useAtomCommand(issueAutomationEnvironment.saveProfile, {
     reportFailure: false,
   });
-  const catalog = useOfficialModelCatalog(environmentId);
+  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const canCreateProject = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const serverConfig = useEnvironment(environmentId)?.serverConfig;
+  const projectBaseDirectory = serverConfig?.settings.addProjectBaseDirectory;
+  const supportsFeishuNotifications =
+    serverConfig?.environment.capabilities.issueAutomationFeishuNotifications === true ||
+    initial?.feishuNotification !== undefined;
+  const folderPicker = useEnvironmentFolderPicker(environmentId);
+  const [actionMode, setActionMode] = useState<IssueAutomationActionMode>(
+    initial?.policy.actionMode ?? "fix_worktree_review",
+  );
+  const driverKind = actionMode === "diagnose_only" ? "claudeAgent" : undefined;
+  const catalog = useOfficialModelCatalog(environmentId, driverKind);
 
   const firstConnector =
     connectors.find((c) => c.id === (initial?.connectorId ?? defaultConnectorId)) ?? connectors[0];
@@ -794,8 +976,12 @@ export function ProfileModal({
   const [primaryProjectId, setPrimaryProjectId] = useState<string>(
     initial?.repositories.primaryProjectId ?? projects[0]?.id ?? "",
   );
+  const primaryProject = projects.find((project) => project.id === primaryProjectId);
   const [linkedProjectIds, setLinkedProjectIds] = useState<ReadonlyArray<ProjectId>>(
-    initial?.repositories.linkedProjectIds ?? (projects[0] ? [projects[0].id] : []),
+    () =>
+      initial?.repositories.linkedProjectIds.filter(
+        (id) => id !== initial.repositories.primaryProjectId,
+      ) ?? [],
   );
   const [moduleMappings, setModuleMappings] = useState<
     ReadonlyArray<IssueAutomationModuleRepoMapping>
@@ -806,18 +992,19 @@ export function ProfileModal({
   const [primaryModel, setPrimaryModel] = useState<ModelSelection | null>(
     initial?.models.primaryModel ?? catalog.firstAvailableSelection,
   );
-  if (primaryModel === null && catalog.firstAvailableSelection) {
+  if (
+    (!primaryModel || (driverKind && !catalog.isSelectionAvailable(primaryModel))) &&
+    catalog.firstAvailableSelection
+  ) {
     setPrimaryModel(catalog.firstAvailableSelection);
   }
   const [highSeverityModel, setHighSeverityModel] = useState<ModelSelection | null>(
     initial?.models.highSeverityModel ?? null,
   );
-  const [triageModel, setTriageModel] = useState<ModelSelection | null>(
-    initial?.models.triageModel ?? null,
-  );
   const [reviewModel, setReviewModel] = useState<ModelSelection | null>(
     initial?.models.reviewModel ?? null,
   );
+  const [retryWithBackup, setRetryWithBackup] = useState(initial?.models.fallbackModel != null);
   const [fallbackModel, setFallbackModel] = useState<ModelSelection | null>(
     initial?.models.fallbackModel ?? null,
   );
@@ -836,9 +1023,6 @@ export function ProfileModal({
   );
   const [maxConcurrency, setMaxConcurrency] = useState<number>(initial?.filter.maxConcurrency ?? 2);
 
-  const [actionMode, setActionMode] = useState<IssueAutomationActionMode>(
-    initial?.policy.actionMode ?? "fix_worktree_review",
-  );
   const [autoWriteComment, setAutoWriteComment] = useState<boolean>(
     initial?.policy.autoWriteComment ?? true,
   );
@@ -846,9 +1030,63 @@ export function ProfileModal({
   const [customPromptInstructions, setCustomPromptInstructions] = useState<string>(
     initial?.policy.customPromptInstructions ?? "",
   );
+  const [notifyFeishu, setNotifyFeishu] = useState(initial?.feishuNotification?.enabled ?? false);
+  const [feishuWebhook, setFeishuWebhook] = useState("");
+  const [feishuWebhookInvalid, setFeishuWebhookInvalid] = useState(false);
+  const hasFeishuWebhook = initial?.feishuNotification?.hasWebhook ?? false;
 
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [addingProject, setAddingProject] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+
+  const addProject = async (workspaceRoot: string) => {
+    setAddingProject(true);
+    setProjectError(null);
+    try {
+      const projectId = newProjectId();
+      const result = await createProject({
+        environmentId,
+        input: {
+          projectId,
+          title: inferProjectTitleFromPath(workspaceRoot),
+          workspaceRoot,
+          createWorkspaceRootIfMissing: false,
+          defaultModelSelection: null,
+        },
+      });
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        setProjectError(error instanceof Error ? error.message : gt("Failed to add project"));
+      } else {
+        setPrimaryProjectId(projectId);
+        setDraftRuleProjectId((current) => current || projectId);
+        await waitForProject(scopeProjectRef(environmentId, projectId));
+      }
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : gt("Failed to add project"));
+    }
+    setAddingProject(false);
+  };
+
+  function writeBackDescription(): string {
+    switch (actionMode) {
+      case "fix_worktree_review":
+        return autoWriteComment
+          ? gt("Post the diagnosis and repair report as a bug comment.")
+          : gt("The fix stays in the worktree. The ZenTao bug stays unchanged.");
+      case "diagnose_only":
+        return autoWriteComment
+          ? gt("Post the root cause report as a bug comment.")
+          : gt("The report stays in T3 Code. The ZenTao bug stays unchanged.");
+      case "auto_resolve":
+        return autoWriteComment
+          ? gt("Post the repair report as a bug comment and try to mark the bug as resolved.")
+          : gt(
+              "The fix still runs in the worktree. No comment is posted and the bug is not marked as resolved.",
+            );
+    }
+  }
 
   const browseFilterLabel = (val: IssueAutomationBrowseFilter): string => {
     switch (val) {
@@ -865,6 +1103,54 @@ export function ProfileModal({
     }
   };
 
+  const modelField = useRef<HTMLDivElement>(null);
+  const repoField = useRef<HTMLDivElement>(null);
+  const backupField = useRef<HTMLDivElement>(null);
+  const feishuWebhookField = useRef<HTMLDivElement>(null);
+  const pollingSummary = enabled
+    ? gt("Every {minutes} min", { minutes: pollIntervalMinutes })
+    : gt("Polling off");
+  const executionSummary = [
+    actionMode === "diagnose_only" ? gt("Read-only diagnosis") : gt("Worktree fix"),
+    !autoWriteComment
+      ? gt("No write-back")
+      : actionMode === "auto_resolve"
+        ? gt("Comment and try to mark resolved")
+        : gt("Comment only"),
+  ].join(" · ");
+  const primaryModelName =
+    catalog.instanceEntries
+      .find((entry) => entry.instanceId === primaryModel?.instanceId)
+      ?.models.find((model) => model.slug === primaryModel?.model)?.name ?? primaryModel?.model;
+  const modelSummary = [
+    primaryModelName ?? gt("Select a model…"),
+    highSeverityModel && gt("S1/S2"),
+    reviewModel && actionMode !== "diagnose_only" && gt("Cross-review model"),
+    retryWithBackup && gt("Retry once with a backup model"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const repoSummary = [
+    primaryProject?.title ?? gt("Select repository"),
+    linkedProjectIds.length > 0 && gt("Linked: {count}", { count: linkedProjectIds.length }),
+    moduleMappings.length > 0 && gt("Routes: {count}", { count: moduleMappings.length }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const filterSummary = [
+    browseFilterLabel(browseType),
+    assignedToAccount.trim(),
+    onlyUnconfirmed && gt("Unconfirmed bugs only"),
+    pollingSummary,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const selectProduct = (product: IssueAutomationRemoteScope | undefined) => {
+    setScopeId(product?.id ?? "");
+    setName(product?.name ?? "");
+  };
+
   const addMappingRule = () => {
     if (!draftPattern.trim() || !draftRuleProjectId) return;
     setModuleMappings((prev) => [
@@ -876,18 +1162,42 @@ export function ProfileModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedPrimaryModel = primaryModel ?? catalog.firstAvailableSelection;
-    if (!activeConnector || !scopeId || !primaryProjectId || !resolvedPrimaryModel) {
+    const resolvedPrimaryModel =
+      driverKind && !catalog.isSelectionAvailable(primaryModel)
+        ? catalog.firstAvailableSelection
+        : (primaryModel ?? catalog.firstAvailableSelection);
+    if (!activeConnector || !scopeId || !primaryProject || !resolvedPrimaryModel) {
+      if (!primaryProject) focusRuleField(repoField.current);
+      else if (!resolvedPrimaryModel) focusRuleField(modelField.current);
       setErrorText(gt("Please select a product, local repository, and primary model."));
+      return;
+    }
+
+    if (
+      retryWithBackup &&
+      (!fallbackModel || (driverKind && !catalog.isSelectionAvailable(fallbackModel)))
+    ) {
+      focusRuleField(backupField.current);
+      setErrorText(gt("Choose a backup model to retry the task."));
+      return;
+    }
+
+    const webhook = notifyFeishu ? feishuWebhook.trim() : "";
+    if (
+      supportsFeishuNotifications &&
+      notifyFeishu &&
+      (webhook ? !isIssueAutomationFeishuWebhook(webhook) : !hasFeishuWebhook)
+    ) {
+      setFeishuWebhookInvalid(true);
+      focusRuleField(feishuWebhookField.current);
       return;
     }
 
     const scopeObj = activeConnector.scopes.find((s) => s.id === scopeId);
     const scopeName = scopeObj?.name ?? scopeId;
-    const allLinked = linkedProjectIds.includes(primaryProjectId as ProjectId)
-      ? linkedProjectIds
-      : [primaryProjectId as ProjectId, ...linkedProjectIds];
-
+    const notification = supportsFeishuNotifications
+      ? { enabled: notifyFeishu, ...(webhook ? { webhook: Redacted.make(webhook) } : {}) }
+      : undefined;
     setBusy(true);
     setErrorText(null);
     const res = await saveProfile({
@@ -900,24 +1210,27 @@ export function ProfileModal({
         scopeId,
         scopeName,
         repositories: {
-          primaryProjectId: primaryProjectId as ProjectId,
-          linkedProjectIds: [...allLinked],
+          primaryProjectId: primaryProject.id,
+          linkedProjectIds: [primaryProject.id, ...linkedProjectIds],
           moduleMappings: [...moduleMappings],
         },
         models: {
           primaryModel: resolvedPrimaryModel,
-          highSeverityModel,
-          triageModel,
+          highSeverityModel:
+            driverKind && !catalog.isSelectionAvailable(highSeverityModel)
+              ? null
+              : highSeverityModel,
+          triageModel: initial?.models.triageModel ?? null,
           reviewModel,
-          fallbackModel,
+          fallbackModel: retryWithBackup ? fallbackModel : null,
         },
         filter: {
           browseType,
           onlyUnconfirmed,
           assignedToAccount: assignedToAccount.trim() || null,
-          maxSeverity: null,
-          keyword: null,
-          pollIntervalMinutes: Math.max(1, pollIntervalMinutes),
+          maxSeverity: initial?.filter.maxSeverity ?? null,
+          keyword: initial?.filter.keyword ?? null,
+          pollIntervalMinutes: Math.max(1, Math.min(1440, pollIntervalMinutes)),
           maxConcurrency: Math.max(1, Math.min(8, maxConcurrency)),
         },
         policy: {
@@ -926,6 +1239,7 @@ export function ProfileModal({
           baseBranch: baseBranch.trim() || null,
           customPromptInstructions: customPromptInstructions.trim() || null,
         },
+        ...(notification ? { feishuNotification: notification } : {}),
       },
     });
     setBusy(false);
@@ -934,23 +1248,44 @@ export function ProfileModal({
       setErrorText(err instanceof Error ? err.message : gt("Failed to save automation profile."));
       return;
     }
+    const savedNotification = res.value.feishuNotification;
+    if (
+      notification &&
+      (savedNotification?.enabled !== notification.enabled ||
+        (notification.enabled && !savedNotification?.hasWebhook))
+    ) {
+      setErrorText(gt("The server did not confirm saving the Feishu notification settings."));
+      return;
+    }
     onOpenChange(false);
   };
 
-  const effectiveLinkedIds = linkedProjectIds.includes(primaryProjectId as ProjectId)
-    ? linkedProjectIds
-    : primaryProjectId
-      ? [primaryProjectId as ProjectId, ...linkedProjectIds]
-      : linkedProjectIds;
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-2xl" style={MODAL_POPUP_STYLE}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (details.reason === "outside-press" && pressedWithPickerOpen.current) {
+          details.cancel();
+          return;
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogPopup
+        className="max-w-2xl"
+        style={MODAL_POPUP_STYLE}
+        onViewportPointerDownCapture={(event) => {
+          // Pickers can dismiss on pointerdown before the dialog handles the same click.
+          pressedWithPickerOpen.current = !!event.currentTarget.querySelector(
+            '[aria-haspopup][aria-expanded="true"]',
+          );
+        }}
+      >
         <DialogHeader className="shrink-0">
           <DialogTitle>
-            {initial ? <T>Edit unattended rule</T> : <T>New unattended automation rule</T>}
+            {initial ? <T>Edit unattended rule</T> : <T>New unattended rule</T>}
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             <T>
               Configure product scope, multi-codebase routing, multi-model orchestration, and ZenTao
               write-back policy.
@@ -961,21 +1296,23 @@ export function ProfileModal({
         <DialogPanel>
           <form
             id="issue-automation-profile-form"
-            className="min-w-0 space-y-5"
+            className="min-w-0"
             onSubmit={(e) => void handleSubmit(e)}
           >
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Platform connection")}
-                control={
+            <section className="space-y-3 pb-4">
+              <h3 className="text-sm font-semibold">
+                <T>Monitoring target</T>
+              </h3>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <RuleField title={gt("Platform connection")}>
                   <Select
                     value={connectorId}
                     onValueChange={(next) => {
-                      if (!next) return;
+                      if (!next || next === connectorId) return;
                       setConnectorId(next);
                       const nextConn = connectors.find((c) => c.id === next);
                       const nextSorted = nextConn ? sortScopesByIdDesc(nextConn.scopes) : [];
-                      if (nextSorted[0]) setScopeId(nextSorted[0].id);
+                      selectProduct(nextSorted[0]);
                     }}
                   >
                     <SelectTrigger size="sm" aria-label={gt("Platform connection")}>
@@ -984,166 +1321,173 @@ export function ProfileModal({
                     <SelectPopup style={SELECTOR_SCROLL_LIST_STYLE}>
                       {connectors.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
-                          {c.name} ({c.account})
+                          {c.name}
                         </SelectItem>
                       ))}
                     </SelectPopup>
                   </Select>
-                }
-              />
-
-              <SettingsRow
-                title={gt("ZenTao product")}
-                description={gt("Choose which product's bug list this rule monitors.")}
-                control={
+                </RuleField>
+                <RuleField title={gt("ZenTao product")}>
                   <SearchableScopeMenu
                     scopes={activeConnector?.scopes ?? []}
                     value={scopeId}
-                    onChange={setScopeId}
+                    onChange={(next) => {
+                      if (next !== scopeId)
+                        selectProduct(activeSortedScopes.find((s) => s.id === next));
+                    }}
                     ariaLabel={gt("Select ZenTao product")}
-                    className="max-w-60"
+                    className="w-full min-w-0"
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Rule name")}
-                control={
+                </RuleField>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="issue-rule-name">{gt("Rule name")}</Label>
+                <Input
+                  size="sm"
+                  id="issue-rule-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={gt("Auto-diagnosis rule")}
+                />
+              </div>
+            </section>
+            <RuleSection title={gt("Filters and schedule")} summary={filterSummary}>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <RuleField title={gt("Fetch scope")}>
+                  <Select
+                    value={browseType}
+                    onValueChange={(next) => {
+                      if (next) setBrowseType(next as IssueAutomationBrowseFilter);
+                    }}
+                  >
+                    <SelectTrigger size="sm" aria-label={gt("Scope")}>
+                      <SelectValue>{browseFilterLabel(browseType)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value="unresolved">{browseFilterLabel("unresolved")}</SelectItem>
+                      <SelectItem value="unclosed">{browseFilterLabel("unclosed")}</SelectItem>
+                      <SelectItem value="assigntome">{browseFilterLabel("assigntome")}</SelectItem>
+                      <SelectItem value="openedbyme">{browseFilterLabel("openedbyme")}</SelectItem>
+                      <SelectItem value="all">{browseFilterLabel("all")}</SelectItem>
+                    </SelectPopup>
+                  </Select>
+                </RuleField>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="issue-rule-account">{gt("Further filter by assignee")}</Label>
+                  <Input
+                    id="issue-rule-account"
+                    size="sm"
+                    placeholder={gt("Account (optional)")}
+                    value={assignedToAccount}
+                    onChange={(e) => setAssignedToAccount(e.target.value)}
+                  />
+                </div>
+              </div>
+              <Label>
+                <Checkbox checked={onlyUnconfirmed} onCheckedChange={setOnlyUnconfirmed} />
+                {gt("Unconfirmed bugs only")}
+              </Label>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="issue-rule-poll">{gt("Enable background polling")}</Label>
+                <Switch
+                  id="issue-rule-poll"
+                  size="sm"
+                  checked={enabled}
+                  onCheckedChange={setEnabled}
+                  aria-label={gt("Enable background polling")}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-md bg-muted/50 p-3">
+                <label className="flex items-center gap-2 text-sm has-disabled:text-muted-foreground">
+                  {gt("Check every")}
                   <Input
                     size="sm"
-                    className="w-56"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder={gt("Auto-diagnosis rule")}
+                    type="number"
+                    className="w-16"
+                    min={1}
+                    max={1440}
+                    disabled={!enabled}
+                    aria-label={gt("Poll interval minutes")}
+                    value={String(pollIntervalMinutes)}
+                    onChange={(e) => setPollIntervalMinutes(Number(e.target.value) || 5)}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Enable background polling")}
-                description={gt("Unattended daemon polls ZenTao on schedule and skips seen bugs.")}
-                control={
-                  <Switch
+                  {gt("minutes")}
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  {gt("Run up to")}
+                  <Input
                     size="sm"
-                    checked={enabled}
-                    onCheckedChange={setEnabled}
-                    aria-label={gt("Enable background polling")}
+                    type="number"
+                    className="w-16"
+                    min={1}
+                    max={8}
+                    aria-label={gt("Max concurrency")}
+                    value={String(maxConcurrency)}
+                    onChange={(e) => setMaxConcurrency(Number(e.target.value) || 2)}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Filter & schedule")}
-                description={gt("Scope filter, interval in minutes, and max parallel runs.")}
-                control={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Select
-                      value={browseType}
-                      onValueChange={(next) => {
-                        if (next) setBrowseType(next as IssueAutomationBrowseFilter);
-                      }}
-                    >
-                      <SelectTrigger size="sm" className="min-w-32" aria-label={gt("Scope")}>
-                        <SelectValue>{browseFilterLabel(browseType)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup>
-                        <SelectItem value="unresolved">
-                          {browseFilterLabel("unresolved")}
-                        </SelectItem>
-                        <SelectItem value="unclosed">{browseFilterLabel("unclosed")}</SelectItem>
-                        <SelectItem value="assigntome">
-                          {browseFilterLabel("assigntome")}
-                        </SelectItem>
-                        <SelectItem value="openedbyme">
-                          {browseFilterLabel("openedbyme")}
-                        </SelectItem>
-                        <SelectItem value="all">{browseFilterLabel("all")}</SelectItem>
-                      </SelectPopup>
-                    </Select>
-                    <Input
-                      size="sm"
-                      type="number"
-                      min={1}
-                      max={1440}
-                      className="w-20"
-                      aria-label={gt("Poll interval minutes")}
-                      value={String(pollIntervalMinutes)}
-                      onChange={(e) => setPollIntervalMinutes(Number(e.target.value) || 5)}
-                    />
-                    <Input
-                      size="sm"
-                      type="number"
-                      min={1}
-                      max={8}
-                      className="w-16"
-                      aria-label={gt("Max concurrency")}
-                      value={String(maxConcurrency)}
-                      onChange={(e) => setMaxConcurrency(Number(e.target.value) || 2)}
-                    />
-                  </div>
-                }
-              />
-
-              <SettingsRow
-                title={gt("Assignee filter & unconfirmed only")}
-                description={gt("Optional account filter or restrict to unconfirmed bugs.")}
-                control={
-                  <div className="flex items-center gap-3">
-                    <Input
-                      size="sm"
-                      className="w-40"
-                      value={assignedToAccount}
-                      onChange={(e) => setAssignedToAccount(e.target.value)}
-                      placeholder={gt("Any assignee")}
-                    />
-                    <Switch
-                      size="sm"
-                      checked={onlyUnconfirmed}
-                      onCheckedChange={setOnlyUnconfirmed}
-                      aria-label={gt("Unconfirmed bugs only")}
-                    />
-                  </div>
-                }
-              />
-            </SettingsGroup>
-
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Primary local codebase")}
-                description={gt("Default repository where isolated Worktrees launch.")}
-                control={
-                  <SearchableProjectMenu
-                    projects={projects}
-                    value={primaryProjectId}
-                    onChange={setPrimaryProjectId}
-                    ariaLabel={gt("Primary local codebase")}
-                    leadingIcon={<FolderGit2Icon className="size-3.5 shrink-0 opacity-70" />}
-                  />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Linked sibling codebases")}
-                description={gt(
-                  "Associate multiple local repos so cross-service context is mounted together.",
-                )}
-                control={
+                  {gt("bugs at once")}
+                </label>
+              </div>
+            </RuleSection>
+            <RuleSection title={gt("Code repositories")} summary={repoSummary}>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div ref={repoField}>
+                  <RuleField title={gt("Primary local codebase")}>
+                    {projects.length === 0 || addingProject ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={addingProject || !canCreateProject || !folderPicker.canPickFolder}
+                        onClick={() =>
+                          void folderPicker.openFolderPicker({
+                            ...(projectBaseDirectory ? { initialPath: projectBaseDirectory } : {}),
+                            onSelect: (workspaceRoot) => void addProject(workspaceRoot),
+                          })
+                        }
+                      >
+                        <PlusIcon />
+                        {addingProject ? gt("Adding…") : gt("Add project")}
+                      </Button>
+                    ) : (
+                      <SearchableProjectMenu
+                        projects={projects}
+                        value={primaryProjectId}
+                        onChange={(next) => {
+                          setPrimaryProjectId(next);
+                          setLinkedProjectIds((ids) => ids.filter((id) => id !== next));
+                        }}
+                        ariaLabel={gt("Primary local codebase")}
+                        leadingIcon={<FolderGit2Icon className="size-3.5 shrink-0 opacity-70" />}
+                      />
+                    )}
+                  </RuleField>
+                </div>
+                <RuleField title={gt("Linked sibling codebases")}>
                   <SearchableMultiProjectMenu
-                    projects={projects}
-                    primaryProjectId={primaryProjectId}
-                    selectedIds={effectiveLinkedIds}
+                    projects={projects.filter((project) => project.id !== primaryProjectId)}
+                    selectedIds={linkedProjectIds}
                     onChange={setLinkedProjectIds}
                     ariaLabel={gt("Linked sibling codebases")}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Module & keyword routing")}
-                description={gt(
-                  "Route matching ZenTao modules or title keywords to a specific repo.",
+                </RuleField>
+              </div>
+              {!projects.length && (
+                <p className="text-xs text-muted-foreground">
+                  {gt("Add a project before saving this rule.")}
+                </p>
+              )}
+              {projectError && (
+                <p role="alert" className="text-xs text-destructive">
+                  {projectError}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {gt(
+                  "First match module or keyword rules, then look for a repository name in the issue. If nothing matches, use the default repository.",
                 )}
-              >
+              </p>
+              <RuleSection title={gt("Module & keyword routing")}>
                 <div className="mt-2 space-y-2 pb-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <Input
@@ -1189,166 +1533,244 @@ export function ProfileModal({
                     </div>
                   ) : null}
                 </div>
-              </SettingsRow>
-            </SettingsGroup>
-
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Primary diagnosis & fix model")}
-                control={
-                  <OfficialModelPicker
-                    environmentId={environmentId}
-                    value={primaryModel}
-                    onChange={setPrimaryModel}
-                    ariaLabel={gt("Primary model")}
-                  />
-                }
-              />
-
-              <SettingsRow
-                title={gt("S1/S2 high-severity escalation model")}
-                description={gt("Automatically upgrade model for critical bugs.")}
-                control={
+              </RuleSection>
+            </RuleSection>
+            <RuleSection title={gt("Models")} summary={modelSummary}>
+              <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div ref={modelField}>
+                  <RuleField title={gt("Primary diagnosis & fix model")}>
+                    <OfficialModelPicker
+                      environmentId={environmentId}
+                      value={primaryModel}
+                      driverKind={driverKind}
+                      onChange={setPrimaryModel}
+                      ariaLabel={gt("Primary model")}
+                    />
+                  </RuleField>
+                </div>
+                <RuleField title={gt("S1/S2 high-severity escalation model")}>
                   <OfficialModelPicker
                     environmentId={environmentId}
                     value={highSeverityModel}
+                    driverKind={driverKind}
                     onChange={setHighSeverityModel}
                     ariaLabel={gt("High-severity model")}
                     emptyOptionLabel={gt("Same as primary")}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Heterogeneous cross-review model")}
-                description={gt("Run a second model to audit code changes before write-back.")}
-                control={
+                </RuleField>
+                <RuleField title={gt("Cross-review model")}>
                   <OfficialModelPicker
                     environmentId={environmentId}
                     value={reviewModel}
+                    disabled={actionMode === "diagnose_only"}
                     onChange={setReviewModel}
                     ariaLabel={gt("Cross-review model")}
                     emptyOptionLabel={gt("Disabled")}
                   />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Triage & failover models")}
-                description={gt("Optional fast router model and quota failover backup.")}
-                control={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <OfficialModelPicker
-                      environmentId={environmentId}
-                      value={triageModel}
-                      onChange={setTriageModel}
-                      ariaLabel={gt("Triage model")}
-                      emptyOptionLabel={gt("Heuristic routing")}
-                      triggerClassName="w-auto min-w-44"
-                    />
-                    <OfficialModelPicker
-                      environmentId={environmentId}
-                      value={fallbackModel}
-                      onChange={setFallbackModel}
-                      ariaLabel={gt("Failover model")}
-                      emptyOptionLabel={gt("No failover")}
-                      triggerClassName="w-auto min-w-44"
-                    />
-                  </div>
-                }
-              />
-            </SettingsGroup>
-
-            <SettingsGroup>
-              <SettingsRow
-                title={gt("Execution mode")}
-                control={
+                  <p className="text-xs text-muted-foreground">
+                    {gt(
+                      "Only in fix modes. A second model reviews changes and test results before writing back to ZenTao.",
+                    )}
+                  </p>
+                </RuleField>
+                <RuleField title={gt("If the primary model fails")}>
                   <Select
-                    value={actionMode}
+                    value={retryWithBackup ? "retry" : "stop"}
                     onValueChange={(next) => {
-                      if (next) setActionMode(next as IssueAutomationActionMode);
+                      if (next) setRetryWithBackup(next === "retry");
                     }}
                   >
-                    <SelectTrigger size="sm" aria-label={gt("Execution mode")}>
-                      <SelectValue>{actionModeLabel(actionMode)}</SelectValue>
+                    <SelectTrigger size="sm" aria-label={gt("If the primary model fails")}>
+                      <SelectValue>
+                        {retryWithBackup
+                          ? gt("Retry once with a backup model")
+                          : gt("End the task")}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectPopup>
-                      <SelectItem value="fix_worktree_review">
-                        {actionModeLabel("fix_worktree_review")}
-                      </SelectItem>
-                      <SelectItem value="diagnose_only">
-                        {actionModeLabel("diagnose_only")}
-                      </SelectItem>
-                      <SelectItem value="auto_resolve">
-                        {actionModeLabel("auto_resolve")}
-                      </SelectItem>
+                      <SelectItem value="stop">{gt("End the task")}</SelectItem>
+                      <SelectItem value="retry">{gt("Retry once with a backup model")}</SelectItem>
                     </SelectPopup>
                   </Select>
-                }
-              />
-
-              <SettingsRow
-                title={gt("Auto-post diagnosis comment to ZenTao")}
-                control={
-                  <Switch
-                    size="sm"
-                    checked={autoWriteComment}
-                    onCheckedChange={setAutoWriteComment}
-                    aria-label={gt("Auto-post diagnosis comment")}
-                  />
-                }
-              />
-
-              <SettingsRow
-                title={gt("Worktree base branch")}
-                control={
+                </RuleField>
+                {retryWithBackup && (
+                  <div ref={backupField}>
+                    <RuleField title={gt("Backup model")}>
+                      <OfficialModelPicker
+                        environmentId={environmentId}
+                        value={fallbackModel}
+                        driverKind={driverKind}
+                        onChange={setFallbackModel}
+                        ariaLabel={gt("Backup model")}
+                        emptyOptionLabel={fallbackModel ? undefined : gt("Select a model…")}
+                      />
+                    </RuleField>
+                  </div>
+                )}
+              </div>
+            </RuleSection>
+            <RuleSection title={gt("Execution and write-back")} summary={executionSummary}>
+              <RuleField title={gt("Execution mode")}>
+                <Select
+                  value={actionMode}
+                  onValueChange={(next) => {
+                    if (next) setActionMode(next as IssueAutomationActionMode);
+                  }}
+                >
+                  <SelectTrigger size="sm" aria-label={gt("Execution mode")}>
+                    <SelectValue>{actionModeLabel(actionMode)}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="fix_worktree_review">
+                      {actionModeLabel("fix_worktree_review")}
+                    </SelectItem>
+                    <SelectItem value="diagnose_only">
+                      {actionModeLabel("diagnose_only")}
+                    </SelectItem>
+                    <SelectItem value="auto_resolve">{actionModeLabel("auto_resolve")}</SelectItem>
+                  </SelectPopup>
+                </Select>
+              </RuleField>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="issue-rule-write">{gt("Automatically write back to ZenTao")}</Label>
+                <Switch
+                  id="issue-rule-write"
+                  size="sm"
+                  checked={autoWriteComment}
+                  onCheckedChange={setAutoWriteComment}
+                  aria-label={gt("Automatically write back to ZenTao")}
+                  aria-describedby="issue-rule-write-back-description"
+                />
+              </div>
+              <p id="issue-rule-write-back-description" className="text-xs text-muted-foreground">
+                {writeBackDescription()}
+              </p>
+              <RuleSection title={gt("More execution settings")}>
+                <RuleField title={gt("Worktree base branch")}>
                   <Input
                     size="sm"
-                    className="w-48"
+                    aria-label={gt("Worktree base branch")}
                     value={baseBranch}
                     onChange={(e) => setBaseBranch(e.target.value)}
                     placeholder={gt("Default HEAD")}
                   />
-                }
-              />
-
-              <SettingsRow title={gt("Custom team prompt instructions")}>
-                <div className="mt-2 pb-2">
+                </RuleField>
+                <RuleField title={gt("Custom team prompt instructions")}>
                   <Textarea
                     rows={2}
+                    aria-label={gt("Custom team prompt instructions")}
                     value={customPromptInstructions}
                     onChange={(e) => setCustomPromptInstructions(e.target.value)}
                     placeholder={gt(
                       "e.g. Run unit tests before finishing and list affected API routes.",
                     )}
                   />
+                </RuleField>
+              </RuleSection>
+            </RuleSection>
+            <RuleSection
+              title={gt("Feishu notifications")}
+              summary={
+                supportsFeishuNotifications
+                  ? notifyFeishu
+                    ? gt("Enabled")
+                    : gt("Disabled")
+                  : gt("Unavailable")
+              }
+            >
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="issue-rule-notify-feishu" id="issue-rule-notify-feishu-label">
+                  {gt("Notify Feishu when a task ends")}
+                </Label>
+                <Switch
+                  id="issue-rule-notify-feishu"
+                  size="sm"
+                  aria-labelledby="issue-rule-notify-feishu-label"
+                  aria-describedby={
+                    supportsFeishuNotifications ? undefined : "issue-rule-feishu-unavailable"
+                  }
+                  disabled={!supportsFeishuNotifications}
+                  checked={notifyFeishu}
+                  onCheckedChange={(checked) => {
+                    setNotifyFeishu(checked);
+                    setFeishuWebhookInvalid(false);
+                  }}
+                />
+              </div>
+              {!supportsFeishuNotifications && (
+                <p id="issue-rule-feishu-unavailable" className="text-xs text-muted-foreground">
+                  {gt("Update the server to configure Feishu notifications.")}
+                </p>
+              )}
+              {supportsFeishuNotifications && notifyFeishu && (
+                <div ref={feishuWebhookField} className="space-y-1.5">
+                  <Label htmlFor="issue-rule-feishu-webhook">{gt("Group bot webhook")}</Label>
+                  <SecretInput
+                    id="issue-rule-feishu-webhook"
+                    size="sm"
+                    configured={hasFeishuWebhook}
+                    value={feishuWebhook}
+                    onChange={(event) => {
+                      setFeishuWebhook(event.target.value);
+                      setFeishuWebhookInvalid(false);
+                    }}
+                    placeholder={gt("Paste the Feishu group bot webhook")}
+                    aria-required={!hasFeishuWebhook}
+                    aria-invalid={feishuWebhookInvalid}
+                    aria-describedby={
+                      feishuWebhookInvalid ? "issue-rule-feishu-webhook-error" : undefined
+                    }
+                  />
+                  {feishuWebhookInvalid && (
+                    <p
+                      role="alert"
+                      id="issue-rule-feishu-webhook-error"
+                      className="text-xs text-destructive"
+                    >
+                      {gt("Enter a valid Feishu group bot webhook.")}
+                    </p>
+                  )}
                 </div>
-              </SettingsRow>
-            </SettingsGroup>
+              )}
+            </RuleSection>
+          </form>
+        </DialogPanel>
 
+        <DialogFooter className="shrink-0">
+          <div className="flex w-full flex-col gap-2">
             {errorText ? (
               <Alert variant="error">
                 <AlertTitle>{gt("Could not save rule")}</AlertTitle>
                 <AlertDescription>{errorText}</AlertDescription>
               </Alert>
             ) : null}
-          </form>
-        </DialogPanel>
-
-        <DialogFooter className="shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onOpenChange(false)}
-          >
-            <T>Cancel</T>
-          </Button>
-          <DialogAction form="issue-automation-profile-form" type="submit" disabled={busy}>
-            {busy ? <T>Saving…</T> : <T>Save rule</T>}
-          </DialogAction>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <p
+                aria-live="polite"
+                className="me-auto min-w-0 basis-full text-xs text-muted-foreground sm:flex-1 sm:basis-auto"
+              >
+                {pollingSummary} · {executionSummary}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => onOpenChange(false)}
+              >
+                <T>Cancel</T>
+              </Button>
+              <DialogAction
+                form="issue-automation-profile-form"
+                type="submit"
+                disabled={busy || addingProject}
+              >
+                {busy ? <T>Saving…</T> : <T>Save rule</T>}
+              </DialogAction>
+            </div>
+          </div>
         </DialogFooter>
       </DialogPopup>
+      {folderPicker.dialogProps ? <FolderPickerDialog {...folderPicker.dialogProps} /> : null}
     </Dialog>
   );
 }

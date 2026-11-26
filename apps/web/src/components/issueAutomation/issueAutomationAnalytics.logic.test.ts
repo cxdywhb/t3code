@@ -13,6 +13,7 @@ import {
   computeIssueAutomationAnalytics,
   DEFAULT_WORKBENCH_PREFS,
   formatCompactDuration,
+  groupIssueAutomationTasks,
   IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
   resolvePersistedModelSelection,
@@ -22,6 +23,36 @@ import {
 } from "./issueAutomationAnalytics.logic";
 
 const decodeWorkbenchPrefs = Schema.decodeSync(IssueAutomationWorkbenchPrefsSchema);
+
+it("groups repeated attempts by connector and bug, with the newest attempt first", () => {
+  const cancelled = makeTask({
+    id: "first",
+    stage: "cancelled",
+    createdAt: "2026-11-24T01:00:00Z",
+    updatedAt: "2026-11-24T03:00:00Z",
+  });
+  const completed = makeTask({
+    id: "second",
+    stage: "completed",
+    createdAt: "2026-11-24T02:00:00Z",
+  });
+  const otherConnector = makeTask({
+    id: "other",
+    connectorId: IssueAutomationConnectorId.make("conn-2"),
+    createdAt: "2026-11-24T00:00:00Z",
+  });
+  expect(
+    groupIssueAutomationTasks([cancelled, otherConnector, completed]).map(
+      ({ latest, attempts }) => ({
+        latest: latest.id,
+        attempts: attempts.map((task) => task.id),
+      }),
+    ),
+  ).toEqual([
+    { latest: "second", attempts: ["second", "first"] },
+    { latest: "other", attempts: ["other"] },
+  ]);
+});
 
 function makeTask(
   overrides: Omit<Partial<IssueAutomationTask>, "id"> & { id: string },

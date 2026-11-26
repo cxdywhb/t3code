@@ -568,7 +568,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  it.effect("reports the desktop bootstrap as the source of endpoints it supplied", () =>
+  it.effect("reads the desktop display name and reports bootstrap endpoint sources", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const baseDir = yield* fs.makeTempDirectoryScoped({
@@ -576,6 +576,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       });
       const fd = yield* openBootstrapFd(
         makeDesktopBootstrap({
+          appDisplayName: "Example T3 (Dev)",
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
           otlpLogsUrl: "http://localhost:4318/v1/logs",
@@ -595,6 +596,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toMatchObject({
+        desktopAppDisplayName: "Example T3 (Dev)",
         otlpTracesUrl: "http://localhost:4318/v1/traces",
         otlpTracesSource: "bootstrap",
         otlpMetricsSource: "bootstrap",

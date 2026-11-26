@@ -8,6 +8,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { searchableMessageSegments, searchablePlanSegments } from "@t3tools/shared/threadFindText";
+import { readLegacyIssueAutomationSummary } from "@t3tools/shared/legacyIssueAutomationSummary";
 import { countThreadSearchOccurrences } from "@t3tools/shared/threadSearch";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 import * as Cache from "effect/Cache";
@@ -456,17 +457,35 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
             rendered = row;
           } else {
             const decoded = yield* decode(row);
-            const key = textKey(decoded.item, cwd, input.skills ?? [], input.theme);
-            const segments =
-              decoded.item.type === "assistant_message" &&
-              decoded.item.text === "" &&
-              embeddedResultRunIds.has(decoded.item.runId)
-                ? []
-                : yield* Cache.get(
-                    key.text.length <= 32_768 ? textCache.text : textCache.largeText,
-                    key,
-                  );
-            rendered = { ...documentFor(decoded, 0), segments, sourceLength: key.text.length };
+            const item = decoded.item;
+            const issueSummary =
+              item.type === "user_message"
+                ? (item.context?.issueAutomation ?? readLegacyIssueAutomationSummary(item))
+                : undefined;
+            if (issueSummary) {
+              const scope = [issueSummary.scopeName, issueSummary.moduleName ?? ""]
+                .map((name) => name.trim().replace(/\s+/g, " "))
+                .filter(Boolean)
+                .join(" / ");
+              const segments = [scope, issueSummary.issueKey];
+              rendered = {
+                ...documentFor(decoded, 0),
+                segments,
+                sourceLength: scope.length + issueSummary.issueKey.length,
+              };
+            } else {
+              const key = textKey(item, cwd, input.skills ?? [], input.theme);
+              const segments =
+                item.type === "assistant_message" &&
+                item.text === "" &&
+                embeddedResultRunIds.has(item.runId)
+                  ? []
+                  : yield* Cache.get(
+                      key.text.length <= 32_768 ? textCache.text : textCache.largeText,
+                      key,
+                    );
+              rendered = { ...documentFor(decoded, 0), segments, sourceLength: key.text.length };
+            }
           }
           const document = {
             ...rendered,

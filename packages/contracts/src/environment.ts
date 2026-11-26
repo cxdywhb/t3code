@@ -228,6 +228,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueLinkedThreads: Schema.optionalKey(Schema.Boolean),
   /** Serves `issueAutomation.*` pluggable issue diagnosis and resolution workflows. */
   issueAutomation: Schema.optionalKey(Schema.Boolean),
+  issueAutomationFeishuNotifications: Schema.optionalKey(Schema.Boolean),
+  issueAutomationRuleScan: Schema.optionalKey(Schema.Boolean),
+  issueAutomationRetry: Schema.optionalKey(Schema.Boolean),
+  issueAutomationRepair: Schema.optionalKey(Schema.Boolean),
   /** Serves `prReview.*` multi-model pull request fusion review workstation workflows. */
   prReview: Schema.optionalKey(Schema.Boolean),
   /** Keeps more than one account per standalone issue tracker; older servers keep one. */

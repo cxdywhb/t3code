@@ -53,7 +53,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // A tracker credential and a project's binding are settings, saved under the same grant.
   [WS_METHODS.issueTrackersConnect]: AuthSettingsWriteScope,
   [WS_METHODS.issueTrackersBindProject]: AuthSettingsWriteScope,
-  [WS_METHODS.issueAutomationSaveConnector]: AuthSettingsWriteScope,
+  [WS_METHODS.issueAutomationStartConnectorAuth]: AuthSettingsWriteScope,
+  [WS_METHODS.issueAutomationFinishConnectorAuth]: AuthSettingsWriteScope,
   [WS_METHODS.issueAutomationDeleteConnector]: AuthSettingsWriteScope,
   [WS_METHODS.issueAutomationRefreshScopes]: AuthSettingsWriteScope,
   [WS_METHODS.issueAutomationSaveProfile]: AuthOrchestrationOperateScope,
@@ -62,6 +63,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.issueAutomationTriggerPoll]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationAnalyzeIssues]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationCancelTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issueAutomationConfirmRepair]: AuthOrchestrationOperateScope,
   [WS_METHODS.issueAutomationWriteBack]: AuthSourceControlWriteScope,
   [WS_METHODS.prReviewSavePreset]: AuthOrchestrationOperateScope,
   [WS_METHODS.prReviewDeletePreset]: AuthOrchestrationOperateScope,

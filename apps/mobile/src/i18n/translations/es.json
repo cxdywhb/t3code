@@ -395,6 +395,11 @@
   "071ab90b0e0f5e76": "Compactando…",
   "2fb1845862c9a087": "Compactado automáticamente antes de que caducara la caché",
   "552d31d19f1df851": "Contexto compactado antes de enviar",
+  "d2e270032ef37711": "Solo diagnóstico · Sin cambios de código",
+  "1d1ffac1dfa1aeed": "Diagnosticar y corregir",
+  "eaabadc64b84731c": "Revisar la corrección",
+  "36fac9a5376678ef": "Ver ZenTao {issueKey}",
+  "ef0b494565c4f4b2": "Ver incidencia {issueKey}",
   "476ca970255eaea4": "Vincula este entorno a T3 Connect para tener una URL pública.",
   "6b80f5b38a8f9950": "Solo este equipo puede llamar a esta dirección. Vincula T3 Connect para tener una URL pública.",
   "c5a7b1d3891dd0b8": "Funciona donde se pueda acceder a la dirección de este entorno, por ejemplo a través de Tailscale o de tu propio proxy. Vincula T3 Connect para tener una URL pública.",
@@ -5696,5 +5701,6 @@
   "ad208e3e32c85029": "Ocultar todo",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
-  "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran."
+  "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran.",
+  "603661e55748ac0f": "Diagnóstico reiniciado · Ejecución {number}"
 }

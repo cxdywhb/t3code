@@ -2073,12 +2073,17 @@ export const layerWsRpc = (
         [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
         [WS_METHODS.issueAutomationGetState]: () => issueAutomation.getState,
         [WS_METHODS.issueAutomationSubscribe]: () => issueAutomation.subscribe,
-        [WS_METHODS.issueAutomationSaveConnector]: (input) => issueAutomation.saveConnector(input),
+        [WS_METHODS.issueAutomationStartConnectorAuth]: (input) =>
+          issueAutomation.startConnectorAuth(input),
+        [WS_METHODS.issueAutomationFinishConnectorAuth]: (input) =>
+          issueAutomation.finishConnectorAuth(input),
         [WS_METHODS.issueAutomationDeleteConnector]: (input) =>
           issueAutomation.deleteConnector(input),
         [WS_METHODS.issueAutomationRefreshScopes]: (input) => issueAutomation.refreshScopes(input),
         [WS_METHODS.issueAutomationListRemoteIssues]: (input) =>
           issueAutomation.listRemoteIssues(input),
+        [WS_METHODS.issueAutomationScanProfileIssues]: (input) =>
+          issueAutomation.scanProfileIssues(input),
         [WS_METHODS.issueAutomationGetRemoteIssueDetail]: (input) =>
           issueAutomation.getRemoteIssueDetail(input),
         [WS_METHODS.issueAutomationSaveProfile]: (input) => issueAutomation.saveProfile(input),
@@ -2088,6 +2093,7 @@ export const layerWsRpc = (
         [WS_METHODS.issueAutomationTriggerPoll]: (input) => issueAutomation.triggerPoll(input),
         [WS_METHODS.issueAutomationAnalyzeIssues]: (input) => issueAutomation.analyzeIssues(input),
         [WS_METHODS.issueAutomationCancelTask]: (input) => issueAutomation.cancelTask(input),
+        [WS_METHODS.issueAutomationConfirmRepair]: (input) => issueAutomation.confirmRepair(input),
         [WS_METHODS.issueAutomationWriteBack]: (input) => issueAutomation.writeBack(input),
         [WS_METHODS.prReviewListSkills]: () => prReview.listSkills,
         [WS_METHODS.prReviewGetState]: () => prReview.getState,

@@ -2,32 +2,58 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
+  EventId,
   IssueAutomationPlatformKind,
+  IssueAutomationConnectorId,
+  MessageId,
+  NodeId,
   ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  type IssueAutomationSaveProfileInput,
+  type IssueAutomationConnector,
+  type IssueAutomationTaskId,
+  type IssueAutomationWriteBackAction,
   type OrchestrationProjectShell,
+  type OrchestrationV2Run,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { vi } from "vite-plus/test";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Redacted from "effect/Redacted";
+import * as Stream from "effect/Stream";
+import { FetchHttpClient, HttpClient } from "effect/http";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerConfig from "../config.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import {
   extractZenTaoImageUrls,
   markdownToZenTaoHtml,
   normalizeZenTaoBaseUrl,
   sortZenTaoScopesDesc,
   zenTaoHtmlToMarkdown,
-  ZenTaoSessionClient,
 } from "./connectors/zentao/ZenTaoClient.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ServerConfig from "../config.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
-import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import * as Sqlite from "../persistence/Sqlite.ts";
-import * as ProjectService from "../project/ProjectService.ts";
-import * as IssueAutomation from "./IssueAutomationService.ts";
+import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
+import * as IssueAutomationRepository from "./IssueAutomationRepository.ts";
+import * as IssueAutomationService from "./IssueAutomationService.ts";
 import { resolveTargetRepositories } from "./MultiRepoRouter.ts";
+import type { IssuePlatformPlugin, PlatformIssueDetail } from "./plugin/IssuePlatformPlugin.ts";
+import * as PluginRegistry from "./plugin/PluginRegistry.ts";
 
 describe("ZenTaoClient helpers", () => {
   it("normalizes page URLs and controller suffixes to the ZenTao root", () => {
@@ -39,40 +65,6 @@ describe("ZenTaoClient helpers", () => {
     );
     expect(normalizeZenTaoBaseUrl("https://pms.example.com/api.php/v1/tokens")).toBe(
       "https://pms.example.com",
-    );
-    expect(normalizeZenTaoBaseUrl("zentao.example.com")).toBe("https://zentao.example.com");
-    expect(normalizeZenTaoBaseUrl("https://zentao.example.com")).toBe("https://zentao.example.com");
-    expect(normalizeZenTaoBaseUrl("https://zentao.example.com/")).toBe(
-      "https://zentao.example.com",
-    );
-    expect(normalizeZenTaoBaseUrl("https://zentao.example.com/zentao/")).toBe(
-      "https://zentao.example.com/zentao",
-    );
-    expect(
-      normalizeZenTaoBaseUrl("https://zentao.example.com/zentao/bug-browse-68-0-all-0.html"),
-    ).toBe("https://zentao.example.com/zentao");
-    expect(
-      normalizeZenTaoBaseUrl(
-        "https://zentao.example.com/zentao/bug-browse-68-0-all-0.html?tid=abc#app=qa",
-      ),
-    ).toBe("https://zentao.example.com/zentao");
-    expect(normalizeZenTaoBaseUrl("zentao.example.com/zentao/bug-browse-68-0-all-0.html")).toBe(
-      "https://zentao.example.com/zentao",
-    );
-    expect(
-      normalizeZenTaoBaseUrl("https://zentao.example.com/zentao/user-login-L3plbnRhby8=.html"),
-    ).toBe("https://zentao.example.com/zentao");
-    expect(normalizeZenTaoBaseUrl("https://zentao.example.com/zentao/my.html")).toBe(
-      "https://zentao.example.com/zentao",
-    );
-    expect(
-      normalizeZenTaoBaseUrl("https://zentao.example.com/zentao/index.php/bug-browse-68.html"),
-    ).toBe("https://zentao.example.com/zentao");
-    expect(normalizeZenTaoBaseUrl("//zentao.example.com/zentao/")).toBe(
-      "https://zentao.example.com/zentao",
-    );
-    expect(normalizeZenTaoBaseUrl("192.168.1.20:8080/zentao/bug-browse.html")).toBe(
-      "http://192.168.1.20:8080/zentao",
     );
   });
 
@@ -187,607 +179,729 @@ describe("MultiRepoRouter", () => {
   });
 });
 
-function jsonResponse(payload: unknown, url?: string): Response {
-  const res = Response.json(payload);
-  if (url) {
-    Object.defineProperty(res, "url", { value: url });
-  }
-  return res;
-}
-
-function handleStandardZenTaoEndpoints(url: string, validBaseUrl: string): Response | null {
-  if (url === `${validBaseUrl}/index.php?mode=getconfig`) {
-    return jsonResponse(
-      {
-        version: "10.6",
-        requestType: "PATH_INFO",
-        requestFix: "-",
-        sessionName: "zentaosid",
-        sessionID: "sid-123",
-        rand: 42,
+it.effect("handles diagnosis retries, repair review and write-back, and Feishu notifications", () =>
+  Effect.gen(function* () {
+    const pollStarted = yield* Deferred.make<void>();
+    const finishPoll = yield* Deferred.make<void>();
+    const cancellableTaskStarted = yield* Deferred.make<void>();
+    const runWaiting = yield* Deferred.make<void>();
+    const stopRequested = yield* Deferred.make<void>();
+    const confirmStop = yield* Deferred.make<void>();
+    const outbound: Array<{ readonly url: string; readonly body: unknown }> = [];
+    const writeBacks: IssueAutomationWriteBackAction[] = [];
+    const startedMessages: ThreadLaunchService.ThreadLaunchInitialMessage[] = [];
+    const project: OrchestrationProjectShell = {
+      id: ProjectId.make("proj-example"),
+      title: "example-app",
+      workspaceRoot: "/repos/example-app",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook";
+    const baseUrl = "https://zentao.example.com/zentao";
+    const scope = { id: "5", name: "好轻 App" };
+    const platform = IssueAutomationPlatformKind.make("zentao");
+    const threadId = ThreadId.make("thread:issue-diagnosis:2849");
+    const oldRunId = RunId.make("run:issue-2849:1");
+    const newRunId = RunId.make("run:issue-2849:2");
+    const repairThreadId = ThreadId.make("thread:repair-2849");
+    const repairRunId = RunId.make("run:repair-2849");
+    let repairMessageId = MessageId.make("repair-message");
+    let repairBranch = "";
+    const at = DateTime.makeUnsafe("2026-11-24T00:00:00Z");
+    const instanceId = ProviderInstanceId.make("codex");
+    const modelSelection = { instanceId, model: "example" };
+    const runs: OrchestrationV2Run[] = [];
+    const makeRun = (
+      id: RunId,
+      messageId: MessageId,
+      status: OrchestrationV2Run["status"],
+    ): OrchestrationV2Run => ({
+      id,
+      threadId,
+      ordinal: runs.length + 1,
+      providerInstanceId: instanceId,
+      modelSelection,
+      providerThreadId: null,
+      userMessageId: messageId,
+      rootNodeId: null,
+      activeAttemptId: null,
+      status,
+      requestedAt: at,
+      startedAt: at,
+      completedAt: status === "running" ? null : at,
+      checkpointId: null,
+      contextHandoffId: null,
+    });
+    const baseProjection = emptyProjection({
+      id: EventId.make("event:issue-2849"),
+      type: "thread.created",
+      threadId,
+      occurredAt: at,
+      payload: {
+        id: threadId,
+        projectId: project.id,
+        title: "Diagnosis",
+        createdBy: "user",
+        creationSource: "web",
+        providerInstanceId: instanceId,
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: "main",
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: at,
+        updatedAt: at,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
       },
-      url,
-    );
-  }
-  if (url === `${validBaseUrl}/api-getSessionID.json?zentaosid=sid-123`) {
-    return jsonResponse({
-      status: "success",
-      data: JSON.stringify({ sessionName: "zentaosid", sessionID: "sid-123", rand: 42 }),
     });
-  }
-  if (url === `${validBaseUrl}/user-login.json?zentaosid=sid-123`) {
-    return jsonResponse({
-      status: "success",
-      user: { account: "alice", realname: "Alice" },
+    const reply = (runId: RunId, text: string) => ({
+      id: MessageId.make(`reply:${runId}`),
+      threadId,
+      runId,
+      nodeId: null,
+      role: "assistant" as const,
+      createdBy: "agent" as const,
+      creationSource: "provider" as const,
+      text,
+      attachments: [],
+      streaming: false,
+      createdAt: at,
+      updatedAt: at,
     });
-  }
-  if (url === `${validBaseUrl}/bug-browse.json?zentaosid=sid-123`) {
-    return jsonResponse({
-      status: "success",
-      data: JSON.stringify({
-        products: {
-          "0": "",
-          "68": "Core Product",
+    let oldPermissions = false;
+    const projection = () => ({
+      ...baseProjection,
+      thread: oldPermissions
+        ? { ...baseProjection.thread, runtimeMode: "full-access" as const }
+        : baseProjection.thread,
+      runs: [...runs],
+      messages: [
+        ...(runs.length > 1 ? [reply(newRunId, "New diagnosis")] : []),
+        reply(oldRunId, "Cancelled diagnosis fragment"),
+      ],
+    });
+    const repairRun = () => ({
+      ...makeRun(repairRunId, repairMessageId, "completed"),
+      threadId: repairThreadId,
+      ordinal: 1,
+    });
+    const repairProjection = () => ({
+      ...baseProjection,
+      thread: {
+        ...baseProjection.thread,
+        id: repairThreadId,
+        worktreePath: "/repos/example-worktree",
+        branch: repairBranch,
+      },
+      runs: [repairRun()],
+      messages: [
+        { ...reply(repairRunId, "Applied and tested the repair"), threadId: repairThreadId },
+      ],
+      checkpoints: [
+        {
+          id: CheckpointId.make("repair-checkpoint"),
+          threadId: repairThreadId,
+          scopeId: CheckpointScopeId.make("repair-scope"),
+          runId: repairRunId,
+          nodeId: NodeId.make("repair-node"),
+          parentCheckpointId: null,
+          ordinalWithinScope: 1,
+          appRunOrdinal: 1,
+          ref: CheckpointRef.make("refs/t3/checkpoint/repair"),
+          status: "ready" as const,
+          files: [],
+          filesTotal: { count: 1, additions: 1, deletions: 0 },
+          capturedAt: at,
+        },
+      ],
+    });
+    const detail: PlatformIssueDetail = {
+      key: "2846",
+      displayKey: "#2846",
+      scopeId: scope.id,
+      scopeName: scope.name,
+      title: "体重记录未刷新",
+      url: `${baseUrl}/bug-view-2846.html`,
+      moduleId: null,
+      moduleName: null,
+      severity: null,
+      priority: null,
+      status: "resolved",
+      statusLabel: "已解决",
+      confirmed: true,
+      author: null,
+      assignee: "陈晓",
+      createdAt: "2026-11-24T00:00:00.000Z",
+      updatedAt: "2026-11-24T00:00:00.000Z",
+      stepsHtml: "",
+      stepsMarkdown: "打开体重记录页面，查看最新记录。",
+      imageUrls: [],
+      openedBuild: "",
+      availableBuilds: [],
+      availableUsers: [],
+      comments: [],
+    };
+    const plugin: IssuePlatformPlugin = {
+      kind: platform,
+      descriptor: {
+        platform,
+        displayName: "ZenTao",
+        description: "",
+        implemented: true,
+        scopeNoun: "产品",
+        issueNoun: "Bug",
+        authFields: [],
+      },
+      normalizeBaseUrl: (url) => url,
+      probeAndListScopes: () =>
+        Effect.succeed({
+          writeActions: ["comment", "resolve"],
+          scopes: [scope],
+        }),
+      listIssues: ({ page, pageSize, browseType, keyword, scopeId }) => {
+        if (browseType === "all") {
+          expect({ keyword, scopeId }).toEqual({ keyword: "体重", scopeId: scope.id });
+          const matched = { ...detail, severity: 1, confirmed: false, assignee: "Chen (chen)" };
+          return Effect.succeed({
+            items:
+              page === 1
+                ? [
+                    { ...matched, confirmed: true },
+                    { ...matched, severity: 3 },
+                    { ...matched, assignee: "Someone else" },
+                  ]
+                : Array.from({ length: 26 }, (_, index) => ({
+                    ...matched,
+                    key: String(3000 + index),
+                  })),
+            total: pageSize + 26,
+            page,
+            pageSize,
+          });
+        }
+        return Deferred.succeed(pollStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(finishPoll)),
+          Effect.as({ items: [{ ...detail, status: "active" }], total: 1, page: 1, pageSize: 30 }),
+        );
+      },
+      getIssueDetail: ({ issueKey }) =>
+        issueKey === "2847"
+          ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(
+              issueKey === "2849"
+                ? {
+                    ...detail,
+                    key: issueKey,
+                    displayKey: "#2849",
+                    status: "active",
+                    statusLabel: "激活",
+                    availableBuilds: [{ id: "7", name: "v1.2.0" }],
+                  }
+                : detail,
+            ),
+      writeBack: ({ action }) =>
+        Effect.sync(() => {
+          writeBacks.push(action);
+          return { ok: true };
+        }),
+    };
+    const dependencies = Layer.mergeAll(
+      IssueAutomationRepository.layer.pipe(Layer.provide(Sqlite.layerMemory)),
+      Layer.succeed(PluginRegistry.IssuePlatformPluginRegistry, {
+        descriptors: [plugin.descriptor],
+        get: () => plugin,
+        requirePlugin: () => Effect.succeed(plugin),
+      }),
+      ServerSecretStore.layer.pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issue-feishu-" })),
+        Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+      ),
+      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([project]) }),
+      Layer.mock(GitWorkflow.GitWorkflowService)({ currentBranch: () => Effect.succeed("main") }),
+      Layer.mock(ThreadIssueService.ThreadIssueService)({
+        link: () => Effect.succeed({ alreadyLinked: false }),
+      }),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        launch: (input) => {
+          if (input.initialMessage) startedMessages.push(input.initialMessage);
+          if (input.workspaceStrategy?.type === "worktree") {
+            expect(input.initialMessage?.text).toContain("New diagnosis");
+            expect(input.initialMessage?.context?.issueAutomation?.mode).toBe("repair");
+            expect(input.workspaceStrategy).toMatchObject({
+              baseRef: "main",
+              startFromOrigin: false,
+            });
+            repairMessageId = input.initialMessage!.messageId!;
+            repairBranch = input.workspaceStrategy.branch!;
+            return Effect.succeed({
+              threadId: repairThreadId,
+              projection: repairProjection(),
+              resumed: false,
+            });
+          }
+          if (input.initialMessage?.context?.issueAutomation?.issueKey === "#2849") {
+            expect(input.threadId).toMatch(/^thread:issue-diagnosis:/);
+            expect(input.runtimeMode).toBe("approval-required");
+            runs.push(makeRun(oldRunId, input.initialMessage.messageId!, "running"));
+            return Effect.succeed({ threadId, projection: projection(), resumed: false });
+          }
+          return Effect.fail(
+            new ThreadLaunchService.ThreadLaunchError({
+              operation: "dispatch-message",
+              commandId: input.commandId,
+              projectId: input.projectId,
+              cause: "provider unavailable",
+            }),
+          );
         },
       }),
-    });
-  }
-  return null;
-}
-
-const connectorTestLayer = IssueAutomation.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      Sqlite.layerMemory,
-      ServerSecretStore.layer,
-      Layer.mock(ProjectService.ProjectService)({}),
-      Layer.mock(GitWorkflow.GitWorkflowService)({}),
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-      Layer.mock(ThreadIssueService.ThreadIssueService)({}),
-    ),
-  ),
-  Layer.provide(ServerConfig.layerTest(import.meta.dirname, { prefix: "t3-connector-edit-" })),
-  Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
-);
-
-it.effect("keeps the saved ZenTao instance when renaming an unavailable connector", () =>
-  Effect.gen(function* () {
-    const service = yield* IssueAutomation.IssueAutomationService;
-    const original = "https://pms.example.com/team";
-    const other = "https://pms.example.com/zentao";
-    let online = original;
-    using requests = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(
-        async (input) =>
-          handleStandardZenTaoEndpoints(String(input), online) ??
-          new Response(null, { status: 404 }),
-      );
-    const input = {
-      platform: IssueAutomationPlatformKind.make("zentao"),
-      name: "Original",
-      baseUrl: original,
-      account: "alice",
-    };
-    const saved = yield* service.saveConnector({ ...input, secret: "test" });
-    online = other;
-    requests.mockClear();
-    const edit = { ...input, id: saved.id, name: "Renamed" };
-    expect((yield* Effect.result(service.saveConnector(edit)))._tag).toBe("Failure");
-    expect(requests.mock.calls.map(([url]) => String(url))).toEqual([
-      original + "/index.php?mode=getconfig",
-    ]);
-    expect((yield* service.getState).connectors).toEqual([saved]);
-    const moved = yield* service.saveConnector({ ...edit, baseUrl: "https://pms.example.com" });
-    expect(moved.baseUrl).toBe(other);
-    expect(moved.id).toBe(saved.id);
-  }).pipe(Effect.provide(connectorTestLayer)),
-);
-
-describe("ZenTaoSessionClient discovery & probe", () => {
-  it.effect("discovers /zentao from the welcome HTML page across all 4 user input formats", () =>
-    Effect.gen(function* () {
-      const welcomeHtml = `
-        <html xmlns='http://www.w3.org/1999/xhtml'>
-        <head>
-          <meta http-equiv='Content-Type' content='text/html; charset=utf-8' />
-          <title>Welcome to use zentao!</title>
-          <script>window.location.replace("/zentao");</script>
-        </head>
-        <body>
-          <a id='zentao' href='/zentao/' class='btn'>Zentao</a>
-        </body>
-        </html>
-      `;
-      using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (url === "https://zentao.example.com/index.php?mode=getconfig") {
-          return new Response(welcomeHtml, {
-            status: 200,
-            headers: { "content-type": "text/html; charset=UTF-8" },
-          });
-        }
-        const matched = handleStandardZenTaoEndpoints(url, "https://zentao.example.com/zentao");
-        if (matched) return matched;
-        return new Response("Not Found", { status: 404 });
-      });
-
-      const inputs = [
-        "zentao.example.com",
-        "https://zentao.example.com",
-        "https://zentao.example.com/zentao/",
-        "https://zentao.example.com/zentao/bug-browse-68-0-all-0.html",
-      ];
-      for (const baseUrl of inputs) {
-        const client = new ZenTaoSessionClient();
-        const probe = yield* client.probeAndListScopes(
-          {
-            baseUrl,
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        );
-        expect(probe.normalizedBaseUrl).toBe("https://zentao.example.com/zentao");
-        expect(probe.viewerName).toBe("Alice (alice)");
-        expect(probe.serverVersion).toBe("10.6");
-        expect(probe.scopes).toEqual([{ id: "68", name: "Core Product" }]);
-      }
-    }),
-  );
-
-  it.effect(
-    "falls back to common /zentao subpath on 404 and walks ancestor paths for deep URLs",
-    () =>
-      Effect.gen(function* () {
-        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          const zentaoHit = handleStandardZenTaoEndpoints(url, "https://zentao.example.com/zentao");
-          if (zentaoHit) return zentaoHit;
-          const customHit = handleStandardZenTaoEndpoints(
-            url,
-            "https://zentao.example.com/custom-pms",
-          );
-          if (customHit) return customHit;
-          return new Response("Not Found", { status: 404 });
-        });
-
-        const clientA = new ZenTaoSessionClient();
-        const probeA = yield* clientA.probeAndListScopes(
-          {
-            baseUrl: "https://zentao.example.com",
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        );
-        expect(probeA.normalizedBaseUrl).toBe("https://zentao.example.com/zentao");
-
-        const clientB = new ZenTaoSessionClient();
-        const probeB = yield* clientB.probeAndListScopes(
-          {
-            baseUrl: "https://zentao.example.com/custom-pms/bug/browse/68",
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        );
-        expect(probeB.normalizedBaseUrl).toBe("https://zentao.example.com/custom-pms");
-      }),
-  );
-
-  it.effect(
-    "handles bare-domain http fallback, preserves explicit https errors, and upgrades http redirects",
-    () =>
-      Effect.gen(function* () {
-        const requestedUrls: string[] = [];
-        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          requestedUrls.push(url);
-          if (url.startsWith("https://zentao.example.internal")) {
-            throw new TypeError("fetch failed: connection refused");
-          }
-          if (url.startsWith("http://zentao.example.internal")) {
-            const hit = handleStandardZenTaoEndpoints(url, "http://zentao.example.internal/zentao");
-            if (hit) return hit;
-            return new Response("Not Found", { status: 404 });
-          }
-          if (url === "http://pms.example.com/zentao/index.php?mode=getconfig") {
-            return Response.redirect(
-              "https://pms.example.com/zentao/index.php?mode=getconfig",
-              302,
-            );
-          }
-          if (url.startsWith("https://pms.example.com/zentao/")) {
-            const hit = handleStandardZenTaoEndpoints(url, "https://pms.example.com/zentao");
-            if (hit) return hit;
-          }
-          return new Response("Not Found", { status: 404 });
-        });
-
-        const bareClient = new ZenTaoSessionClient();
-        const bareProbe = yield* bareClient.probeAndListScopes(
-          {
-            baseUrl: "zentao.example.internal",
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        );
-        expect(bareProbe.normalizedBaseUrl).toBe("http://zentao.example.internal/zentao");
-
-        requestedUrls.length = 0;
-        const httpsClient = new ZenTaoSessionClient();
-        const explicitHttpsExit = yield* Effect.exit(
-          httpsClient.probeAndListScopes(
-            {
-              baseUrl: "https://zentao.example.internal",
-              account: "alice",
-              secret: "secret-pass",
-            },
-            "discover",
-          ),
-        );
-        expect(explicitHttpsExit._tag).toBe("Failure");
-        expect(requestedUrls.some((u) => u.startsWith("http://"))).toBe(false);
-
-        requestedUrls.length = 0;
-        const upgradeClient = new ZenTaoSessionClient();
-        const upgradeProbe = yield* upgradeClient.probeAndListScopes(
-          {
-            baseUrl: "http://pms.example.com/zentao/",
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        );
-        expect(upgradeProbe.normalizedBaseUrl).toBe("https://pms.example.com/zentao");
-        expect(
-          requestedUrls.some(
-            (u) => u === "https://pms.example.com/zentao/user-login.json?zentaosid=sid-123",
-          ),
-        ).toBe(true);
-        requestedUrls.length = 0;
-        const saved = yield* new ZenTaoSessionClient().probeAndListScopes(
-          { baseUrl: "http://pms.example.com/zentao", account: "alice", secret: "test" },
-          "saved",
-        );
-        expect(saved.normalizedBaseUrl).toBe("https://pms.example.com/zentao");
-        expect(requestedUrls.filter((url) => url.startsWith("http:"))).toEqual([
-          "http://pms.example.com/zentao/index.php?mode=getconfig",
-        ]);
-      }),
-  );
-
-  it.effect("reserves probes for common subpaths on the fallback protocol", () =>
-    Effect.gen(function* () {
-      for (const preferred of [true, false]) {
-        const expectedBase = preferred
-          ? "https://pms.example.com/zentao"
-          : "http://pms.example.com/pms";
-        using requests = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-          const url = String(input);
-          return (
-            handleStandardZenTaoEndpoints(url, expectedBase) ??
-            (preferred ? handleStandardZenTaoEndpoints(url, "http://pms.example.com") : null) ??
-            new Response(null, { status: 404 })
-          );
-        });
-        const result = yield* new ZenTaoSessionClient().probeAndListScopes(
-          { baseUrl: "pms.example.com", account: "alice", secret: "test" },
-          "discover",
-        );
-        expect(result.normalizedBaseUrl).toBe(expectedBase);
-        for (const scheme of ["http:", "https:"]) {
-          expect(
-            requests.mock.calls.filter(
-              ([url]) => String(url).startsWith(scheme) && /mode=getconfig|\/$/.test(String(url)),
-            ).length,
-          ).toBeLessThanOrEqual(10);
-        }
-      }
-    }),
-  );
-
-  it.effect("pins custom PATH_INFO separators for root and subdirectory installations", () =>
-    Effect.gen(function* () {
-      for (const base of ["https://pms.example.com", "https://pms.example.com/team"]) {
-        let reads = 0;
-        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-          const url = String(input);
-          if (url.includes("getconfig"))
-            return Response.json({ requestType: "PATH_INFO", requestFix: "/", sessionID: "sid" });
-          if (url.includes("/bug/browse.json")) {
-            if (++reads === 1) return Response.redirect(base + "/user/login.html", 302);
-            return Response.json({ products: { "1": "Core" } });
-          }
-          return Response.json({ status: "success" });
-        });
-        const result = yield* new ZenTaoSessionClient().probeAndListScopes(
-          { baseUrl: base, account: "alice", secret: "test" },
-          "saved",
-        );
-        expect(result.scopes).toEqual([{ id: "1", name: "Core" }]);
-        expect(reads).toBe(2);
-      }
-    }),
-  );
-
-  it.effect(
-    "limits attachment credentials to the saved instance and reads same-site public images",
-    () =>
-      Effect.gen(function* () {
-        const base = "https://pms.example.com/team";
-        const credentials = { baseUrl: base, account: "alice", secret: "test" };
-        using requests = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-          const url = String(input);
-          return (
-            handleStandardZenTaoEndpoints(url, base) ??
-            new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } })
-          );
-        });
-        const client = new ZenTaoSessionClient();
-        for (const path of ["/team/static/image.png", "/shared/image.png"]) {
-          const url = "https://pms.example.com" + path;
-          const asset = yield* client.downloadAttachment({ credentials, url });
-          expect(asset.bytes).toEqual(new Uint8Array([1]));
-          const [destination, init] = requests.mock.calls.at(-1)!;
-          expect(new URL(String(destination)).searchParams.has("zentaosid")).toBe(
-            path.startsWith("/team/"),
-          );
-          expect(new Headers(init?.headers).has("cookie")).toBe(path.startsWith("/team/"));
-        }
-        const external = "https://external.example.com/image.png";
-        expect(
-          (yield* Effect.result(client.downloadAttachment({ credentials, url: external })))._tag,
-        ).toBe("Failure");
-        expect(requests.mock.calls.every(([url]) => !String(url).startsWith(external))).toBe(true);
-      }),
-  );
-
-  it.effect("validates each HTTP redirect before a probe or login can follow it", () =>
-    Effect.gen(function* () {
-      const base = "https://pms.example.com/team";
-      const config = base + "/index.php?mode=getconfig";
-      for (const target of [
-        "https://other.example.com/",
-        "http://pms.example.com/",
-        "https://pms.example.com:8443/",
-      ]) {
-        for (const stage of ["config", "login"]) {
-          using requests = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-            const url = String(input);
-            if (url === config && stage === "config")
-              return Response.redirect(base + "/route", 302);
-            if (url === base + "/route" || url.includes("user-login.json"))
-              return Response.redirect(target, 307);
-            return handleStandardZenTaoEndpoints(url, base) ?? new Response(null, { status: 404 });
-          });
-          const result = yield* Effect.result(
-            new ZenTaoSessionClient().probeAndListScopes(
-              {
-                baseUrl: base,
-                account: "alice",
-                secret: "test",
-              },
-              "discover",
-            ),
-          );
-          expect(result._tag).toBe("Failure");
-          expect(requests.mock.calls.every(([, init]) => init?.redirect === "manual")).toBe(true);
-          expect(requests.mock.calls.some(([url]) => String(url) === target)).toBe(false);
-        }
-      }
-    }),
-  );
-
-  it.effect("keeps saved scope refreshes and writes on the configured instance", () =>
-    Effect.gen(function* () {
-      const base = "https://pms.example.com/team";
-      const credentials = { baseUrl: base, account: "alice", secret: "test" };
-      for (const response of [
-        () => new Response(null, { status: 404 }),
-        () => Response.redirect("https://pms.example.com/zentao/index.php?mode=getconfig", 302),
-      ]) {
-        using requests = vi
-          .spyOn(globalThis, "fetch")
-          .mockImplementation(async (input) =>
-            String(input).startsWith(base + "/")
-              ? response()
-              : (handleStandardZenTaoEndpoints(String(input), "https://pms.example.com/zentao") ??
-                Response.json({ result: "success" })),
-          );
-        const client = new ZenTaoSessionClient();
-        expect((yield* Effect.result(client.probeAndListScopes(credentials, "saved")))._tag).toBe(
-          "Failure",
-        );
-        expect(
-          (yield* Effect.result(
-            client.writeBack({
-              credentials,
-              action: { kind: "comment", issueKey: "1", comment: "review" },
-            }),
-          ))._tag,
-        ).toBe("Failure");
-        expect(requests.mock.calls.every(([url]) => String(url).startsWith(base + "/"))).toBe(true);
-      }
-    }),
-  );
-
-  it.effect("reports uncertain writes without repeating comments or issue creation", () =>
-    Effect.gen(function* () {
-      const base = "https://pms.example.com/team";
-      const credentials = { baseUrl: base, account: "alice", secret: "test" };
-      for (const action of [
-        { kind: "comment", issueKey: "1", comment: "review" },
-        { kind: "create", scopeId: "1", title: "review", steps: "" },
-      ] as const) {
-        for (const response of [
-          () => new Response('<p>Saved</p><a href="user-login.html">Log in</a>'),
-          () => Response.json({ locate: "index.php?m=user&f=login" }),
-          () => Response.redirect(base + "/user-login.html", 307),
-        ]) {
-          let writes = 0;
-          using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-            const standard = handleStandardZenTaoEndpoints(String(input), base);
-            if (standard) return standard;
-            writes++;
-            return response();
-          });
-          const result = yield* Effect.result(
-            new ZenTaoSessionClient().writeBack({ credentials, action }),
-          );
-          expect(result).toMatchObject({
-            _tag: "Failure",
-            failure: { detail: expect.stringContaining("写入结果待确认") },
-          });
-          expect(writes).toBe(1);
-        }
-      }
-    }),
-  );
-
-  it.effect("recovers GET login routes once and reports a session that stays expired", () =>
-    Effect.gen(function* () {
-      const base = "https://pms.example.com/team";
-      const credentials = { baseUrl: base, account: "alice", secret: "test" };
-      for (const response of [
-        () => new Response('<script>location.href="?f=login&amp;m=user"</script>'),
-        () => Response.json({ locate: "index.php?f=login&m=user" }),
-        () => Response.redirect(base + "/index.php?f=login&m=user", 302),
-      ]) {
-        for (const staysExpired of [false, true]) {
-          let reads = 0;
-          using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-            const url = new URL(String(input));
-            if (url.searchParams.has("mode"))
-              return Response.json({ requestType: "GET", sessionID: "test" });
-            if (url.searchParams.get("m") === "bug") {
-              reads++;
-              if (staysExpired || reads === 1) return response();
-              return Response.json({ products: { "1": "Core" } });
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadProjection: (id) =>
+          Effect.sync(id === repairThreadId ? repairProjection : projection),
+        interruptThread: (input) =>
+          Effect.gen(function* () {
+            expect(input).toMatchObject({ threadId, runId: oldRunId });
+            yield* Deferred.succeed(stopRequested, undefined);
+            return {
+              type: "interrupt_requested" as const,
+              run: runs[0]!,
+              dispatch: { sequence: 1, storedEvents: [] },
+            };
+          }),
+        waitForThread: (input) =>
+          Effect.gen(function* () {
+            if (input.threadId === repairThreadId) {
+              expect(input.runId).toBe(repairRunId);
+              return { threadId: repairThreadId, run: repairRun(), timedOut: false };
             }
-            return Response.json({ status: "success" });
-          });
-          const result = yield* Effect.result(
-            new ZenTaoSessionClient().probeAndListScopes(credentials, "saved"),
-          );
-          expect(reads).toBe(2);
-          if (staysExpired)
-            expect(result).toMatchObject({
-              _tag: "Failure",
-              failure: { detail: expect.stringContaining("会话已过期") },
+            expect(input.threadId).toBe(threadId);
+            if (input.runId === oldRunId && input.untilDelegatedWorkSettled) {
+              yield* Deferred.succeed(runWaiting, undefined);
+              return yield* Effect.never;
+            }
+            if (input.runId === oldRunId) {
+              yield* Deferred.await(confirmStop);
+              runs[0] = { ...runs[0]!, status: "interrupted", completedAt: at };
+              return { threadId, run: runs[0], timedOut: false };
+            }
+            expect(input.runId).toBe(newRunId);
+            return { threadId, run: runs[1]!, resultRun: runs[0]!, timedOut: false };
+          }),
+        sendToThread: (input) =>
+          Effect.sync(() => {
+            expect(input).toMatchObject({
+              threadId,
+              freshContext: true,
+              context: { issueAutomation: { attemptNumber: 2 } },
             });
-          else
-            expect(result).toMatchObject({
-              _tag: "Success",
-              success: { scopes: [{ id: "1", name: "Core" }] },
-            });
-        }
-      }
-    }),
-  );
-
-  it.effect("ignores cross-host redirects in welcome HTML to prevent SSRF", () =>
-    Effect.gen(function* () {
-      const requestedUrls: string[] = [];
-      using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        requestedUrls.push(url);
-        if (url === "https://zentao.example.com/index.php?mode=getconfig") {
-          return new Response(
-            `<script>window.location.replace("https://evil.example.net/zentao");</script>`,
-            { status: 200, headers: { "content-type": "text/html" } },
-          );
-        }
-        return new Response("Not Found", { status: 404 });
-      });
-
-      const client = new ZenTaoSessionClient();
-      const exit = yield* Effect.exit(
-        client.probeAndListScopes(
-          {
-            baseUrl: "https://zentao.example.com",
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        ),
-      );
-      expect(exit._tag).toBe("Failure");
-      expect(requestedUrls.some((u) => u.includes("evil.example.net"))).toBe(false);
-    }),
-  );
-
-  it.effect(
-    "re-authenticates when a ZenTao .json endpoint returns an HTML user-login redirect",
-    () =>
-      Effect.gen(function* () {
-        let authCount = 0;
-        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          const base = "https://zentao.example.com/zentao";
-          if (url === `${base}/index.php?mode=getconfig`) {
-            authCount += 1;
-            const sid = authCount === 1 ? "sid-stale" : "sid-fresh";
-            return jsonResponse(
-              {
-                version: "10.6",
-                requestType: "PATH_INFO",
-                requestFix: "-",
-                sessionName: "zentaosid",
-                sessionID: sid,
-                rand: 42,
-              },
-              url,
-            );
-          }
-          const sid = authCount === 1 ? "sid-stale" : "sid-fresh";
-          if (url === `${base}/api-getSessionID.json?zentaosid=${sid}`) {
-            return jsonResponse({
-              status: "success",
-              data: JSON.stringify({ sessionName: "zentaosid", sessionID: sid, rand: 42 }),
-            });
-          }
-          if (url === `${base}/user-login.json?zentaosid=${sid}`) {
-            return jsonResponse({
-              status: "success",
-              user: { account: "alice", realname: "Alice" },
-            });
-          }
-          if (url === `${base}/bug-browse.json?zentaosid=sid-stale`) {
-            return new Response(
-              `<html><script>self.location='/zentao/user-login-L3plbnRhby9idWctYnJvd3NlLmpzb24=.json';</script></html>`,
-              { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
-            );
-          }
-          if (url === `${base}/bug-browse.json?zentaosid=sid-fresh`) {
-            return jsonResponse({
-              status: "success",
-              data: JSON.stringify({ products: { "0": "", "68": "Core Product" } }),
-            });
-          }
-          return new Response("Not Found", { status: 404 });
-        });
-
-        const client = new ZenTaoSessionClient();
-        const probe = yield* client.probeAndListScopes(
-          {
-            baseUrl: "https://zentao.example.com/zentao",
-            account: "alice",
-            secret: "secret-pass",
-          },
-          "discover",
-        );
-        expect(authCount).toBe(2);
-        expect(probe.normalizedBaseUrl).toBe("https://zentao.example.com/zentao");
-        expect(probe.scopes).toEqual([{ id: "68", name: "Core Product" }]);
+            const run = makeRun(newRunId, input.messageId, "completed");
+            runs.push(run);
+            const message = {
+              ...reply(run.id, input.text),
+              id: input.messageId,
+              role: "user" as const,
+            };
+            return {
+              dispatch: { sequence: 2, storedEvents: [] },
+              projection: projection(),
+              message,
+              run,
+              turnItem: null,
+              delivery: "started" as const,
+            };
+          }),
       }),
-  );
-});
+      FetchHttpClient.layer.pipe(
+        Layer.provide(
+          Layer.succeed(FetchHttpClient.Fetch, async (url, init) => {
+            outbound.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+            return Response.json({ code: outbound.length === 1 ? 0 : 9499 });
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* IssueAutomationService.IssueAutomationService;
+      const repository = yield* IssueAutomationRepository.IssueAutomationRepository;
+      const connector = {
+        id: IssueAutomationConnectorId.make("example-connector"),
+        platform,
+        name: "ZenTao",
+        baseUrl,
+        mcpUrl: "https://mcp.example.com/zentao/mcp",
+        writeActions: ["comment", "resolve"],
+        status: "connected",
+        viewerName: null,
+        serverVersion: null,
+        statusDetail: null,
+        scopes: [scope],
+        updatedAt: DateTime.formatIso(at),
+      } satisfies IssueAutomationConnector;
+      yield* repository.upsertConnector(connector);
+      const input = {
+        connectorId: connector.id,
+        name: scope.name,
+        enabled: false,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        repositories: {
+          primaryProjectId: project.id,
+          linkedProjectIds: [],
+          moduleMappings: [],
+        },
+        models: {
+          primaryModel: { instanceId: ProviderInstanceId.make("codex"), model: "example" },
+          triageModel: null,
+          highSeverityModel: null,
+          reviewModel: null,
+          fallbackModel: null,
+        },
+        filter: {
+          browseType: "unresolved",
+          onlyUnconfirmed: false,
+          assignedToAccount: null,
+          maxSeverity: null,
+          keyword: null,
+          pollIntervalMinutes: 5,
+          maxConcurrency: 1,
+        },
+        policy: {
+          actionMode: "diagnose_only",
+          autoWriteComment: false,
+          baseBranch: null,
+          customPromptInstructions: null,
+        },
+      } satisfies IssueAutomationSaveProfileInput;
+      const rule = yield* service.saveProfile(input);
+      expect(rule.feishuNotification).toEqual({ enabled: false, hasWebhook: false });
+      const scanRule = yield* service.saveProfile({
+        ...input,
+        filter: {
+          ...input.filter,
+          browseType: "all",
+          keyword: "体重",
+          onlyUnconfirmed: true,
+          assignedToAccount: " chen ",
+          maxSeverity: 2,
+        },
+      });
+      const firstPage = yield* service.scanProfileIssues({ profileId: scanRule.id });
+      expect(firstPage.issues.map((issue) => issue.key)).toEqual(
+        Array.from({ length: 25 }, (_, index) => String(3000 + index)),
+      );
+      expect(firstPage.hasNextPage).toBe(true);
+      const lastPage = yield* service.scanProfileIssues({ profileId: scanRule.id, page: 2 });
+      expect(lastPage.issues.map((issue) => issue.key)).toEqual(["3025"]);
+      expect(lastPage.hasNextPage).toBe(false);
+      const afterScan = yield* service.getState;
+      expect(afterScan.tasks).toEqual([]);
+      expect(
+        afterScan.profiles.find((profile) => profile.id === scanRule.id)?.lastPolledAt,
+      ).toBeNull();
+      yield* service.deleteProfile({ profileId: scanRule.id });
+      const missing = yield* service
+        .saveProfile({
+          ...input,
+          id: rule.id,
+          feishuNotification: { enabled: true },
+        })
+        .pipe(Effect.flip);
+      expect(missing.operation).toBe("saveProfile");
+
+      const enable = { ...input, id: rule.id, feishuNotification: { enabled: true } };
+      const configured = yield* service.saveProfile({
+        ...enable,
+        feishuNotification: { enabled: true, webhook: Redacted.make(webhook) },
+      });
+      expect(configured.feishuNotification).toEqual({ enabled: true, hasWebhook: true });
+      expect(JSON.stringify(configured)).not.toMatch(/test-webhook|feishuWebhookSecretId/);
+      const reopened = (yield* service.getState).profiles.find((profile) => profile.id === rule.id);
+      expect(reopened?.feishuNotification).toEqual({ enabled: true, hasWebhook: true });
+      expect(JSON.stringify(reopened)).not.toMatch(/test-webhook|feishuWebhookSecretId/);
+
+      const snapshots = yield* Stream.toQueue(service.subscribe, { capacity: "unbounded" });
+      yield* Queue.take(snapshots);
+      const whenSettled = (taskId?: IssueAutomationTaskId) =>
+        Stream.fromQueue(snapshots).pipe(
+          Stream.filter(
+            (snapshot) =>
+              snapshot.activeRunCount === 0 &&
+              snapshot.tasks.some(
+                (task) => (!taskId || task.id === taskId) && task.completedAt !== null,
+              ),
+          ),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+
+      const poll = yield* service.triggerPoll({ profileId: rule.id }).pipe(Effect.forkChild);
+      yield* Deferred.await(pollStarted);
+      yield* service.saveProfile({ ...enable, feishuNotification: { enabled: false } });
+      yield* Deferred.succeed(finishPoll, undefined);
+      expect((yield* Fiber.join(poll)).enqueuedCount).toBe(1);
+      const afterPoll = yield* whenSettled();
+      expect(afterPoll.profiles[0]?.feishuNotification).toEqual({
+        enabled: false,
+        hasWebhook: true,
+      });
+      expect(outbound).toEqual([]);
+
+      yield* service.saveProfile(enable);
+      const run = (issueKey: string) =>
+        service
+          .analyzeIssues({
+            connectorId: connector.id,
+            scopeId: scope.id,
+            scopeName: "Client-supplied name",
+            issueKeys: [issueKey],
+          })
+          .pipe(Effect.map(({ tasks }) => tasks[0]!.id));
+      yield* whenSettled(yield* run("2846"));
+      expect(startedMessages.at(-1)).toMatchObject({
+        text: expect.stringContaining(detail.stepsMarkdown),
+        context: {
+          issueAutomation: {
+            mode: "diagnose",
+            scopeName: scope.name,
+            moduleName: null,
+            platform,
+            issueKey: detail.displayKey,
+            issueUrl: detail.url,
+          },
+        },
+      });
+      expect(outbound).toEqual([
+        {
+          url: webhook,
+          body: {
+            msg_type: "post",
+            content: {
+              post: {
+                zh_cn: {
+                  title: "T3 Code · 禅道问题自动分析",
+                  content: [
+                    [{ tag: "text", text: "任务状态：诊断失败" }],
+                    [
+                      { tag: "text", text: "禅道 Bug：" },
+                      { tag: "a", text: "#2846 体重记录未刷新", href: detail.url },
+                    ],
+                    [{ tag: "text", text: "Bug 状态：已解决" }],
+                    [{ tag: "text", text: "项目名：好轻 App" }],
+                    [{ tag: "text", text: "负责人：陈晓" }],
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ]);
+
+      const rejectedId = yield* run("2848");
+      const afterRejection = yield* whenSettled(rejectedId);
+      const rejectedTask = afterRejection.tasks.find((task) => task.id === rejectedId);
+      expect(rejectedTask?.stage).toBe("failed");
+      expect(rejectedTask?.steps.at(-1)?.message).toContain("飞书通知发送失败");
+
+      const cancelled = yield* run("2847");
+      yield* Deferred.await(cancellableTaskStarted);
+      yield* service.cancelTask({ taskId: cancelled });
+      const afterCancel = yield* whenSettled(cancelled);
+      const cancelledTask = afterCancel.tasks.find((task) => task.id === cancelled);
+      expect(cancelledTask?.stage).toBe("cancelled");
+      expect(cancelledTask?.steps.map((step) => step.stage)).toContain("cancelling");
+      expect(outbound).toHaveLength(2);
+
+      yield* service.saveProfile({ ...enable, feishuNotification: { enabled: false } });
+      const running = yield* run("2849");
+      yield* Deferred.await(runWaiting);
+      const stop = yield* service.cancelTask({ taskId: running }).pipe(Effect.forkChild);
+      yield* Deferred.await(stopRequested);
+      expect((yield* service.getState).tasks.find((task) => task.id === running)).toMatchObject({
+        stage: "cancelling",
+        primaryThreadId: threadId,
+        primaryRunId: oldRunId,
+        completedAt: null,
+      });
+      const retry = service.analyzeIssues({
+        connectorId: connector.id,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        issueKeys: ["2849"],
+        retryTaskId: running,
+      });
+      expect((yield* Effect.result(retry))._tag).toBe("Failure");
+      yield* Deferred.succeed(confirmStop, undefined);
+      yield* Fiber.join(stop);
+      oldPermissions = true;
+      expect((yield* Effect.result(retry))._tag).toBe("Failure");
+      oldPermissions = false;
+      const restarted = (yield* retry).tasks[0]!;
+      const final = yield* whenSettled(restarted.id);
+      expect(final.tasks.find((task) => task.id === running)).toMatchObject({
+        stage: "cancelled",
+        primaryRunId: oldRunId,
+      });
+      expect(final.tasks.find((task) => task.id === restarted.id)).toMatchObject({
+        stage: "completed",
+        primaryThreadId: threadId,
+        primaryRunId: newRunId,
+        diagnosisReport: "New diagnosis",
+      });
+      expect(
+        startedMessages.filter((message) => message.context?.issueAutomation?.issueKey === "#2849"),
+      ).toHaveLength(1);
+
+      const repairInput = {
+        connectorId: connector.id,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        issueKeys: ["2849"],
+        repairFromTaskId: restarted.id,
+      };
+      const diagnosticPolicy = { ...input.policy, autoWriteComment: true };
+      yield* service.saveProfile({
+        ...input,
+        id: rule.id,
+        policy: diagnosticPolicy,
+        feishuNotification: { enabled: false },
+      });
+      const repair = (yield* service.analyzeIssues(repairInput)).tasks[0]!;
+      expect(repair).toMatchObject({
+        issueKey: "2849",
+        actionMode: "fix_worktree_review",
+        repairOfTaskId: restarted.id,
+      });
+      expect((yield* Effect.result(service.analyzeIssues(repairInput)))._tag).toBe("Failure");
+      const reviewed = yield* whenSettled(repair.id);
+      const repairPrompt = startedMessages.find(
+        (message) => message.context?.issueAutomation?.mode === "repair",
+      )?.text;
+      expect(repairPrompt).toContain("New diagnosis");
+      expect(repairPrompt).not.toContain("请先定位根本原因");
+      expect(repairPrompt).not.toContain("## 问题根因分析");
+      expect(reviewed.tasks.find((task) => task.id === repair.id)).toMatchObject({
+        stage: "needs_human",
+        primaryThreadId: repairThreadId,
+        diagnosisReport: "Applied and tested the repair",
+      });
+      const sync = (writeComment: boolean, resolvedBuild?: string) =>
+        service.writeBack({
+          connectorId: connector.id,
+          action: {
+            kind: "sync_repair",
+            taskId: repair.id,
+            writeComment,
+            ...(resolvedBuild === undefined ? {} : { resolvedBuild }),
+          },
+        });
+      expect((yield* Effect.result(sync(true)))._tag).toBe("Failure");
+      expect(writeBacks).toEqual([]);
+      yield* service.confirmRepair({ taskId: repair.id });
+      expect((yield* Effect.result(sync(false)))._tag).toBe("Failure");
+      expect((yield* Effect.result(sync(false, "unknown")))._tag).toBe("Failure");
+      expect(writeBacks).toEqual([]);
+      yield* sync(true);
+      yield* sync(true);
+      expect(writeBacks).toEqual([
+        {
+          kind: "comment",
+          issueKey: "2849",
+          comment: expect.stringContaining("Applied and tested the repair"),
+        },
+      ]);
+      yield* sync(false, "7");
+      expect(writeBacks[1]).toEqual({
+        kind: "resolve",
+        issueKey: "2849",
+        resolution: "fixed",
+        resolvedBuild: "7",
+      });
+      const persisted = yield* service.getState;
+      expect(persisted.tasks.find((task) => task.id === repair.id)).toMatchObject({
+        stage: "completed",
+        issueStatus: "resolved",
+        repairConfirmedAt: expect.any(String),
+        commentSyncedAt: expect.any(String),
+        stateSyncedAt: expect.any(String),
+      });
+      expect(persisted.profiles.find((profile) => profile.id === rule.id)?.policy).toEqual(
+        diagnosticPolicy,
+      );
+    }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
+  }),
+);
+
+it.effect.each([
+  {
+    actionMode: "diagnose_only",
+    stage: "completed",
+    hasConfirmedRepair: false,
+    expectedStatus: "诊断完成",
+  },
+  {
+    actionMode: "fix_worktree_review",
+    stage: "completed",
+    hasConfirmedRepair: true,
+    expectedStatus: "修复完成",
+  },
+  {
+    actionMode: "auto_resolve",
+    stage: "completed",
+    hasConfirmedRepair: false,
+    expectedStatus: "修复任务结束，待确认",
+  },
+  {
+    actionMode: "fix_worktree_review",
+    stage: "needs_human",
+    hasConfirmedRepair: true,
+    expectedStatus: "修复待人工复核",
+  },
+  {
+    actionMode: "auto_resolve",
+    stage: "failed",
+    hasConfirmedRepair: false,
+    expectedStatus: "修复任务失败",
+  },
+] as const)(
+  "formats the Feishu result for $actionMode / $stage / repair evidence $hasConfirmedRepair",
+  ({ actionMode, stage, hasConfirmedRepair, expectedStatus }) =>
+    Effect.gen(function* () {
+      const http = yield* HttpClient.HttpClient;
+      const sent = yield* sendFeishuTaskNotification(
+        http,
+        Effect.succeed("https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook"),
+        {
+          platform: IssueAutomationPlatformKind.make("zentao"),
+          stage,
+          actionMode,
+          displayKey: "#2846",
+          issueTitle: "Pairing screen stays blank",
+          issueUrl: "https://zentao.example.com/bug-view-2846.html",
+          issueStatus: "active",
+          scopeName: "Example App",
+          assignee: null,
+        },
+        { appDisplayName: "Example T3 (Dev)", hasConfirmedRepair },
+      ).pipe(
+        Effect.provideService(FetchHttpClient.Fetch, async (_url, init) => {
+          const payload = JSON.parse(String(init?.body));
+          expect(payload.content.post.zh_cn.title).toBe("Example T3 (Dev) · 禅道问题自动分析");
+          expect(payload.content.post.zh_cn.content[0]).toEqual([
+            { tag: "text", text: `任务状态：${expectedStatus}` },
+          ]);
+          return Response.json({ code: 0 });
+        }),
+      );
+      expect(sent).toBe(true);
+    }).pipe(Effect.provide(FetchHttpClient.layer)),
+);

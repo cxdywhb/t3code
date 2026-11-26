@@ -10,6 +10,7 @@ import {
   type LinkedThreadFailure,
   type LinkedThreadTarget,
 } from "@t3tools/client-runtime/linked-thread";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import {
   toolCallLines,
   turnItemDetailRevision,
@@ -152,6 +153,7 @@ function LinkedThreadEntry(props: {
 }) {
   const { entry } = props;
   const styles = useMarkdownPreviewStyles();
+  const m = useMessages();
   if (entry.type === "activity-group") {
     return (
       <View className="gap-1.5">
@@ -166,11 +168,16 @@ function LinkedThreadEntry(props: {
     return <SelectableMarkdownText markdown={entry.text} textStyle={styles.nativeTextStyle} />;
   }
   if (entry.type !== "message" || entry.message.text.trim() === "") return null;
+  const presentation = resolveUserMessagePresentation(entry.message, m);
   return entry.message.role === "user" ? (
     <View className="max-w-[88%] self-end rounded-2xl bg-user-bubble px-3.5 py-2.5">
-      <Text selectable className="text-sm text-user-bubble-foreground">
-        {entry.message.text}
-      </Text>
+      {presentation.hasIssueSummary ? (
+        <SelectableMarkdownText markdown={presentation.text} textStyle={styles.nativeTextStyle} />
+      ) : (
+        <Text selectable className="text-sm text-user-bubble-foreground">
+          {entry.message.text}
+        </Text>
+      )}
     </View>
   ) : (
     <SelectableMarkdownText markdown={entry.message.text} textStyle={styles.nativeTextStyle} />

@@ -375,6 +375,26 @@ describe("ClaudeAdapterV2 native resume history", () => {
 });
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it("only exposes file readers for a diagnosis even when normal launch settings grant writes", () => {
+    const options = ClaudeAdapterV2.diagnosisQueryOptions(
+      ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+        nativeThreadId: "diagnosis",
+        resume: false,
+        cwd: "/workspace",
+        settings: { ...DEFAULT_CLAUDE_SETTINGS, launchArgs: "--dangerously-skip-permissions" },
+      }),
+    );
+    assert.deepEqual(options.tools, ["Read", "Glob", "Grep"]);
+    assert.deepEqual(options.allowedTools, options.tools);
+    assert.equal(options.permissionMode, "dontAsk");
+    assert.equal(options.strictMcpConfig, true);
+    assert.deepEqual(options.mcpServers, {});
+    assert.deepEqual(options.settingSources, []);
+    assert.isUndefined(options.extraArgs);
+    assert.isUndefined(options.allowDangerouslySkipPermissions);
+  });
+
   it.each([
     "-- --thinking-display omitted",
     "--thinking-display summarized -- --thinking-display omitted",

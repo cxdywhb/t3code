@@ -1,8 +1,8 @@
-import type {
-  DesktopAppBranding,
-  DesktopAppStageLabel,
-  DesktopRuntimeArch,
-  DesktopRuntimeInfo,
+import {
+  type DesktopAppBranding,
+  type DesktopAppStageLabel,
+  type DesktopRuntimeArch,
+  type DesktopRuntimeInfo,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";

@@ -770,6 +770,30 @@ export type ClaudeAgentSdkQueryOptions = Omit<
   readonly permissionMode: NonNullable<ClaudeQueryOptions["permissionMode"]>;
 } & ClaudeAgentSdkThreadIdentity;
 
+export function diagnosisQueryOptions(
+  options: ClaudeAgentSdkQueryOptions,
+): ClaudeAgentSdkQueryOptions {
+  return {
+    ...(options.resume === undefined
+      ? { sessionId: options.sessionId }
+      : { resume: options.resume }),
+    model: options.model,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.pathToClaudeCodeExecutable === undefined
+      ? {}
+      : { pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable }),
+    tools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS],
+    allowedTools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS],
+    permissionMode: "dontAsk",
+    strictMcpConfig: true,
+    mcpServers: {},
+    settingSources: [],
+    settings: { disableAllHooks: true },
+    plugins: [],
+  };
+}
+
 export interface ClaudeAgentSdkQueryOpenInput {
   readonly resume?: true;
   readonly options: ClaudeAgentSdkQueryOptions;
@@ -13710,7 +13734,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
-          const queryOptions = makeClaudeQueryOptions({
+          const normalQueryOptions = makeClaudeQueryOptions({
             agentFeedback: turnInput.agentFeedback ?? "off",
             modelSelection: turnInput.modelSelection,
             modelCatalog: catalog,
@@ -13760,6 +13784,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
           });
+          const queryOptions = IdAllocator.isDiagnosisThread(turnInput.threadId)
+            ? diagnosisQueryOptions(normalQueryOptions)
+            : normalQueryOptions;
           const resolvedTurnCwd = yield* fileSystem
             .realPath(turnInput.runtimePolicy.cwd ?? ".")
             .pipe(Effect.orElseSucceed(() => turnInput.runtimePolicy.cwd));

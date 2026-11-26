@@ -112,12 +112,14 @@ function DialogPopup({
   children,
   showCloseButton = true,
   bottomStickOnMobile = true,
+  onViewportPointerDownCapture,
   variant = "default",
   mediaControlsPlacement = "outside",
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
+  onViewportPointerDownCapture?: DialogPrimitive.Viewport.Props["onPointerDownCapture"];
   variant?: "default" | "media";
   mediaControlsPlacement?: "inside" | "outside";
 }) {
@@ -159,6 +161,7 @@ function DialogPopup({
       {/* Media opens from inside other overlays (a composer chip, a popover), so it sits above them. */}
       <DialogBackdrop className={variant === "media" ? "z-[60]" : undefined} variant={variant} />
       <DialogViewport
+        onPointerDownCapture={onViewportPointerDownCapture}
         className={cn(
           bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
           variant === "media" &&

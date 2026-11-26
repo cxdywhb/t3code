@@ -75,6 +75,7 @@ const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArra
 ]);
 const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   ({
+    driverKind: instanceId === ProviderInstanceId.make("fixture-claude") ? "claudeAgent" : "codex",
     snapshot: {
       getSnapshot: Effect.succeed({
         supportedRuntimeModes: supportedRuntimeModesByInstance.get(instanceId),
@@ -166,6 +167,40 @@ const layerTaskFolderPolicy = layerWithPolicy(
 ).pipe(Layer.provideMerge(layerTaskFolderStore));
 
 it.layer(layerTest)("RuntimePolicyV2", (it) => {
+  it.effect("locks diagnosis threads to the read-only Claude driver on every resolution", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const thread = {
+        ...makeThread({
+          now: yield* DateTime.now,
+          worktreePath: null,
+          runtimeMode: "approval-required",
+        }),
+        id: ThreadId.make("thread:issue-diagnosis:fixture"),
+      };
+      const selection = {
+        ...modelSelection,
+        instanceId: ProviderInstanceId.make("fixture-claude"),
+      };
+      const resolved = yield* policy.resolve({ thread, modelSelection: selection });
+      assert.deepEqual(resolved.sandboxPolicy, { type: "readOnly" });
+      assert.equal(resolved.approvalPolicy, "never");
+      assert.equal(
+        (yield* Effect.result(policy.resolve({ thread, modelSelection })))._tag,
+        "Failure",
+      );
+      assert.equal(
+        (yield* Effect.result(
+          policy.resolve({
+            thread: { ...thread, runtimeMode: "full-access" },
+            modelSelection: selection,
+          }),
+        ))._tag,
+        "Failure",
+      );
+    }),
+  );
+
   it.effect("asks for Antigravity command approval when a stored Auto thread falls back", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;
