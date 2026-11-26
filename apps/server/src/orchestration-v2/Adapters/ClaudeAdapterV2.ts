@@ -778,9 +778,11 @@ export function diagnosisQueryOptions(
       ? { sessionId: options.sessionId }
       : { resume: options.resume }),
     model: options.model,
-    cwd: options.cwd,
-    env: options.env,
-    pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.pathToClaudeCodeExecutable === undefined
+      ? {}
+      : { pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable }),
     tools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS],
     allowedTools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS],
     permissionMode: "dontAsk",
