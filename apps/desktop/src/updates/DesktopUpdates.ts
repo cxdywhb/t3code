@@ -78,10 +78,10 @@ type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
 
 const UpdateInfo = Schema.Struct({
   version: Schema.String,
-  // Malformed notes must not block update-state decoding; normalizeDesktopUpdateReleaseNotes validates separately.
+  // 发布说明和日期只用于展示，交给 normalizeDesktopUpdateReleaseNotes 单独处理。
   releaseNotes: Schema.optional(Schema.Unknown),
   releaseName: Schema.optional(Schema.NullOr(Schema.String)),
-  releaseDate: Schema.optional(Schema.String),
+  releaseDate: Schema.optional(Schema.Unknown),
   downloadedFile: Schema.optional(Schema.String),
 });
 
@@ -1179,10 +1179,18 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         const error = new DesktopUpdateEventHandlingError({ event: "update-available", cause });
-        return logUpdaterWarning(error.message, {
-          errorTag: error._tag,
-          cause: describeUpdateErrorCause(error.cause),
-          event: error.event,
+        return Effect.gen(function* () {
+          const failedAt = yield* currentIsoTimestamp;
+          yield* updateState((current) =>
+            current.status === "checking"
+              ? reduceDesktopUpdateStateOnCheckFailure(current, error.message, failedAt)
+              : current,
+          );
+          yield* logUpdaterWarning(error.message, {
+            errorTag: error._tag,
+            cause: describeUpdateErrorCause(error.cause),
+            event: error.event,
+          });
         });
       }),
     );
