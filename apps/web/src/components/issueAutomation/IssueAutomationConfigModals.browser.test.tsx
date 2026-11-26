@@ -60,7 +60,7 @@ it("focuses the masked webhook field when saving a rule with an invalid Feishu a
       maxConcurrency: 1,
     },
     policy: {
-      actionMode: "diagnose_only",
+      actionMode: "fix_worktree_review",
       autoWriteComment: false,
       baseBranch: null,
       customPromptInstructions: null,

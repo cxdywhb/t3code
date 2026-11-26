@@ -1055,15 +1055,18 @@ export function ProfileModal({
           defaultModelSelection: null,
         },
       });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-      setPrimaryProjectId(projectId);
-      setDraftRuleProjectId((current) => current || projectId);
-      await waitForProject(scopeProjectRef(environmentId, projectId));
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        setProjectError(error instanceof Error ? error.message : gt("Failed to add project"));
+      } else {
+        setPrimaryProjectId(projectId);
+        setDraftRuleProjectId((current) => current || projectId);
+        await waitForProject(scopeProjectRef(environmentId, projectId));
+      }
     } catch (error) {
       setProjectError(error instanceof Error ? error.message : gt("Failed to add project"));
-    } finally {
-      setAddingProject(false);
     }
+    setAddingProject(false);
   };
 
   function writeBackDescription(): string {
