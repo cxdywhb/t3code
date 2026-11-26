@@ -19,6 +19,8 @@ export const ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
 export const CLIENT_CAPABILITIES_QUERY_PARAM = "clientCapabilities";
 /** Secret fields may hold a secret provider reference instead of a string. */
 export const SETTINGS_SECRET_REFERENCES_CAPABILITY = "settingsSecretReferences";
+/** Usage limit sources may be of kind "http", not only "cliproxy". */
+export const HTTP_USAGE_LIMIT_SOURCES_CAPABILITY = "httpUsageLimitSources";
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -220,6 +222,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   shellOlderSettled: Schema.optionalKey(Schema.Boolean),
   /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
   linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
+  /** Honors the `agentFeedback` setting; older servers drop it, so hide its switch where absent. */
+  agentFeedback: Schema.optionalKey(Schema.Boolean),
   /** Answers `issues.linkedThreads`, the threads an issue is linked to. */
   issueLinkedThreads: Schema.optionalKey(Schema.Boolean),
   /** Serves `issueAutomation.*` pluggable issue diagnosis and resolution workflows. */
@@ -230,6 +234,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueAutomationRepair: Schema.optionalKey(Schema.Boolean),
   /** Serves `prReview.*` multi-model pull request fusion review workstation workflows. */
   prReview: Schema.optionalKey(Schema.Boolean),
+  /** Keeps more than one account per standalone issue tracker; older servers keep one. */
+  issueTrackerAccounts: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
@@ -281,6 +287,63 @@ export function repositoryGroupingDisplayNameOf(identity: RepositoryIdentity): s
   return identity.origin
     ? (identity.origin.displayName ?? identity.origin.canonicalKey)
     : identity.displayName;
+}
+
+export function resolveOriginOnlyRepositoryIdentity(
+  identity: RepositoryIdentity | null | undefined,
+  originOnly: boolean,
+  options?: {
+    readonly recognizeProvider?: (remoteUrl: string) => SourceControlProviderKind | undefined;
+  },
+): RepositoryIdentity | null {
+  if (identity == null) return null;
+  if (!originOnly) return identity;
+  if (identity.origin === undefined) {
+    return identity.locator.remoteName === "origin" ? identity : null;
+  }
+  const canonicalKey = identity.origin.canonicalKey;
+  const originRemoteUrl = identity.origin.remoteUrl ?? `https://${canonicalKey}`;
+  const pathFromKey = canonicalKey.split("/").slice(1).join("/");
+  const displayName =
+    identity.origin.displayName ?? (pathFromKey.length > 0 ? pathFromKey : undefined);
+  const pathSegments = (displayName ?? pathFromKey)
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const owner = pathSegments[0];
+  const name = pathSegments.at(-1);
+  const primaryHost = identity.canonicalKey.split("/")[0]?.toLowerCase();
+  const originHost = canonicalKey.split("/")[0]?.toLowerCase();
+  const recognizedOriginProvider =
+    options?.recognizeProvider?.(originRemoteUrl) ??
+    options?.recognizeProvider?.(`https://${canonicalKey}`);
+  const provider =
+    recognizedOriginProvider !== undefined && recognizedOriginProvider !== "unknown"
+      ? recognizedOriginProvider
+      : originHost !== undefined && originHost === primaryHost
+        ? identity.provider
+        : (recognizedOriginProvider ?? identity.provider);
+  const {
+    webUrl: _webUrl,
+    origin: _origin,
+    displayName: _displayName,
+    owner: _owner,
+    name: _name,
+    provider: _provider,
+    ...rest
+  } = identity;
+  return {
+    ...rest,
+    canonicalKey,
+    locator: {
+      source: "git-remote",
+      remoteName: "origin",
+      remoteUrl: originRemoteUrl,
+    },
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(owner !== undefined ? { owner } : {}),
+    ...(name !== undefined ? { name } : {}),
+  };
 }
 
 export const ScopedProjectRef = Schema.Struct({

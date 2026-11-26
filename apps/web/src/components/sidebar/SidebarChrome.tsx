@@ -22,10 +22,10 @@ import {
 } from "../../navigationHistory";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
-import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
+import { usePullRequestsSupported } from "../../state/environments";
 import { useIssueAutomationSupported } from "../../state/issueAutomation";
 import { usePrReviewSupported } from "../../state/prReview";
-import { T3Wordmark } from "../T3Wordmark";
+import { APP_BASE_NAME } from "../../branding";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -44,8 +44,6 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
-import { readIssueListPreferences } from "../issue/issueListPreferences";
-import { IssueGlyph } from "../issue/issuePresentation";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -73,43 +71,45 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <div
       className={cn(
-        "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
-        isElectron && "drag-region",
+        "relative grid h-[var(--workspace-topbar-height)] shrink-0 grid-cols-[1fr_auto_1fr] items-center",
+        isElectron &&
+          "drag-region md:grid-cols-[minmax(0,1fr)_auto] md:pr-9 md:pl-(--workspace-controls-left)",
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
-      <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
+      <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 col-start-1 row-start-1 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
         <SidebarTrigger
-          variant={backdropVariant ? "media-navigation" : "ghost"}
+          variant="ghost"
           className="relative top-auto translate-y-0"
           aria-label={gt("Toggle main sidebar")}
         />
       </div>
-      <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
-        <div className="flex shrink-0 items-center gap-1">
-          <SidebarBrand onBackdrop={backdropVariant !== null} />
-          {isElectron ? (
-            <div className="hidden items-center md:flex">
-              <HistoryNavigationButton direction="back" onBackdrop={backdropVariant !== null} />
-              <HistoryNavigationButton direction="forward" onBackdrop={backdropVariant !== null} />
-            </div>
-          ) : null}
-        </div>
+      <div
+        className={cn(
+          "relative z-10 col-start-2 row-start-1 flex flex-col items-center justify-center",
+          isElectron && "md:col-start-1",
+        )}
+      >
+        <SidebarBrand />
         {pillLabel ? (
-          <div className="ml-1 flex h-7 items-center">
-            <Badge data-environment-identification="pill" size="sm" variant="secondary">
-              {pillLabel}
-            </Badge>
-          </div>
+          <Badge data-environment-identification="pill" size="sm" variant="secondary">
+            {pillLabel}
+          </Badge>
         ) : null}
       </div>
+      {isElectron ? (
+        <div className="relative z-10 col-start-2 row-start-1 hidden items-center md:flex">
+          <HistoryNavigationButton direction="back" />
+          <HistoryNavigationButton direction="forward" />
+        </div>
+      ) : null}
     </div>
   );
 });
 
 export function SidebarBrandWidthProbe({
-  isElectron,
   onWidthChange,
+  isElectron,
 }: {
   isElectron: boolean;
   onWidthChange: (width: number) => void;
@@ -123,24 +123,18 @@ export function SidebarBrandWidthProbe({
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none invisible fixed top-0 left-0 flex w-max border-r border-transparent pr-3"
+      className={cn(
+        "pointer-events-none invisible fixed top-0 left-0 w-max border-r border-transparent px-(--workspace-titlebar-content-left)",
+        isElectron && "md:pl-(--workspace-controls-left) md:pr-27",
+      )}
       ref={observeWidth}
     >
-      <div className="ml-[var(--workspace-titlebar-content-left)] flex gap-1">
-        <SidebarBrandMark onBackdrop={false} />
-        {isElectron ? <div className="w-[calc(2*var(--workspace-titlebar-control-size))]" /> : null}
-      </div>
+      <SidebarBrandMark />
     </div>
   );
 }
 
-function HistoryNavigationButton({
-  direction,
-  onBackdrop,
-}: {
-  direction: HistoryDirection;
-  onBackdrop: boolean;
-}) {
+function HistoryNavigationButton({ direction }: { direction: HistoryDirection }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const enabled = useCanNavigateHistory(direction);
   const gt = useGT();
@@ -156,14 +150,11 @@ function HistoryNavigationButton({
         render={
           <Button
             aria-label={label}
-            className={cn(
-              "[-webkit-app-region:no-drag]",
-              onBackdrop && "relative top-auto translate-y-0",
-            )}
+            className="[-webkit-app-region:no-drag]"
             disabled={!enabled}
             onClick={() => navigateHistory(direction)}
             size="icon-sm"
-            variant={onBackdrop ? "media-navigation" : "ghost"}
+            variant="ghost"
           />
         }
       >
@@ -177,32 +168,25 @@ function HistoryNavigationButton({
   );
 }
 
-function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
-  const gt = useGT();
+function SidebarBrand() {
   return (
     <Link
-      aria-label={gt("T3 Code home")}
-      className={cn(
-        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset md:flex",
-        onBackdrop ? "text-white" : "text-foreground",
-      )}
+      aria-label={APP_BASE_NAME}
+      className="flex h-6 w-fit items-center rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset [-webkit-app-region:no-drag]"
       to="/"
     >
-      <SidebarBrandMark onBackdrop={onBackdrop} />
+      <SidebarBrandMark />
     </Link>
   );
 }
 
-function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrandMark() {
   return (
     <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-      <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
-      <span
-        className={cn(
-          "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
-          onBackdrop ? "text-white/70" : "text-muted-foreground",
-        )}
-      >
+      <span aria-hidden className="shrink-0 font-black italic">
+        {"X"}
+      </span>
+      <span className="truncate text-muted-foreground [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1">
         {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product wordmark */}
         {"Code"}
       </span>
@@ -245,7 +229,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   const pullRequestsSupported = usePullRequestsSupported();
   const prReviewSupported = usePrReviewSupported();
-  const issuesSupported = useIssuesSupported();
   const issueAutomationSupported = useIssueAutomationSupported();
   const closeMobileSidebar = () => {
     if (isMobile) {
@@ -262,10 +245,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handlePrReviewClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/pr-review" });
-  };
-  const handleIssuesClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/issues", search: readIssueListPreferences() });
   };
   const handleIssueAutomationClick = () => {
     closeMobileSidebar();
@@ -320,15 +299,8 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           {prReviewSupported ? (
             <SidebarUtilityItem
               icon={<ShieldCheckIcon />}
-              label={gt("PR Fusion Review")}
+              label={gt("PR Cross Review")}
               onClick={handlePrReviewClick}
-            />
-          ) : null}
-          {issuesSupported ? (
-            <SidebarUtilityItem
-              icon={<IssueGlyph.issue />}
-              label={gt("Issues", { $context: "sidebar link to the list of issues" })}
-              onClick={handleIssuesClick}
             />
           ) : null}
           {issueAutomationSupported ? (

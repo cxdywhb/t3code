@@ -15,6 +15,7 @@ import {
   CircleXIcon,
   EyeOffIcon,
   FolderGit2Icon,
+  GitForkIcon,
   LayersIcon,
   ListFilterIcon,
   SearchIcon,
@@ -116,8 +117,10 @@ export function PullRequestSearchInput({
       <InputGroupAddon>
         {busy ? <Spinner aria-hidden /> : <SearchIcon aria-hidden />}
       </InputGroupAddon>
+      {/* Native search inputs clear on Escape even during IME composition. */}
       <InputGroupInput
-        type="search"
+        type="text"
+        role="searchbox"
         value={draft ?? value}
         onFocus={() => setDraft(value)}
         onBlur={() => setDraft(null)}
@@ -129,9 +132,16 @@ export function PullRequestSearchInput({
           }
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-            onSubmit(event.currentTarget.value);
-          }
+          const composing = event.nativeEvent.isComposing || event.keyCode === 229;
+          if (event.key === "Enter" && !composing) onSubmit(event.currentTarget.value);
+          if (event.key !== "Escape" || event.defaultPrevented) return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          if (!composing && !event.currentTarget.value) return;
+          // The pull requests page leaves on an Escape that reaches it.
+          event.stopPropagation();
+          if (composing) return;
+          setDraft("");
+          onChange("");
         }}
         placeholder={placeholder}
         aria-label={label}
@@ -531,6 +541,10 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId,
   unavailable,
   onProject,
+  originOnly = true,
+  originOnlyVisible = false,
+  originOnlyDisabled = false,
+  onOriginOnly,
 }: {
   onOpenChange?: (open: boolean) => void;
   state: PullRequestListState;
@@ -555,6 +569,10 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId: EnvironmentId | undefined;
   unavailable: ReadonlyMap<string, string>;
   onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
+  originOnly?: boolean;
+  originOnlyVisible?: boolean;
+  originOnlyDisabled?: boolean;
+  onOriginOnly?: (originOnly: boolean) => void;
 }) {
   const gt = useGT();
   const resolve = useMessages();
@@ -565,6 +583,7 @@ export function PullRequestFiltersMenu({
     host,
     server,
     projectId,
+    originOnlyVisible && !originOnly,
     filters.draft,
     filters.review,
     filters.checks,
@@ -699,6 +718,27 @@ export function PullRequestFiltersMenu({
             else if (projectId !== undefined) onProject(undefined, undefined);
           }}
         />
+        {originOnlyVisible ? (
+          <>
+            <MenuSeparator />
+            <MenuCheckboxItem
+              variant="switch"
+              checked={originOnly}
+              disabled={originOnlyDisabled}
+              onCheckedChange={(next) => onOriginOnly?.(next)}
+            >
+              <span className="flex items-center gap-2">
+                <GitForkIcon
+                  aria-hidden
+                  className="-mx-0.5 size-3.5 text-muted-foreground opacity-80"
+                />
+                <span>
+                  <T>Origin remote only</T>
+                </span>
+              </span>
+            </MenuCheckboxItem>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );

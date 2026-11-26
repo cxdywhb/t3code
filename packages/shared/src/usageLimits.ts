@@ -320,6 +320,25 @@ export interface LimitAccount {
   readonly limits: ServerProviderUsageLimits;
 }
 
+export function collectHttpQuotaSources(presentations: Parameters<typeof collectLimitAccounts>[0]) {
+  return [...presentations].flatMap(([environmentId, presentation]) =>
+    (presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) =>
+      source.kind === "http" && source.quotaAccounts?.length
+        ? [
+            {
+              ...source,
+              key: `${environmentId}:${source.id}`,
+              label:
+                presentations.size > 1
+                  ? `${presentation.entry.target.label} · ${source.label}`
+                  : source.label,
+            },
+          ]
+        : [],
+    ),
+  );
+}
+
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
@@ -561,17 +580,27 @@ const WINDOW_KIND_ORDER: Record<ServerProviderUsageWindow["kind"], number> = {
   other: 3,
 };
 
+export function isPerAccountDashboardDriver(driver: ServerProvider["driver"]): boolean {
+  return driver === "codex" || driver === "antigravity";
+}
+
 export function collectLimitPools(
   accounts: readonly LimitAccount[],
   now: number,
+  view: "pooled" | "dashboard" = "pooled",
 ): readonly LimitPool[] {
-  const byDriver = new Map<ServerProvider["driver"], LimitAccount[]>();
+  const groups = new Map<string, LimitAccount[]>();
   for (const account of accounts) {
-    const list = byDriver.get(account.driver);
+    const key =
+      view === "dashboard" && isPerAccountDashboardDriver(account.driver)
+        ? `${account.driver}:${account.key}`
+        : account.driver;
+    const list = groups.get(key);
     if (list) list.push(account);
-    else byDriver.set(account.driver, [account]);
+    else groups.set(key, [account]);
   }
-  return [...byDriver].map(([driver, members]) => {
+  return [...groups.values()].map((members) => {
+    const driver = members[0]!.driver;
     const orderWindow = members
       .flatMap((account) => account.limits.windows)
       .sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind])[0];
@@ -666,6 +695,18 @@ function poolMember(account: LimitAccount, reported: ServerProviderUsageWindow, 
   };
 }
 
+/** Neumaier compensated summation. */
+function compensatedSum(values: readonly number[]): number {
+  let sum = 0;
+  let correction = 0;
+  for (const value of values) {
+    const next = sum + value;
+    correction += Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+    sum = next;
+  }
+  return sum + correction;
+}
+
 function poolWindows(accounts: readonly LimitAccount[], now: number): readonly LimitPoolWindow[] {
   const byKey = new Map<string, LimitPoolMember[]>();
   for (const account of accounts) {
@@ -692,8 +733,11 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       : members.map(() => 1);
     const weightOf = new Map(members.map((m, index) => [m, weights[index]!]));
     const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+    // Sum in value order so reset order cannot change the rounded result.
     const usedPercent =
-      members.reduce((sum, m) => sum + m.window.usedPercent * weightOf.get(m)!, 0) / totalWeight;
+      compensatedSum(
+        members.map((m) => m.window.usedPercent * weightOf.get(m)!).sort((a, b) => a - b),
+      ) / totalWeight;
     // Judge pace only for windows with reset clocks; others add spend without elapsed time.
     const timed = members.flatMap((m) => {
       const share = elapsedShare(m.window, now);

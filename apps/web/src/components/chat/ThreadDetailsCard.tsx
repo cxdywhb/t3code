@@ -80,10 +80,10 @@ export function ThreadDetailsCard({
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // PR lists, servers, lineage, side chats and automations scroll as they grow. Counting them
-      // toward density would hide the section and workspace controls when the user asks to see more.
+      // PR and issue lists, servers, lineage, side chats and automations scroll as they grow.
+      // Counting them toward density would hide the section and workspace controls when the user asks to see more.
       const lists = element.querySelectorAll<HTMLElement>(
-        "[data-thread-relationships-panel], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-automations-panel], [data-thread-details-server-overflow]",
+        "[data-thread-relationships-panel], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-details-issue-list], [data-thread-automations-panel], [data-thread-details-server-overflow]",
       );
       const fittingHeight =
         next - Array.from(lists).reduce((sum, list) => sum + list.offsetHeight, 0);
@@ -118,8 +118,9 @@ export function ThreadDetailsCard({
     <div
       className={cn(
         "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-2xl",
-        mode === "popover" &&
-          "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
+        mode === "inline"
+          ? "transition-none duration-180 ease-out motion-safe:in-data-[panel-animations=true]:transition-[opacity,translate] starting:-translate-y-1 starting:opacity-0"
+          : "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
       )}
       style={placement ? { maxHeight: height } : undefined}
       onContextMenu={onContextMenu}

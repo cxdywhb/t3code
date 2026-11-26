@@ -105,7 +105,10 @@ export function buildErrorReport(error: unknown, environment: BootErrorEnvironme
   }
   let details = redact(parts.join("\n") || "(no error message)");
   if (details.length > MAX_ERROR_CHARS) {
-    details = `${details.slice(0, MAX_ERROR_CHARS)}\n[truncated]`;
+    let end = MAX_ERROR_CHARS;
+    const last = details.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+    details = `${details.slice(0, end)}\n[truncated]`;
   }
   return [
     details,
@@ -258,6 +261,7 @@ export function showBootError(error: unknown) {
   console.error("T3 Code failed to start.", error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
+  delete bootShell.dataset.closing;
 
   const bridge = window.desktopBridge;
   const environment = readEnvironment(bridge);

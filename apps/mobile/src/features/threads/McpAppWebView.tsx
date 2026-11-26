@@ -11,6 +11,10 @@ import {
   type McpAppHost,
   type McpAppHostContext,
 } from "@t3tools/client-runtime/mcp-apps";
+import {
+  mcpAppToolApprovalRefusalMessage,
+  mcpAppToolApprovals,
+} from "@t3tools/client-runtime/mcp-apps/tool-approval";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { CommandId, MessageId } from "@t3tools/contracts";
@@ -25,7 +29,7 @@ import { AsyncResult } from "effect/reactivity";
 import Constants from "expo-constants";
 import { msg, T, useGT, Var } from "gt-react-native";
 import { useNavigation } from "@react-navigation/native";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react";
 import { Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
@@ -46,27 +50,12 @@ import { useEnvironmentQuery } from "../../state/query";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { confirmToolApproval } from "./confirmToolApproval";
+import { mcpAppRelayDocument } from "./mcpAppRelayDocument";
 import { MCP_APP_INLINE_MAX_HEIGHT, mcpAppInlineHeight } from "./mcpAppSizing";
 
 const ROW_BOTTOM_MARGIN = 8;
-
-// Android exposes `ReactNativeWebView` to every frame, so a frame nested in the
-// app could post to React Native directly. The outer page therefore wraps what
-// it relays with a secret only it holds, and React Native drops anything else.
-// The relay also attests activation; the sandboxed app cannot set that flag.
-function outerDocument(src: string, allow: string, secret: string) {
-  const attribute = (value: string) =>
-    value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;height:100%;background:transparent}iframe{border:0;display:block;width:100%;height:100%}</style></head>
-<body><iframe id="app" sandbox="allow-scripts allow-forms" allow="${attribute(allow)}"></iframe>
-<script>(function(){var frame=document.getElementById("app"),secret=${JSON.stringify(secret)},loads=0,live=true;
-var send=function(m){var u=navigator.userActivation;window.ReactNativeWebView.postMessage(JSON.stringify({secret:secret,active:!!(u&&u.isActive)&&document.activeElement===frame,message:m}));};
-frame.addEventListener("load",function(){loads+=1;if(loads>1&&live){live=false;send({t3:"navigated"});}});
-window.addEventListener("message",function(e){if(live&&e.source===frame.contentWindow)send(e.data);});
-window.__t3McpAppReceive=function(m){live&&frame.contentWindow&&frame.contentWindow.postMessage(m,"*");};
-frame.src=${JSON.stringify(src).replace(/</g, "\\u003c")};})();</script></body></html>`;
-}
+const PRODUCT_NAME = "T3 Code";
 
 const commandFailure = (result: {
   readonly cause: Parameters<typeof squashAtomCommandFailure>[0]["cause"];
@@ -117,15 +106,16 @@ export function ThreadMcpApp(props: {
   readonly width: number;
   readonly displayMode?: "inline" | "fullscreen";
   readonly onExitFullscreen?: () => void;
-  readonly height?: number;
 }) {
   const gt = useGT();
   const [height, setHeight] = useState(MCP_APP_INLINE_MAX_HEIGHT);
+  const [fullscreenHeight, setFullscreenHeight] = useState(0);
   const [documentKey, setDocumentKeyState] = useState(0);
   // The view keeps its first URL: a re-minted one would reload the app.
   const [uri, setUri] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [navigatedAway, setNavigatedAway] = useState(false);
+  const [bridgeMissing, setBridgeMissing] = useState(false);
   // Equal app content must retain its reference to preserve the live document host.
   // A different app needs a new document even when its asset URL is unchanged,
   // so the WebView key moves on with the document key, not only the URL.
@@ -136,6 +126,7 @@ export function ThreadMcpApp(props: {
     setUri(null);
     setLoaded(false);
     setNavigatedAway(false);
+    setBridgeMissing(false);
     setDocumentKeyState((value) => value + 1);
   }
   const fullscreen = props.displayMode === "fullscreen";
@@ -204,6 +195,15 @@ export function ThreadMcpApp(props: {
       input: { threadId: props.threadId, itemId: props.itemId, name: app.tool },
     }),
   );
+  const [liveConnection, setLiveConnection] = useState<string | null>();
+  const permissionScope = {
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+    itemId: props.itemId,
+    server: app.server,
+    connectionId:
+      liveConnection === undefined ? toolInfo.data?.connectionId : (liveConnection ?? undefined),
+  };
   const toolDefinition = toolInfo.data?.tool;
 
   const callTool = useAtomCommand(mcpAppEnvironment.callTool, { reportFailure: false });
@@ -220,6 +220,7 @@ export function ThreadMcpApp(props: {
     conversation?.hasPendingApprovals === true || conversation?.hasPendingUserInput === true;
   const live = {
     awaitingUser,
+    fullscreenHeight,
     theme,
     props,
     asset,
@@ -245,7 +246,7 @@ export function ThreadMcpApp(props: {
       previous.insets !== live.insets ||
       previous.toolDefinition !== live.toolDefinition ||
       previous.props.width !== live.props.width ||
-      previous.props.height !== live.props.height ||
+      previous.fullscreenHeight !== live.fullscreenHeight ||
       previous.props.displayMode !== live.props.displayMode
     ) {
       host?.updateHostContext();
@@ -276,6 +277,7 @@ export function ThreadMcpApp(props: {
   // are read through `latest`, never captured.
   const attachWebView = (view: WebView<object> | null) => {
     if (view === null) return;
+    const documentLifetime = new AbortController();
     const reloadInline = () => {
       setLoaded(false);
       setHeight(MCP_APP_INLINE_MAX_HEIGHT);
@@ -299,7 +301,7 @@ export function ThreadMcpApp(props: {
         containerDimensions: isFullscreen
           ? {
               width: current.props.width,
-              height: current.props.height ?? MCP_APP_INLINE_MAX_HEIGHT,
+              height: current.fullscreenHeight,
             }
           : { width: current.props.width, maxHeight: MCP_APP_INLINE_MAX_HEIGHT },
         platform: "mobile",
@@ -324,29 +326,59 @@ export function ThreadMcpApp(props: {
         ),
       hostContext,
       callTool: async ({ name, arguments: args }) => {
+        const userInitiated = userActive.current;
         const { environmentId, input } = scope();
         const info = await latest.current.toolInfo({ environmentId, input: { ...input, name } });
         if (info._tag !== "Success") throw commandFailure(info);
+        const { connectionId } = info.value;
+        if (documentLifetime.signal.aborted)
+          throw new McpAppHostRefusal({ message: mcpAppToolApprovalRefusalMessage("unavailable") });
+        setLiveConnection(connectionId ?? null);
         if (!info.value.callable)
           throw new McpAppHostRefusal({ message: "This app cannot call that tool." });
-        if (
-          !info.value.readOnly &&
-          !(await confirm(
-            m(
-              msg("Allow {server} to run {tool}?", {
-                server: app.server,
-                tool: info.value.title ?? name,
-              }),
-            ),
-            JSON.stringify(args, null, 2),
-            m(msg("Allow", { $context: "verb, confirm button" })),
-          ))
-        ) {
-          throw new McpAppHostRefusal({ message: "Declined by the user." });
+        if (!info.value.readOnly) {
+          const auth = await mcpAppToolApprovals.authorize({
+            target: {
+              environmentId,
+              threadId: input.threadId,
+              itemId: input.itemId,
+              server: app.server,
+              connectionId,
+              tool: name,
+            },
+            userInitiated,
+            signal: documentLifetime.signal,
+            prompt: async () => {
+              return confirmToolApproval(
+                m(
+                  msg("Allow {server} to run {tool}?", {
+                    server: app.server,
+                    tool: info.value.title ?? name,
+                  }),
+                ),
+                JSON.stringify(args, null, 2),
+                documentLifetime.signal,
+                info.value.connectionId !== undefined,
+              );
+            },
+          });
+          if (!auth.approved) {
+            throw new McpAppHostRefusal({
+              message: mcpAppToolApprovalRefusalMessage(auth.reason),
+            });
+          }
         }
+        if (documentLifetime.signal.aborted)
+          throw new McpAppHostRefusal({ message: mcpAppToolApprovalRefusalMessage("unavailable") });
         const result = await latest.current.callTool({
           environmentId,
-          input: { ...input, name, arguments: args },
+          input: {
+            ...input,
+            name,
+            arguments: args,
+            ...(connectionId === undefined ? {} : { connectionId }),
+            ...(info.value.readOnly ? { readOnly: true } : {}),
+          },
         });
         if (result._tag !== "Success") throw commandFailure(result);
         return result.value;
@@ -505,6 +537,7 @@ export function ThreadMcpApp(props: {
     setHost(documentHost);
     currentHost.current = documentHost;
     return () => {
+      documentLifetime.abort();
       if (currentHost.current === documentHost) currentHost.current = null;
       // An unmount cannot wait: the request goes out before the view does.
       void documentHost.teardown();
@@ -512,10 +545,32 @@ export function ThreadMcpApp(props: {
     };
   };
 
+  const toolPermissions = useSyncExternalStore(
+    mcpAppToolApprovals.subscribe,
+    () => mcpAppToolApprovals.getServerSnapshot(permissionScope),
+    () => mcpAppToolApprovals.getServerSnapshot(permissionScope),
+  );
+  const hasToolPermissions =
+    toolPermissions.allowedTools.length > 0 || toolPermissions.suppressedTools.length > 0;
+  const permissionSummary = [
+    toolPermissions.allowedTools.length > 0
+      ? gt("Allowed this session: {tools}", {
+          tools: toolPermissions.allowedTools.join(", "),
+        })
+      : null,
+    toolPermissions.suppressedTools.length > 0
+      ? gt("Muted prompts: {tools}", {
+          tools: toolPermissions.suppressedTools.join(", "),
+        })
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+
   const source =
     uri === null
       ? null
-      : { html: outerDocument(uri, mcpAppAllowAttribute(app.permissions), secret) };
+      : { html: mcpAppRelayDocument(uri, mcpAppAllowAttribute(app.permissions), secret) };
 
   if (presentedFullscreen) {
     return (
@@ -558,68 +613,105 @@ export function ThreadMcpApp(props: {
   }
 
   return (
-    <View style={fullscreen ? { flex: 1 } : { height, marginBottom: ROW_BOTTOM_MARGIN }}>
-      {navigatedAway ? (
-        <View className="flex-1 items-center justify-center">
-          <Text className="text-sm text-foreground-muted">
-            <T>
-              The <Var>{app.server}</Var> app left its page and was stopped
-            </T>
-          </Text>
-        </View>
-      ) : uri !== null && !crashed ? (
-        <WebView<object>
-          key={`${documentKey}:${generation}:${uri}`}
-          ref={attachWebView}
-          onContentProcessDidTerminate={restart}
-          onRenderProcessGone={restart}
-          source={source!}
-          accessibilityLabel={gt("{server} app", { server: app.server })}
-          style={{ flex: 1, backgroundColor: "transparent" }}
-          nestedScrollEnabled
-          decelerationRate={webViewDecelerationRate}
-          originWhitelist={["*"]}
-          // Android misreports nested frames as top-level; rely on iframe sandboxing there and gate navigation elsewhere.
-          onShouldStartLoadWithRequest={(request) =>
-            Platform.OS === "android" ||
-            request.isTopFrame === false ||
-            request.url === "about:blank"
-          }
-          setSupportMultipleWindows={false}
-          onLoadEnd={() => setLoaded(true)}
-          onError={() => setCrashed(true)}
-          onHttpError={() => setCrashed(true)}
-          onMessage={(event: WebViewMessageEvent) => {
-            let envelope: unknown;
-            try {
-              envelope = JSON.parse(event.nativeEvent.data);
-            } catch {
-              return;
+    <View style={fullscreen ? { flex: 1 } : { marginBottom: ROW_BOTTOM_MARGIN }}>
+      <View
+        style={fullscreen ? { flex: 1 } : { height }}
+        onLayout={
+          fullscreen
+            ? (event) => setFullscreenHeight(Math.round(event.nativeEvent.layout.height))
+            : undefined
+        }
+      >
+        {bridgeMissing ? (
+          // Only a server that binds the app to its document gets a bridge; without one the app cannot run.
+          <View className="flex-1 items-center justify-center rounded-lg border border-border px-4">
+            <Text className="text-center text-sm text-foreground-muted">
+              <T>
+                The <Var>{app.server}</Var> app needs a newer <Var>{PRODUCT_NAME}</Var> server on
+                this environment. Update the server to use it.
+              </T>
+            </Text>
+          </View>
+        ) : navigatedAway ? (
+          <View className="flex-1 items-center justify-center">
+            <Text className="text-sm text-foreground-muted">
+              <T>
+                The <Var>{app.server}</Var> app left its page and was stopped
+              </T>
+            </Text>
+          </View>
+        ) : uri !== null && !crashed && (!fullscreen || fullscreenHeight > 0) ? (
+          <WebView<object>
+            key={`${documentKey}:${generation}:${uri}`}
+            ref={attachWebView}
+            onContentProcessDidTerminate={restart}
+            onRenderProcessGone={restart}
+            source={source!}
+            accessibilityLabel={gt("{server} app", { server: app.server })}
+            style={{ flex: 1, backgroundColor: "transparent" }}
+            nestedScrollEnabled
+            decelerationRate={webViewDecelerationRate}
+            originWhitelist={["*"]}
+            // Android misreports nested frames as top-level; rely on iframe sandboxing there and gate navigation elsewhere.
+            onShouldStartLoadWithRequest={(request) =>
+              Platform.OS === "android" ||
+              request.isTopFrame === false ||
+              request.url === "about:blank"
             }
-            if (!Predicate.isObject(envelope) || envelope.secret !== secret) return;
-            const message = envelope.message;
-            if (Predicate.isObject(message) && message.t3 === "navigated") {
-              host?.dispose();
-              setNavigatedAway(true);
-              return;
-            }
-            userActive.current = envelope.active === true;
-            host?.receive(message);
-            userActive.current = false;
-          }}
-        />
-      ) : asset._tag === "Failure" || crashed ? (
-        <View className="flex-1 items-center justify-center">
-          <Text className="text-sm text-foreground-muted">
-            <T>
-              Unable to load the <Var>{app.server}</Var> app
-            </T>
+            setSupportMultipleWindows={false}
+            onLoadEnd={() => setLoaded(true)}
+            onError={() => setCrashed(true)}
+            onHttpError={() => setCrashed(true)}
+            onMessage={(event: WebViewMessageEvent) => {
+              let envelope: unknown;
+              try {
+                envelope = JSON.parse(event.nativeEvent.data);
+              } catch {
+                return;
+              }
+              if (!Predicate.isObject(envelope) || envelope.secret !== secret) return;
+              const message = envelope.message;
+              if (Predicate.isObject(message) && message.t3 === "navigated") {
+                host?.dispose();
+                setNavigatedAway(true);
+                return;
+              }
+              if (Predicate.isObject(message) && message.t3 === "unlinked") {
+                host?.dispose();
+                setBridgeMissing(true);
+                return;
+              }
+              userActive.current = envelope.active === true;
+              host?.receive(message);
+              userActive.current = false;
+            }}
+          />
+        ) : asset._tag === "Failure" || crashed ? (
+          <View className="flex-1 items-center justify-center">
+            <Text className="text-sm text-foreground-muted">
+              <T>
+                Unable to load the <Var>{app.server}</Var> app
+              </T>
+            </Text>
+          </View>
+        ) : null}
+        {uri !== null && !loaded && !crashed && !navigatedAway && !bridgeMissing ? (
+          <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
+            <AppActivityIndicator />
+          </View>
+        ) : null}
+      </View>
+      {hasToolPermissions ? (
+        <View className="mt-1.5 flex-row items-center justify-between gap-2 px-1">
+          <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
+            {permissionSummary}
           </Text>
-        </View>
-      ) : null}
-      {uri !== null && !loaded && !crashed && !navigatedAway ? (
-        <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
-          <AppActivityIndicator />
+          <Button
+            label={gt("Reset")}
+            tone="text"
+            size="compact"
+            onPress={() => mcpAppToolApprovals.resetServer(permissionScope)}
+          />
         </View>
       ) : null}
     </View>

@@ -229,7 +229,6 @@ export function CloneRepositoriesDialog({
         input: {
           projectId,
           title: entry.repo.name,
-          // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
           createdAt: new Date().toISOString(),
           provider: GITLAB_PROVIDER,
           remoteUrl,

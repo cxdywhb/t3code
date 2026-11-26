@@ -37,15 +37,9 @@ export const BRAND_ASSET_PATHS = {
   developmentWebIcon512Png: "assets/dev/blueprint-web-icon-512x512.png",
 } as const;
 
-export type WebAssetBrand = "development" | "nightly" | "production";
+export type WebAssetBrand = "development" | "nightly" | "production" | "code";
 
 export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
-
-export type WebAssetChannel = (typeof WEB_ASSET_CHANNELS)[number];
-
-export function resolveWebAssetBrandForChannel(channel: WebAssetChannel): WebAssetBrand {
-  return channel === "nightly" ? "nightly" : "production";
-}
 
 export interface IconOverride {
   readonly sourceRelativePath: string;
@@ -62,6 +56,14 @@ const WEB_ICON_TARGET_FILENAMES = {
 } as const;
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
+  code: {
+    faviconIco: "assets/code/icon.ico",
+    favicon16Png: "assets/code/icon-16.png",
+    favicon32Png: "assets/code/icon-32.png",
+    appleTouchIconPng: "assets/code/icon-180.png",
+    icon192Png: "assets/code/icon-192.png",
+    icon512Png: "assets/code/icon-512.png",
+  },
   development: {
     faviconIco: BRAND_ASSET_PATHS.developmentWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.developmentWebFavicon16Png,
@@ -121,9 +123,6 @@ export function resolveWebIconOverrides(
   ];
 }
 
-export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("development", "dist/client");
+export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("code", "dist/client");
 
-export const DEVELOPMENT_PUBLIC_ICON_OVERRIDES = resolveWebIconOverrides(
-  "development",
-  "apps/web/public",
-);
+export const DEVELOPMENT_PUBLIC_ICON_OVERRIDES = resolveWebIconOverrides("code", "apps/web/public");

@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { isDiagnosisThread } from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 import * as WorkspaceFolders from "../workspace/WorkspaceFolders.ts";
@@ -78,16 +79,6 @@ export interface RuntimePolicyV2Shape {
 export class RuntimePolicyV2 extends Context.Service<RuntimePolicyV2, RuntimePolicyV2Shape>()(
   "t3/orchestration-v2/RuntimePolicy/RuntimePolicyV2",
 ) {}
-
-export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2, {
-  resolve: Effect.fn("RuntimePolicyV2.resolve")(function (input) {
-    return Effect.succeed({
-      runtimeMode: input.thread.runtimeMode,
-      interactionMode: input.thread.interactionMode,
-      cwd: input.thread.worktreePath,
-    });
-  }),
-});
 
 export function providerRuntimeMode(
   runtimeMode: RuntimeMode,
@@ -158,6 +149,18 @@ export const layerFromProjectStore: Layer.Layer<
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         yield* refuseAboveCeiling(managedPolicy, input.thread);
         const instance = yield* providerInstances.getInstance(input.modelSelection.instanceId);
+        const diagnosis = isDiagnosisThread(input.thread.id);
+        if (
+          diagnosis &&
+          (instance?.driverKind !== "claudeAgent" ||
+            input.thread.runtimeMode !== "approval-required")
+        ) {
+          return yield* new RuntimePolicyResolveError({
+            projectId: input.thread.projectId,
+            providerInstanceId: input.modelSelection.instanceId,
+            cause: "只读诊断仅支持 Claude Code，只允许读取、查找和搜索文件。",
+          });
+        }
         const supportedRuntimeModes =
           instance === undefined
             ? undefined
@@ -202,7 +205,8 @@ export const layerFromProjectStore: Layer.Layer<
           );
         return ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
-          interactionMode: input.thread.interactionMode,
+          interactionMode: diagnosis ? "default" : input.thread.interactionMode,
+          ...(diagnosis ? { approvalPolicy: "never", sandboxPolicy: { type: "readOnly" } } : {}),
           cwd,
           ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
           ...(workspace === undefined || workspace.folders.length === 0 ? {} : { workspace }),

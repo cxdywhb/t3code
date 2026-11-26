@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   completeConfirmDialogClose,
   readConfirmDialogState,
+  requestChoiceConfirmDialog,
   requestConfirmDialog,
   resetConfirmDialogForTests,
   respondToConfirmDialog,
+  respondToConfirmDialogChoice,
   subscribeConfirmDialogHost,
 } from "./confirmDialog";
 
@@ -83,5 +85,82 @@ describe("confirm dialog coordinator", () => {
     expect(readConfirmDialogState()).toEqual({ status: "idle" });
     unregister();
     return expect(confirmation).resolves.toBe(true);
+  });
+
+  it("supports secondary choices, aborts active and queued requests, and resolves undefined on host unmount", async () => {
+    const unregister = mountHost();
+    const activeAbort = new AbortController();
+    const queuedAbort = new AbortController();
+
+    const first = requestChoiceConfirmDialog("Allow tool?", {
+      confirmLabel: "Allow once",
+      secondaryLabel: "Always allow this session",
+      signal: activeAbort.signal,
+    });
+    const second = requestChoiceConfirmDialog("Allow second tool?", {
+      confirmLabel: "Allow once",
+      secondaryLabel: "Always allow this session",
+      signal: queuedAbort.signal,
+    });
+    const third = requestChoiceConfirmDialog("Allow third tool?", {
+      confirmLabel: "Allow once",
+      secondaryLabel: "Always allow this session",
+    });
+
+    expect(readConfirmDialogState()).toEqual({
+      status: "confirming",
+      message: "Allow tool?",
+      variant: "default",
+      initialFocus: undefined,
+      confirmLabel: "Allow once",
+      secondaryLabel: "Always allow this session",
+    });
+
+    queuedAbort.abort();
+    await expect(second).resolves.toBeUndefined();
+
+    activeAbort.abort();
+    await expect(first).resolves.toBeUndefined();
+    expect(readConfirmDialogState()).toMatchObject({ status: "closing", message: "Allow tool?" });
+
+    completeConfirmDialogClose();
+    expect(readConfirmDialogState()).toMatchObject({
+      status: "confirming",
+      message: "Allow third tool?",
+    });
+
+    respondToConfirmDialogChoice("secondary");
+    await expect(third).resolves.toBe("secondary");
+    completeConfirmDialogClose();
+
+    const unmounted = requestChoiceConfirmDialog("Allow fourth tool?", {
+      confirmLabel: "Allow once",
+      secondaryLabel: "Always allow this session",
+    });
+    unregister();
+    await expect(unmounted).resolves.toBeUndefined();
+  });
+
+  it("passes non-closing secondary actions through to the dialog state", async () => {
+    const unregister = mountHost();
+    const onSecondaryAction = () => {};
+    const confirmation = requestChoiceConfirmDialog("Install update?", {
+      secondaryLabel: "Open local folder",
+      onSecondaryAction,
+    });
+
+    expect(readConfirmDialogState()).toEqual({
+      status: "confirming",
+      message: "Install update?",
+      variant: "default",
+      initialFocus: undefined,
+      secondaryLabel: "Open local folder",
+      onSecondaryAction,
+    });
+
+    respondToConfirmDialogChoice("confirm");
+    completeConfirmDialogClose();
+    unregister();
+    await expect(confirmation).resolves.toBe("confirm");
   });
 });

@@ -1,7 +1,7 @@
 # Usage and limits
 
 Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
-desktop when the terminal is not focused. Customize `usage.open` in
+desktop when the terminal is not focused. Press it again to close Usage. Customize **Usage: Toggle** in
 **Settings → Keybindings**.
 
 On mobile, choose **Usage** in the workspace navigation.
@@ -117,9 +117,9 @@ setting removes it from `settings.json`.
 
 ## Track subscription limits
 
-**Usage → Limits** pools every subscription account it can see per provider, so with several Codex
-or Claude accounts across your enabled environments and hubs you read one number per window rather than a
-list. Each window card shows how much of the pool is left and a bar with one segment per account,
+在 **用量 → 限额** 中，每个 Codex 账号单独显示剩余配额和重置时间。同一账号在多台机器或配额中心重复上报时只显示一次。其他提供方仍按提供方合并展示。
+
+Each window card shows how much of the pool is left and a bar with one segment per account,
 kept in the same column across windows. Accounts are ordered by their next 5-hour refill, soonest
 first. For an account with no weekly quota left, this is when its session becomes usable again.
 The first available window is used when no account reports a 5-hour limit. A gap means the
@@ -192,6 +192,44 @@ the provider separately to send agent requests through the hub. A thread uses th
 reset times only when its provider's endpoint has the same address as the hub, for example
 `http://127.0.0.1:8317` for both. Remove the hub from the same settings section when you no longer
 need it.
+
+## Connect an HTTP quota source
+
+In **Settings → Providers → Usage providers → Add HTTP source**, choose the environment that can
+reach your quota server and enter the full endpoint URL. If the endpoint requires authentication,
+supply a bearer token. The selected T3 environment sends a read-only GET with
+`Accept: application/json` and shows the result in **Usage → Limits**.
+
+Return JSON in this format, with stable IDs for accounts and their windows.
+
+```json
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "primary",
+      "label": "My coding plan",
+      "providerInstanceId": "work-codex",
+      "windows": [
+        {
+          "id": "monthly",
+          "kind": "monthly",
+          "label": "Monthly budget",
+          "usedPercent": 35,
+          "resetsAt": "2026-12-01T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Set `kind` to `session`, `weekly`, `monthly`, or `other`. Use a percentage from 0 to 100 and
+omit `resetsAt` when the reset time is unknown. Your quota server handles the upstream provider
+credentials and APIs. Set the optional `providerInstanceId` to the exact instance ID configured for that environment
+in **Settings → Providers**. The account’s quota windows then appear in the
+thread details usage card on web and desktop when that instance is selected. Accounts without
+a binding still appear in **Usage → Limits**.
 
 ## Subscription usage widget
 

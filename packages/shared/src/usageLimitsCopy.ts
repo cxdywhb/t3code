@@ -8,6 +8,7 @@ import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
 import {
+  CHATGPT_USAGE_URL,
   collectExternalUsageLinks as collectExternalUsageLinksWith,
   cursorUsageWindowDetails as cursorUsageWindowDetailsBase,
   type LimitPool,
@@ -65,6 +66,21 @@ export function collectExternalUsageLinks(
   );
 }
 
+export function collectDashboardUsageLinks(
+  presentations: LimitPresentations,
+  resolve: MFunctionType,
+) {
+  return collectExternalUsageLinks(presentations, resolve).flatMap((link) =>
+    link.url === CHATGPT_USAGE_URL
+      ? link.accounts.map((account) => ({
+          ...link,
+          accounts: [account],
+          key: JSON.stringify([link.url, account]),
+        }))
+      : [{ ...link, key: link.url }],
+  );
+}
+
 /** @public */
 export function limitsNotice(
   limits: ServerProviderUsageLimits,
@@ -107,7 +123,10 @@ export function collectLimitNotices(
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
       if (source.error) {
         notices.add(`${label(environmentLabel, source.label)}: ${source.error}`);
-      } else if (source.accounts.length === 0) {
+      } else if (
+        (source.kind === "http" ? (source.quotaAccounts?.length ?? 0) : source.accounts.length) ===
+        0
+      ) {
         notices.add(
           resolve(
             msg("{source}: No accounts reported.", {

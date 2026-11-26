@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,7 +11,7 @@ import * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({
-  webContents: { getAllWebContents: vi.fn(() => []) },
+  webContents: { getAllWebContents: vi.fn(() => []), getFocusedWebContents: vi.fn() },
 }));
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
@@ -62,20 +63,25 @@ const layerElectronApp = Layer.succeed(ElectronApp.ElectronApp, {
 interface MenuServices {
   readonly checkResult?: DesktopUpdateCheckResult;
   readonly shownMessageBox?: Deferred.Deferred<Electron.MessageBoxOptions>;
+  readonly messageBoxResponse?: number;
+  readonly onRevealDownloadedFile?: Effect.Effect<boolean>;
 }
 
-const layerElectronDialog = ({ shownMessageBox }: MenuServices) =>
+const layerElectronDialog = ({ shownMessageBox, messageBoxResponse }: MenuServices) =>
   Layer.succeed(ElectronDialog.ElectronDialog, {
     pickFolder: () => Effect.succeedNone,
     pickFiles: () => Effect.succeed([]),
     showMessageBox: (options) =>
       (shownMessageBox ? Deferred.succeed(shownMessageBox, options) : Effect.void).pipe(
-        Effect.as({ response: options.cancelId ?? 0, checkboxChecked: false }),
+        Effect.as({
+          response: messageBoxResponse ?? options.cancelId ?? 0,
+          checkboxChecked: false,
+        }),
       ),
     showErrorBox: () => Effect.void,
   } satisfies ElectronDialog.ElectronDialog["Service"]);
 
-const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
+const layerDesktopUpdates = ({ checkResult, onRevealDownloadedFile }: MenuServices) =>
   Layer.succeed(DesktopUpdates.DesktopUpdates, {
     getState: Effect.die("unexpected getState"),
     isActionActive: Effect.succeed(false),
@@ -89,6 +95,7 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     download: Effect.die("unexpected download"),
     install: Effect.die("unexpected install"),
     installPrepared: () => Effect.die("unexpected installPrepared"),
+    revealDownloadedFile: onRevealDownloadedFile ?? Effect.die("unexpected revealDownloadedFile"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
 const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
@@ -114,13 +121,18 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
 
 const layerElectronMenu = (
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
+  platform: NodeJS.Platform,
 ) =>
-  Layer.succeed(ElectronMenu.ElectronMenu, {
-    setApplicationMenu: (template) =>
-      Deferred.succeed(applicationMenuTemplate, template).pipe(Effect.asVoid),
-    popupTemplate: () => Effect.void,
-    showContextMenu: () => Effect.succeedNone,
-  } satisfies ElectronMenu.ElectronMenu["Service"]);
+  Layer.effect(
+    ElectronMenu.ElectronMenu,
+    ElectronMenu.make.pipe(
+      Effect.map((menu) => ({
+        ...menu,
+        setApplicationMenu: (template: readonly Electron.MenuItemConstructorOptions[]) =>
+          Deferred.succeed(applicationMenuTemplate, template).pipe(Effect.asVoid),
+      })),
+    ),
+  ).pipe(Layer.provide(Layer.succeed(HostProcess.Platform, platform)));
 
 const configureMenu = (
   selectedAction: Deferred.Deferred<string>,
@@ -134,7 +146,12 @@ const configureMenu = (
   }).pipe(
     Effect.provide(
       DesktopApplicationMenu.layer.pipe(
-        Layer.provideMerge(layerElectronMenu(applicationMenuTemplate)),
+        Layer.provideMerge(
+          layerElectronMenu(
+            applicationMenuTemplate,
+            environment.platform ?? environmentInput.platform,
+          ),
+        ),
         Layer.provideMerge(layerDesktopWindow(selectedAction)),
         Layer.provideMerge(layerDesktopUpdates(services)),
         Layer.provideMerge(layerElectronDialog(services)),
@@ -148,7 +165,10 @@ const configureMenu = (
     ),
   );
 
-const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
+const checkForUpdatesFromMacMenu = (
+  state: Partial<DesktopUpdateState>,
+  extraServices: Omit<MenuServices, "checkResult" | "shownMessageBox"> = {},
+) =>
   Effect.gen(function* () {
     const applicationMenuTemplate =
       yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
@@ -158,6 +178,7 @@ const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
       applicationMenuTemplate,
       { platform: "darwin" },
       {
+        ...extraServices,
         checkResult: {
           checked: true,
           state: {
@@ -196,32 +217,69 @@ const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
     return yield* dialog.value;
   });
 
+const pressPasteAsText = (
+  template: readonly Electron.MenuItemConstructorOptions[],
+): ((focused: object) => void) => {
+  const editMenu = template.find((item) => item.label === "Edit");
+  if (!Array.isArray(editMenu?.submenu)) {
+    throw new Error("Expected Edit menu submenu to be an array.");
+  }
+  const pasteAsTextItem = editMenu.submenu.find((item) => item.label === "Paste as Text");
+  assert.equal(pasteAsTextItem?.accelerator, "CmdOrCtrl+Shift+V");
+  const click = pasteAsTextItem?.click;
+  if (typeof click !== "function") {
+    throw new Error("Expected Paste as Text menu item to have a click handler.");
+  }
+  return (focused) => {
+    using _focused = vi
+      .spyOn(Electron.webContents, "getFocusedWebContents")
+      .mockReturnValue(focused as Electron.WebContents);
+    click({} as Electron.MenuItem, undefined, {
+      triggeredByAccelerator: true,
+    } as unknown as KeyboardEvent);
+  };
+};
+
 describe("DesktopApplicationMenu", () => {
-  it.effect("leaves the accelerator to Chromium instead of injecting a paste", () =>
+  it.effect.each(["linux", "win32"] as const)(
+    "leaves the %s accelerator to Chromium instead of injecting a paste",
+    (platform) =>
+      Effect.gen(function* () {
+        const selectedAction = yield* Deferred.make<string>();
+        const applicationMenuTemplate =
+          yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+
+        yield* configureMenu(selectedAction, applicationMenuTemplate, { platform });
+
+        const focused = { isDestroyed: () => false, pasteAndMatchStyle: vi.fn() };
+        pressPasteAsText(yield* Deferred.await(applicationMenuTemplate))(focused);
+        assert.equal(focused.pasteAndMatchStyle.mock.calls.length, 0);
+        assert.isFalse(yield* Deferred.isDone(selectedAction));
+      }),
+  );
+
+  it.effect("pastes natively and synchronously for the macOS accelerator", () =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
+      yield* configureMenu(selectedAction, applicationMenuTemplate, { platform: "darwin" });
+      const press = pressPasteAsText(yield* Deferred.await(applicationMenuTemplate));
 
-      const template = yield* Deferred.await(applicationMenuTemplate);
-      const editMenu = template.find((item) => item.label === "Edit");
-      if (!Array.isArray(editMenu?.submenu)) {
-        throw new Error("Expected Edit menu submenu to be an array.");
-      }
-      const pasteAsTextItem = editMenu.submenu.find((item) => item.label === "Paste as Text");
-      if (typeof pasteAsTextItem?.click !== "function") {
-        throw new Error("Expected Paste as Text menu item to have a click handler.");
-      }
+      const host = { isDestroyed: () => false, pasteAndMatchStyle: vi.fn() };
+      press(host);
+      assert.equal(host.pasteAndMatchStyle.mock.calls.length, 1);
 
-      pasteAsTextItem.click(
-        {} as Electron.MenuItem,
-        {} as Electron.BrowserWindow,
-        {
-          triggeredByAccelerator: true,
-        } as unknown as KeyboardEvent,
-      );
+      // Electron reports a mounted preview guest as focused while the host's composer has focus.
+      const guest = {
+        isDestroyed: () => false,
+        pasteAndMatchStyle: vi.fn(),
+        hostWebContents: host,
+      };
+      press(guest);
+      assert.equal(host.pasteAndMatchStyle.mock.calls.length, 2);
+      assert.equal(guest.pasteAndMatchStyle.mock.calls.length, 0);
       assert.isFalse(yield* Deferred.isDone(selectedAction));
     }),
   );
@@ -357,15 +415,28 @@ describe("DesktopApplicationMenu", () => {
     }),
   );
 
-  it.effect("tells the user a downloaded update is ready when the menu check runs", () =>
+  it.effect("tells the user a downloaded update is ready and can open its local folder", () =>
     Effect.gen(function* () {
-      const dialog = yield* checkForUpdatesFromMacMenu({
-        status: "downloaded",
-        availableVersion: "0.1.7",
-        downloadedVersion: "0.1.7",
-        downloadPercent: 100,
-      });
+      let revealCount = 0;
+      const dialog = yield* checkForUpdatesFromMacMenu(
+        {
+          status: "downloaded",
+          availableVersion: "0.1.7",
+          downloadedVersion: "0.1.7",
+          downloadPercent: 100,
+        },
+        {
+          messageBoxResponse: 1,
+          onRevealDownloadedFile: Effect.sync(() => {
+            revealCount += 1;
+            return true;
+          }),
+        },
+      );
       assert.include(`${dialog.title ?? ""} ${dialog.message} ${dialog.detail ?? ""}`, "0.1.7");
+      assert.deepEqual(dialog.buttons, ["Restart", "Open Local Folder", "Later"]);
+      assert.equal(dialog.cancelId, 2);
+      assert.equal(revealCount, 1);
     }),
   );
 

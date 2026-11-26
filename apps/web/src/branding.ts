@@ -1,4 +1,4 @@
-import { T3_APP_BASE_NAME, type DesktopAppBranding } from "@t3tools/contracts";
+import { type DesktopAppBranding } from "@t3tools/contracts";
 import {
   formatAppDisplayName,
   resolveHostedAppChannelLabel,
@@ -19,7 +19,7 @@ const hostedAppChannel = import.meta.env.VITE_HOSTED_APP_CHANNEL?.trim().toLower
 export const HOSTED_APP_CHANNEL =
   hostedAppChannel === "latest" || hostedAppChannel === "nightly" ? hostedAppChannel : null;
 export const HOSTED_APP_CHANNEL_LABEL = resolveHostedAppChannelLabel(HOSTED_APP_CHANNEL);
-export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? T3_APP_BASE_NAME;
+export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "X Code";
 export const APP_STAGE_LABEL =
   injectedDesktopAppBranding?.stageLabel ??
   resolveWebAppStageLabel({

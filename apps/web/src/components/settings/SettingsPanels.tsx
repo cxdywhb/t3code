@@ -42,12 +42,14 @@ import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
   canCheckForUpdate,
+  getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDisabledReason,
-  getDesktopUpdateInstallConfirmationMessage,
+  installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
+import { confirmDesktopUpdateInstall } from "../../components/desktopUpdate.toast";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
@@ -231,11 +233,9 @@ function AboutVersionSection() {
       setIsUpdateActionPending(true);
       let confirmed = false;
       try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(
-            updateState ?? { availableVersion: null, downloadedVersion: null },
-          ),
-          { initialFocus: "confirm" },
+        confirmed = await confirmDesktopUpdateInstall(
+          updateState ?? { availableVersion: null, downloadedVersion: null },
+          bridge,
         );
       } catch (error) {
         setIsUpdateActionPending(false);
@@ -255,8 +255,18 @@ function AboutVersionSection() {
         setIsUpdateActionPending(false);
         return;
       }
-      void bridge
-        .installUpdate()
+      void installDesktopUpdate(bridge)
+        .then((result) => {
+          const actionError = getDesktopUpdateActionError(result);
+          if (!actionError) return;
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: gt("Could not install update"),
+              description: actionError,
+            }),
+          );
+        })
         .catch((error: unknown) => {
           toastManager.add(
             stackedThreadToast({
@@ -500,6 +510,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Diff colors")]
       : []),
     ...(settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? [gt("Chat width")] : []),
+    ...(settings.htmlPreviewWidth !== DEFAULT_UNIFIED_SETTINGS.htmlPreviewWidth
+      ? [gt("HTML preview width")]
+      : []),
     ...(settings.effortDisplay !== DEFAULT_UNIFIED_SETTINGS.effortDisplay
       ? [gt("Effort display")]
       : []),
@@ -529,6 +542,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
       ? [gt("Project order")]
       : []),
+    ...(settings.sidebarFixedCreationOrder ? [gt("Keep threads in creation order")] : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
@@ -697,6 +711,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
+      htmlPreviewWidth: DEFAULT_UNIFIED_SETTINGS.htmlPreviewWidth,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
       language: DEFAULT_UNIFIED_SETTINGS.language,
@@ -722,6 +737,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
+      sidebarFixedCreationOrder: DEFAULT_UNIFIED_SETTINGS.sidebarFixedCreationOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
@@ -939,6 +955,21 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
+          {...setting("fixed-creation-order")}
+          description={gt(
+            "List newest threads first. Starting or finishing a turn keeps the thread in place.",
+          )}
+          control={
+            <Switch
+              checked={settings.sidebarFixedCreationOrder}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarFixedCreationOrder: Boolean(checked) })
+              }
+              aria-label={gt("Keep threads in creation order")}
+            />
+          }
+        />
+        <SettingsRow
           {...setting("working-shelf")}
           description={
             <T>
@@ -961,7 +992,8 @@ export function GeneralSettingsPanel() {
           }
           control={
             <Switch
-              checked={settings.sidebarWorkingShelfEnabled}
+              checked={!settings.sidebarFixedCreationOrder && settings.sidebarWorkingShelfEnabled}
+              disabled={settings.sidebarFixedCreationOrder}
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }

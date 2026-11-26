@@ -145,7 +145,7 @@ export function CloneProgressDialog({
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className={cn(
-                    "h-full rounded-full transition-all duration-300",
+                    "h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none",
                     summary.isComplete && summary.failedCount > 0 ? "bg-destructive" : "bg-primary",
                   )}
                   style={{
@@ -272,8 +272,8 @@ export function CloneProgressDialog({
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                             <div
                               className={cn(
-                                "h-full rounded-full bg-primary transition-all duration-300",
-                                percent === null && "animate-pulse",
+                                "h-full rounded-full bg-primary transition-[width] duration-300 ease-out motion-reduce:transition-none",
+                                percent === null && "motion-safe:animate-status-pulse",
                               )}
                               style={{ width: `${percent ?? 18}%` }}
                             />

@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import {
   completeConfirmDialogClose,
   readConfirmDialogState,
-  respondToConfirmDialog,
+  respondToConfirmDialogChoice,
   subscribeConfirmDialogHost,
 } from "../confirmDialog";
 import {
@@ -67,8 +67,18 @@ export function ConfirmDialogHost() {
   const copy = resolveConfirmDialogCopy(state.status === "idle" ? "" : state.message, m);
   const confirmVariant = state.status === "idle" ? "default" : state.variant;
   const focusConfirm = state.status !== "idle" && state.initialFocus === "confirm";
-  const onCancel = () => respondToConfirmDialog(false);
-  const onConfirm = () => respondToConfirmDialog(true);
+  const confirmLabel = state.status === "idle" ? undefined : state.confirmLabel;
+  const secondaryLabel = state.status === "idle" ? undefined : state.secondaryLabel;
+  const onSecondaryAction = state.status === "idle" ? undefined : state.onSecondaryAction;
+  const onCancel = () => respondToConfirmDialogChoice("cancel");
+  const onSecondary = () => {
+    if (onSecondaryAction) {
+      onSecondaryAction();
+      return;
+    }
+    respondToConfirmDialogChoice("secondary");
+  };
+  const onConfirm = () => respondToConfirmDialogChoice("confirm");
 
   return (
     <AlertDialog
@@ -93,13 +103,18 @@ export function ConfirmDialogHost() {
           <AlertDialogClose render={<Button variant="outline" />}>
             <T>Cancel</T>
           </AlertDialogClose>
+          {secondaryLabel ? (
+            <Button variant="outline" onClick={onSecondary}>
+              {secondaryLabel}
+            </Button>
+          ) : null}
           {focusConfirm && confirmVariant === "default" ? (
             <AlertDialogAction onClick={onConfirm}>
-              <T>Confirm</T>
+              {confirmLabel ?? <T>Confirm</T>}
             </AlertDialogAction>
           ) : (
             <Button variant={confirmVariant} onClick={onConfirm}>
-              <T>Confirm</T>
+              {confirmLabel ?? <T>Confirm</T>}
             </Button>
           )}
         </AlertDialogFooter>

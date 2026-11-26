@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, FolderOpenIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { Fragment, type RefObject, useRef } from "react";
 
@@ -58,6 +58,8 @@ interface UpdateEverythingDialogProps {
   readonly busy?: boolean;
   /** Machines are still looking for provider updates, so more rows can appear. */
   readonly checking?: boolean;
+  /** Reveals the already-downloaded local update package when available. */
+  readonly onRevealDownloadedUpdate?: () => void;
 }
 
 type UpdateEverythingDialogContentProps = Omit<
@@ -106,6 +108,7 @@ function UpdateEverythingDialogContent({
   disabledReason = null,
   busy = false,
   checking = false,
+  onRevealDownloadedUpdate,
 }: UpdateEverythingDialogContentProps) {
   const gt = useGT();
   const m = useMessages();
@@ -270,6 +273,12 @@ function UpdateEverythingDialogContent({
                     { count: continuing },
                   )}`}
           </p>
+        ) : null}
+        {onRevealDownloadedUpdate ? (
+          <Button variant="outline" disabled={busy} onClick={onRevealDownloadedUpdate}>
+            <FolderOpenIcon aria-hidden />
+            <T>Open local folder</T>
+          </Button>
         ) : null}
         <AlertDialogClose ref={cancelRef} render={<Button variant="outline" disabled={busy} />}>
           <T>Cancel</T>

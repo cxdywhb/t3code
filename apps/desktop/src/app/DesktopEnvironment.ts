@@ -1,5 +1,4 @@
 import {
-  T3_APP_BASE_NAME,
   type DesktopAppBranding,
   type DesktopAppStageLabel,
   type DesktopRuntimeArch,
@@ -86,6 +85,8 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
+const APP_BASE_NAME = "X Code";
+
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
@@ -103,9 +104,9 @@ export function resolveDesktopAppBranding(input: {
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
   return {
-    baseName: T3_APP_BASE_NAME,
+    baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${T3_APP_BASE_NAME} (${stageLabel})`,
+    displayName: stageLabel === "Beta" ? APP_BASE_NAME : `${APP_BASE_NAME} (${stageLabel})`,
   };
 }
 

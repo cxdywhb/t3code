@@ -5,7 +5,14 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "@t3tools/client-runtime/state/runtime";
-import { WS_METHODS, type EnvironmentId, type PrReviewStateSnapshot } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  PrReviewSkillDescriptor,
+  WS_METHODS,
+  type EnvironmentId,
+  type PrReviewStateSnapshot,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -34,6 +41,10 @@ function createPrReviewAtoms() {
   const refreshState = (environmentId: EnvironmentId) => stateQuery({ environmentId, input: {} });
 
   return {
+    skillsQuery: createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+      label: "environment-data:pr-review:skills",
+      tag: WS_METHODS.prReviewListSkills,
+    }),
     stateQuery,
     stateStream,
     savePreset: createEnvironmentRpcCommand(connectionAtomRuntime, {
@@ -103,6 +114,15 @@ export function usePrReviewSupported(): boolean {
     }
   }
   return false;
+}
+
+const Favorites = Schema.Array(PrReviewSkillDescriptor);
+export function useFavoriteReviewSkills(environmentId: EnvironmentId | null) {
+  return useLocalStorage(
+    `t3code:pr-review:favorite-skills:${environmentId ?? "default"}`,
+    [],
+    Favorites,
+  );
 }
 
 export function usePrReviewLiveState(explicitEnvironmentId?: EnvironmentId | null) {

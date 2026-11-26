@@ -1,3 +1,4 @@
+import "~/index.css";
 import { StrictMode } from "react";
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
@@ -45,6 +46,7 @@ function Card({
   rows = 1,
   automationRows = 0,
   serverOverflowRows = 0,
+  issueListRows = 0,
 }: {
   threadRef: ScopedThreadRef;
   inline: boolean;
@@ -55,6 +57,8 @@ function Card({
   automationRows?: number;
   /** Rows of 100px that expanded server lists add, which density ignores. */
   serverOverflowRows?: number;
+  /** Rows of 100px that expanded linked issues add, which density ignores. */
+  issueListRows?: number;
 }) {
   return (
     // The web root renders in StrictMode, which re-runs ref callbacks on every mount.
@@ -91,6 +95,9 @@ function Card({
                   data-thread-details-server-overflow
                   style={{ height: serverOverflowRows * 100 }}
                 />
+              ) : null}
+              {issueListRows > 0 ? (
+                <div data-thread-details-issue-list style={{ height: issueListRows * 100 }} />
               ) : null}
             </>
           )}
@@ -191,6 +198,42 @@ it("stays full while expanded server rows overflow", async () => {
   using fixture = setup();
   await using _screen = await render(
     <Card threadRef={threadB} inline fixture={fixture} rows={2} serverOverflowRows={4} />,
+  );
+  await expect
+    .element(page.getByRole("region", { name: "Thread details" }))
+    .toHaveAttribute("data-density", "full");
+});
+
+it("reveals inline details after the canvas has room and skips motion when disabled", async () => {
+  using fixture = setup();
+  const layout = (inline: boolean, animations: boolean) => (
+    <div data-panel-animations={String(animations)}>
+      <Card threadRef={threadB} inline={inline} fixture={fixture} />
+    </div>
+  );
+  await using screen = await render(layout(false, true));
+  await screen.rerender(layout(true, true));
+  const card = () => screen.container.querySelector<HTMLElement>("[data-thread-details-card]")!;
+  const transition = card()
+    .getAnimations()
+    .find(
+      (animation) =>
+        animation instanceof CSSTransition && animation.transitionProperty === "opacity",
+    );
+  expect(transition).toBeDefined();
+  transition!.finish();
+  expect(getComputedStyle(card()).opacity).toBe("1");
+
+  await screen.rerender(layout(false, false));
+  await screen.rerender(layout(true, false));
+  expect(card().getAnimations()).toHaveLength(0);
+  expect(getComputedStyle(card()).opacity).toBe("1");
+});
+
+it("stays full while expanded issue rows overflow", async () => {
+  using fixture = setup();
+  await using _screen = await render(
+    <Card threadRef={threadB} inline fixture={fixture} rows={2} issueListRows={6} />,
   );
   await expect
     .element(page.getByRole("region", { name: "Thread details" }))

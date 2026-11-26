@@ -116,17 +116,18 @@ const make = Effect.gen(function* () {
     resolved: Effect.Success<ReturnType<typeof resolve>>,
     name: string,
   ) {
-    const tools = yield* resolved.mcpApps
+    const { tools, connectionId } = yield* resolved.mcpApps
       .listTools({ providerThread: resolved.providerThread, server: resolved.app.server })
       .pipe(Effect.mapError(adapterFailure(threadId)));
-    return tools.find((tool) => tool.name === name);
+    return { tool: tools.find((candidate) => candidate.name === name), connectionId };
   });
 
   const toolInfo = Effect.fn("McpAppRequests.toolInfo")(function* (input: McpAppToolInfoInput) {
     const resolved = yield* resolve(input);
-    const tool = yield* findTool(input.threadId, resolved, input.name);
+    const { tool, connectionId } = yield* findTool(input.threadId, resolved, input.name);
     const title = tool === undefined ? undefined : toolTitle(tool);
     return {
+      connectionId,
       callable: tool !== undefined && mcpAppToolCallableByApp(tool._meta),
       readOnly: tool !== undefined && readOnlyHint(tool),
       ...(title === undefined ? {} : { title }),
@@ -137,8 +138,14 @@ const make = Effect.gen(function* () {
   const callTool = Effect.fn("McpAppRequests.callTool")(function* (input: McpAppCallToolInput) {
     const resolved = yield* resolve(input);
     // Enforce hidden-tool restrictions server-side; client checks cannot enforce the spec.
-    const tool = yield* findTool(input.threadId, resolved, input.name);
+    const { tool, connectionId } = yield* findTool(input.threadId, resolved, input.name);
     if (tool === undefined || !mcpAppToolCallableByApp(tool._meta)) {
+      return yield* fail(input.threadId, "tool-not-callable");
+    }
+    if (
+      (input.connectionId !== undefined && input.connectionId !== connectionId) ||
+      ((input.connectionId === undefined || input.readOnly) && !readOnlyHint(tool))
+    ) {
       return yield* fail(input.threadId, "tool-not-callable");
     }
     return yield* resolved.mcpApps
@@ -146,6 +153,7 @@ const make = Effect.gen(function* () {
         providerThread: resolved.providerThread,
         server: resolved.app.server,
         tool: input.name,
+        connectionId,
         arguments: input.arguments,
       })
       .pipe(Effect.mapError(adapterFailure(input.threadId)));

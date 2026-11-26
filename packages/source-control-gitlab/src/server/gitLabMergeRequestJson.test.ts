@@ -14,6 +14,7 @@ import {
   decodeMergeRequestFileStatsJson,
   decodeMergeRequestStatsJson,
   decodeMergeRequestWatchFingerprintJson,
+  decodeMutationErrorsJson,
   decodeReferenceCandidatesJson,
   decodeNotesJson,
   decodeOwnAwardIdJson,
@@ -1322,6 +1323,35 @@ describe("decodeMergeMessagesJson", () => {
     );
 
     expect(Result.isFailure(decoded)).toBe(true);
+  });
+});
+
+describe("decodeMutationErrorsJson", () => {
+  it("extracts both top-level GraphQL errors without data and payload errors", () => {
+    expect(
+      expectSuccess(
+        decodeMutationErrorsJson(
+          JSON.stringify({
+            errors: [
+              { message: "Field 'mergeRequestRequestChanges' doesn't exist on type 'Mutation'" },
+            ],
+          }),
+        ),
+      ),
+    ).toEqual(["Field 'mergeRequestRequestChanges' doesn't exist on type 'Mutation'"]);
+
+    expect(
+      expectSuccess(
+        decodeMutationErrorsJson(
+          JSON.stringify({
+            data: { mergeRequestRequestChanges: null },
+            errors: [{ message: "You don't have permission to perform this action" }],
+          }),
+        ),
+      ),
+    ).toEqual(["You don't have permission to perform this action"]);
+
+    expect(Result.isFailure(decodeMutationErrorsJson("{}"))).toBe(true);
   });
 });
 

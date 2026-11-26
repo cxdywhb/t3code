@@ -573,12 +573,14 @@ export function ConnectorModal({
   environmentId,
   platforms,
   initial,
+  onSaved,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (next: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly platforms: ReadonlyArray<IssueAutomationPlatformDescriptor>;
   readonly initial: IssueAutomationConnector | null;
+  readonly onSaved?: ((connector: IssueAutomationConnector) => void) | undefined;
 }) {
   const gt = useGT();
   const callbackBaseUrl = Option.getOrUndefined(usePreparedConnection(environmentId))?.httpBaseUrl;
@@ -635,6 +637,7 @@ export function ConnectorModal({
       });
       setBusy(false);
       if (result._tag === "Success") {
+        onSaved?.(result.value);
         onOpenChange(false);
       } else {
         const error = squashAtomCommandFailure(result);
@@ -674,6 +677,7 @@ export function ConnectorModal({
     if (controller.signal.aborted) return;
     pendingCallback.current = null;
     if (completed._tag === "Success") {
+      onSaved?.(completed.value);
       void window.desktopBridge?.revealWindow?.().catch(() => undefined);
       onOpenChange(false);
     } else {

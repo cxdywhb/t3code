@@ -14,7 +14,7 @@ import {
   WorkspaceBreadcrumbSeparator,
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
-import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { WorkspacePageHeader, WorkspacePageTitle } from "../WorkspacePageHeader";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { PullRequestCompactFilterMenu } from "./PullRequestCompactFilterMenu";
 import type { PullRequestFilterOption } from "./PullRequestListFilters";
@@ -48,11 +48,15 @@ function ExpandableSearch({
     return (
       <div
         ref={containerRef}
-        className="w-56 min-w-24 shrink"
-        onFocus={() => onFocusWithin?.(true)}
+        className="w-56 min-w-24 shrink transition-[opacity,translate] duration-150 ease-out starting:translate-x-1 starting:opacity-0 motion-reduce:transition-none"
+        onFocus={() => {
+          onFocusWithin?.(true);
+          // Open while focused, so Escape clearing the query does not unmount the field.
+          onOpenChange(true);
+        }}
         onBlur={() => {
           onFocusWithin?.(false);
-          if (searchValue.length === 0) onOpenChange(false);
+          onOpenChange(false);
         }}
       >
         {searchInput}
@@ -140,6 +144,7 @@ export function PullRequestsColumn({
   const searchExpanded = searchOpen || searchValue.length > 0;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window keydown listener focuses the visible search input on Cmd/Ctrl+F
   useEffect(() => {
+    if (maximizedAway) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
@@ -153,7 +158,7 @@ export function PullRequestsColumn({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed]);
+  }, [condensed, maximizedAway]);
   if (!condensed && searchOpen) setSearchOpen(false);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves DOM focus to the in-flow search when the topbar search it was typed in unmounts
   useEffect(() => {
@@ -182,7 +187,10 @@ export function PullRequestsColumn({
       >
         {titlebarControls}
         {condensed ? (
-          <WorkspaceBreadcrumb ariaLabel={gt("Pull request scope")} className="overflow-hidden">
+          <WorkspaceBreadcrumb
+            ariaLabel={gt("Pull request scope")}
+            className="overflow-hidden transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none"
+          >
             <WorkspaceBreadcrumbItem current className={cn(searchExpanded && "sr-only")}>
               <h1 className="truncate">
                 <T>Pull requests</T>
@@ -214,17 +222,16 @@ export function PullRequestsColumn({
             </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         ) : (
-          <WorkspaceBreadcrumb ariaLabel={gt("Pull requests breadcrumb")}>
-            <WorkspaceBreadcrumbItem current>
-              <h1 className="truncate">
-                <T>Pull requests</T>
-              </h1>
-            </WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
+          <WorkspacePageTitle ariaLabel={gt("Pull requests breadcrumb")}>
+            <T>Pull requests</T>
+          </WorkspacePageTitle>
         )}
         <div className="min-w-0 flex-1" />
         {condensed ? (
-          <div ref={topbarSearchRef} className="flex shrink items-center gap-1.5">
+          <div
+            ref={topbarSearchRef}
+            className="flex shrink items-center gap-1.5 transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none"
+          >
             <ExpandableSearch
               searchInput={searchInput}
               searchValue={searchValue}
@@ -272,12 +279,12 @@ export function PullRequestsColumn({
                 onChange={(next) => onHost(next === "" ? undefined : next)}
               />
               <Button
-                size="sm"
+                size="default"
                 variant="outline"
                 onClick={() => void navigate({ to: "/pr-review" })}
               >
                 <ShieldCheckIcon className="size-3.5 text-primary" />
-                <T>Fusion Review</T>
+                <T>PR Cross Review</T>
               </Button>
               {!condensed ? (
                 <PullRequestRefreshControl refreshing={refreshing} onRefresh={onRefresh} />

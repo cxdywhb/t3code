@@ -168,35 +168,50 @@ export function StageBadge({
     case "enriching":
       return (
         <Badge variant="info" size={size}>
-          <span aria-hidden className="size-1.5 rounded-full bg-info" />
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-info motion-safe:animate-status-pulse"
+          />
           <T>Fetching context</T>
         </Badge>
       );
     case "routing":
       return (
         <Badge variant="info" size={size}>
-          <span aria-hidden className="size-1.5 rounded-full bg-info" />
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-info motion-safe:animate-status-pulse"
+          />
           <T>Routing repo</T>
         </Badge>
       );
     case "diagnosing":
       return (
         <Badge variant="info" size={size}>
-          <span aria-hidden className="size-1.5 rounded-full bg-info" />
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-info motion-safe:animate-status-pulse"
+          />
           <T>Diagnosing</T>
         </Badge>
       );
     case "reviewing":
       return (
         <Badge variant="info" size={size}>
-          <span aria-hidden className="size-1.5 rounded-full bg-info" />
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-info motion-safe:animate-status-pulse"
+          />
           <T>Cross-review</T>
         </Badge>
       );
     case "writing_back":
       return (
         <Badge variant="info" size={size}>
-          <span aria-hidden className="size-1.5 rounded-full bg-info" />
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-info motion-safe:animate-status-pulse"
+          />
           <T>Syncing</T>
         </Badge>
       );

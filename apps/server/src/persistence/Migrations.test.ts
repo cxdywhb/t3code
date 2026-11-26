@@ -6,7 +6,19 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Ref from "effect/Ref";
+import * as Logger from "effect/Logger";
+import * as Console from "effect/Console";
+import * as NodeUtil from "node:util";
+import type { DatabaseMigrationProgress as Progress } from "@t3tools/contracts";
+import {
+  databaseMigrationProgress,
+  DATABASE_MIGRATION_PROGRESS_MESSAGE,
+} from "@t3tools/shared/databaseMigrationLog";
+import * as DatabaseMigrationProgress from "./DatabaseMigrationProgress.ts";
 
+import IssueAutomation from "./Migrations/119_IssueAutomation.ts";
+import PrReviewWorkstation from "./Migrations/120_PrReviewWorkstation.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
@@ -29,6 +41,41 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
+  it.effect.each([106, 108, 111, 112, 117])(
+    "upgrades fork tables originally registered at %i",
+    (firstId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: firstId - 1 });
+        yield* IssueAutomation;
+        yield* PrReviewWorkstation;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (${firstId}, 'IssueAutomation'), (${firstId + 1}, 'PrReviewWorkstation')`;
+        yield* sql`INSERT INTO issue_automation_connectors
+        (connector_id, platform, name, base_url, account, status, updated_at)
+        VALUES ('existing', 'zentao', 'team', 'https://example.test/team', 'user', 'connected', '2026-01-01')`;
+        yield* sql`INSERT INTO pr_review_presets (preset_id, name, reviewer_models_json, updated_at)
+        VALUES ('existing', 'team review', '[]', '2026-01-01')`;
+
+        yield* runMigrations();
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.lengthOf(
+          yield* sql`
+        SELECT name FROM sqlite_master
+        WHERE name = 'orchestration_v2_projection_run_attempts_superseded_idx'
+      `,
+          1,
+        );
+        assert.deepStrictEqual(yield* sql`SELECT base_url FROM issue_automation_connectors`, [
+          { base_url: "https://example.test/team" },
+        ]);
+        assert.deepStrictEqual(yield* sql`SELECT name FROM pr_review_presets`, [
+          { name: "team review" },
+        ]);
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("refuses to start when another migration took a V2 id", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -73,7 +120,44 @@ describe("runMigrations", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 54 });
-      assert.deepStrictEqual(yield* runMigrations(), v2Migrations);
+      const current = yield* Ref.make<Progress | null>(null);
+      const steps: Array<Progress | null> = [];
+      const loggedSteps: Array<Progress | null> = [];
+      let output = "";
+      const pretty = Logger.consolePretty({ mode: "tty", colors: false });
+      const logger = Logger.make((options) => {
+        pretty.log(options);
+        if (String(options.message).startsWith(DATABASE_MIGRATION_PROGRESS_MESSAGE)) {
+          steps.push(Ref.getUnsafe(current));
+          loggedSteps.push(databaseMigrationProgress(output.slice(-4_000)));
+        }
+      });
+      assert.deepStrictEqual(
+        yield* runMigrations().pipe(
+          Effect.provideService(DatabaseMigrationProgress.DatabaseMigrationProgress, { current }),
+          Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+          Effect.provideService(Console.Console, {
+            ...globalThis.console,
+            log: (...args) => {
+              output += `${NodeUtil.format(...args)}\n`;
+            },
+          }),
+        ),
+        v2Migrations,
+      );
+      assert.deepStrictEqual(
+        steps,
+        v2Migrations.map((_, index) => ({ current: index + 1, total: v2Migrations.length })),
+      );
+      assert.deepStrictEqual(loggedSteps, steps);
+      assert.isNull(yield* Ref.get(current));
+      assert.deepStrictEqual(
+        yield* runMigrations().pipe(
+          Effect.provideService(DatabaseMigrationProgress.DatabaseMigrationProgress, { current }),
+        ),
+        [],
+      );
+      assert.isNull(yield* Ref.get(current));
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.isAbove(yield* v2TableCount, 0);
 
@@ -163,9 +247,15 @@ describe("runMigrations", () => {
       yield* runMigrations({ toMigrationInclusive: 81 });
       yield* sql`CREATE TABLE orchestration_v2_projection_turn_item_counts (thread_id TEXT)`;
 
-      const exit = yield* Effect.exit(runMigrations());
+      const current = yield* Ref.make<Progress | null>(null);
+      const exit = yield* Effect.exit(
+        runMigrations().pipe(
+          Effect.provideService(DatabaseMigrationProgress.DatabaseMigrationProgress, { current }),
+        ),
+      );
 
       assert.isTrue(Exit.isFailure(exit));
+      assert.isNull(yield* Ref.get(current));
       assert.deepStrictEqual(
         yield* history,
         migrationManifest.filter(([id]) => id <= 84),

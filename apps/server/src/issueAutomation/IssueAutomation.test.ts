@@ -203,7 +203,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
     const baseUrl = "https://zentao.example.com/zentao";
     const scope = { id: "5", name: "好轻 App" };
     const platform = IssueAutomationPlatformKind.make("zentao");
-    const threadId = ThreadId.make("thread:issue-2849");
+    const threadId = ThreadId.make("thread:issue-diagnosis:2849");
     const oldRunId = RunId.make("run:issue-2849:1");
     const newRunId = RunId.make("run:issue-2849:2");
     const repairThreadId = ThreadId.make("thread:repair-2849");
@@ -248,7 +248,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         creationSource: "web",
         providerInstanceId: instanceId,
         modelSelection,
-        runtimeMode: "full-access",
+        runtimeMode: "approval-required",
         interactionMode: "default",
         branch: "main",
         worktreePath: null,
@@ -446,6 +446,8 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
             });
           }
           if (input.initialMessage?.context?.issueAutomation?.issueKey === "#2849") {
+            expect(input.threadId).toMatch(/^thread:issue-diagnosis:/);
+            expect(input.runtimeMode).toBe("approval-required");
             runs.push(makeRun(oldRunId, input.initialMessage.messageId!, "running"));
             return Effect.succeed({ threadId, projection: projection(), resumed: false });
           }

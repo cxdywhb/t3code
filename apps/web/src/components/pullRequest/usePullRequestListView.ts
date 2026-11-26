@@ -2,17 +2,24 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import {
+  AuthSettingsWriteScope,
+  DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   type ProjectId,
   type PullRequestInvolvement,
   type PullRequestListFilters,
   type PullRequestListResult,
   type PullRequestListState,
+  resolveOriginOnlyRepositoryIdentity,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useEffect, useState } from "react";
 
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
+import { serverEnvironment } from "~/state/server";
+import { useEnvironmentsWithScope } from "~/state/session";
+import { useAtomCommand } from "~/state/use-atom-command";
 import {
   applyPullRequestOverrides,
   findProjectForRepository,
@@ -87,9 +94,43 @@ export function usePullRequestScope(
   const environmentKey = pullRequestEnvironmentSetKey(environmentIds);
   const capabilityKnown = environments.some((environment) => environment.serverConfig !== null);
   const pullRequestsSupported = environmentIds.length > 0;
-  const projects = allProjects.filter(
+  const rawProjects = allProjects.filter(
     (project) => !project.isScratch && environmentIds.includes(project.environmentId),
   );
+  const settingsByEnvironmentId = new Map(
+    capableEnvironments.map((environment) => [
+      environment.environmentId,
+      environment.serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
+    ]),
+  );
+  const originOnlyKey = capableEnvironments
+    .map((environment) => {
+      const settings = environment.serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
+      const projectOverrides = Object.entries(settings.projectSettingsOverrides)
+        .flatMap(([projectId, overrides]) =>
+          overrides.pullRequestOriginOnly === undefined
+            ? []
+            : ([[projectId, overrides.pullRequestOriginOnly]] as const),
+        )
+        .toSorted(([left], [right]) => left.localeCompare(right));
+      return JSON.stringify([
+        environment.environmentId,
+        settings.pullRequestOriginOnly,
+        projectOverrides,
+      ]);
+    })
+    .join("|");
+  const projects = rawProjects.map((project) => {
+    const settings = settingsByEnvironmentId.get(project.environmentId) ?? DEFAULT_SERVER_SETTINGS;
+    if (!resolveProjectSettings(settings, project.id).settings.pullRequestOriginOnly)
+      return project;
+    return {
+      ...project,
+      repositoryIdentity: resolveOriginOnlyRepositoryIdentity(project.repositoryIdentity, true, {
+        recognizeProvider: (remoteUrl) => sourceControlClients.recognizeRemote(remoteUrl)?.kind,
+      }),
+    };
+  });
   const environmentLabels = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
@@ -109,13 +150,20 @@ export function usePullRequestScope(
   const projectForRepository =
     search.repository === undefined
       ? undefined
-      : findProjectForRepository(projects, {
+      : (findProjectForRepository(projects, {
           repository: search.repository,
           host: selectedHost,
           selectedEnvironmentId,
           scopedProjectId,
           scopedEnvironmentId,
-        });
+        }) ??
+        findProjectForRepository(rawProjects, {
+          repository: search.repository,
+          host: selectedHost,
+          selectedEnvironmentId,
+          scopedProjectId,
+          scopedEnvironmentId,
+        }));
   const linkedProjectId = resolveProjectScope(search.selectedProjectId, projects, projectsKnown);
   const selectedProject =
     linkedProjectId === undefined && search.repository !== undefined
@@ -192,6 +240,7 @@ export function usePullRequestScope(
 
   return {
     capableEnvironments,
+    originOnlyKey,
     scopedEnvironmentId,
     environmentKey,
     capabilityKnown,
@@ -209,6 +258,68 @@ export function usePullRequestScope(
     linkedSelection,
     expectedHosts,
     projectsKnown,
+  };
+}
+
+export function usePullRequestOriginOnlyControl(
+  capableEnvironments: ReturnType<typeof useEnvironments>["environments"],
+) {
+  const writableIds = useEnvironmentsWithScope(capableEnvironments, AuthSettingsWriteScope);
+  const writableEnvironments = capableEnvironments.filter((environment) =>
+    writableIds.has(environment.environmentId),
+  );
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings);
+  const [saving, setSaving] = useState(false);
+  const [optimistic, setOptimistic] = useState<{
+    readonly value: boolean;
+    readonly baseline: string;
+  } | null>(null);
+
+  const serverEntries = capableEnvironments.map((environment) => ({
+    environmentId: environment.environmentId,
+    value:
+      environment.serverConfig?.settings.pullRequestOriginOnly ??
+      DEFAULT_SERVER_SETTINGS.pullRequestOriginOnly,
+  }));
+  const serverSignature = JSON.stringify(serverEntries);
+  const enabledCount = serverEntries.filter((entry) => entry.value).length;
+  const serverChecked = serverEntries.length > 0 && enabledCount === serverEntries.length;
+  const serverMixed = enabledCount > 0 && enabledCount < serverEntries.length;
+  const activeOptimistic =
+    optimistic !== null && (saving || optimistic.baseline === serverSignature)
+      ? optimistic.value
+      : null;
+  const checked = activeOptimistic ?? serverChecked;
+  const mixed = activeOptimistic === null && serverMixed;
+  const canEdit =
+    capableEnvironments.length > 0 && writableEnvironments.length === capableEnvironments.length;
+  const disabled = !canEdit || saving;
+
+  const toggle = async (next: boolean) => {
+    if (disabled) return;
+    setOptimistic({ value: next, baseline: serverSignature });
+    setSaving(true);
+    const results = await Promise.all(
+      writableEnvironments.map((environment) =>
+        updateSettings({
+          environmentId: environment.environmentId,
+          input: { patch: { pullRequestOriginOnly: next } },
+        }),
+      ),
+    );
+    setSaving(false);
+    if (results.some((result) => result._tag !== "Success")) {
+      setOptimistic(null);
+    }
+  };
+
+  return {
+    visible: capableEnvironments.length > 0,
+    checked,
+    mixed,
+    disabled,
+    saving,
+    toggle,
   };
 }
 

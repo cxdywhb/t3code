@@ -271,6 +271,10 @@ const randomId =
       ),
     );
 
+const DIAGNOSIS_THREAD_PREFIX = "thread:issue-diagnosis:";
+export const diagnosisThreadId = (uuid: string) => ThreadId.make(DIAGNOSIS_THREAD_PREFIX + uuid);
+export const isDiagnosisThread = (id: ThreadId) => id.startsWith(DIAGNOSIS_THREAD_PREFIX);
+
 const DELEGATED_TASK_THREAD_PREFIX = joinId("thread", "delegated-task", "");
 
 export const isDelegatedTaskThread = (threadId: ThreadId): boolean =>

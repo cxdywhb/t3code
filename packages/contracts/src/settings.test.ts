@@ -16,6 +16,7 @@ import {
   globalIdleCompaction,
   idleCompactionPatch,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
+  ProjectSettingsOverrides,
   requiredScopesForProjectMutation,
   resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
@@ -42,6 +43,11 @@ const decodeClientServerSettingsPatch = Schema.decodeUnknownSync(ClientServerSet
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodeServerSettingsPatch = Schema.encodeSync(ServerSettingsPatch);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+
+it("follows the system language by default and preserves an explicit language", () => {
+  expect(decodeClientSettings({}).language).toBe("system");
+  expect(decodeClientSettings({ language: "en" }).language).toBe("en");
+});
 
 it("drops theme defaults from a client's settings patch", () => {
   expect(
@@ -553,5 +559,24 @@ describe("server model preferences", () => {
     const input = { favorites: [], providerModelPreferences: {} };
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
+  });
+});
+
+describe("pullRequestOriginOnly setting", () => {
+  const decodeProjectOverride = Schema.decodeUnknownSync(ProjectSettingsOverrides);
+
+  it("defaults to true and supports patches and project overrides", () => {
+    expect(DEFAULT_SERVER_SETTINGS.pullRequestOriginOnly).toBe(true);
+    expect(decodeServerSettings({}).pullRequestOriginOnly).toBe(true);
+    expect(decodeServerSettings({ pullRequestOriginOnly: false }).pullRequestOriginOnly).toBe(
+      false,
+    );
+    expect(decodeServerSettingsPatch({ pullRequestOriginOnly: false })).toEqual({
+      pullRequestOriginOnly: false,
+    });
+    expect(PROJECT_SCOPED_SERVER_SETTING_KEYS).toContain("pullRequestOriginOnly");
+    expect(decodeProjectOverride({ pullRequestOriginOnly: false })).toEqual({
+      pullRequestOriginOnly: false,
+    });
   });
 });

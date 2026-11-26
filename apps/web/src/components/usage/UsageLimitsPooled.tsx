@@ -1,8 +1,10 @@
 import {
   CHATGPT_USAGE_URL,
+  collectHttpQuotaSources,
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
+  isPerAccountDashboardDriver,
   type LimitAccount,
   type LimitPool,
   type LimitPoolMember,
@@ -11,13 +13,12 @@ import {
   remainingPercent,
   type ResetCreditChoice,
 } from "@t3tools/shared/usageLimits";
-import { T, useGT, useMessages } from "gt-react";
+import { T, Var, useGT, useMessages } from "gt-react";
 import type { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
 import {
   createContext,
-  Fragment,
   type ReactNode,
   type RefObject,
   use,
@@ -39,9 +40,10 @@ import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { PaceIcon, ResetCreditDialog, barColor, usePaceMark, useResetCredit } from "./UsageLimits";
 import {
-  collectExternalUsageLinks,
+  collectDashboardUsageLinks,
   collectLimitNotices,
   cursorUsageWindowDetails,
+  formatDuration,
   formatResetsIn,
   resetCreditChoices,
 } from "@t3tools/shared/usageLimitsCopy";
@@ -91,7 +93,7 @@ function AccountAvatar({
           String(account.driver)
         }
         accentColor={account.accentColor}
-        showBadge={Boolean(account.displayName)}
+        showBadge={account.driver !== "codex" && Boolean(account.displayName)}
         indicatorBackground="var(--popover)"
         className={cn("size-5", className)}
         iconClassName="size-4 text-foreground/80"
@@ -604,7 +606,8 @@ function PoolWindowCard({
   readonly label?: string | null | undefined;
   readonly description?: string | undefined;
 }) {
-  const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
+  const m = useMessages();
+  const nextRefill = pool.resets.find((reset) => reset.at > now && reset.restoresPercent > 0);
   return (
     <div className="grid items-center gap-x-6 gap-y-3 rounded-lg border border-border/60 p-4 md:grid-cols-[11rem_minmax(0,1fr)]">
       <div className="flex flex-col gap-1">
@@ -623,8 +626,13 @@ function PoolWindowCard({
           </span>
         </span>
         {nextRefill && pool.columns.length > 1 ? (
-          <span className="text-xs font-medium text-foreground tabular-nums">
-            ↻ +{nextRefill.restoresPercent}%
+          <span className="text-xs text-muted-foreground tabular-nums">
+            <T context="usage limit refill">
+              <span className="font-medium text-foreground">
+                ↻ +<Var>{nextRefill.restoresPercent}</Var>%
+              </span>{" "}
+              in <Var>{formatDuration(nextRefill.at - now, m)}</Var>
+            </T>
           </span>
         ) : null}
       </div>
@@ -636,13 +644,28 @@ function PoolWindowCard({
   );
 }
 
-function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+function PoolSection({
+  pool,
+  now,
+  accountNumber,
+}: {
+  readonly pool: LimitPool;
+  readonly now: number;
+  readonly accountNumber?: number | undefined;
+}) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
+  const account = isPerAccountDashboardDriver(pool.driver) ? pool.accounts[0] : undefined;
+  const title =
+    account?.displayName && account.displayName !== label
+      ? `${label} · ${account.displayName}`
+      : accountNumber
+        ? `${label} #${accountNumber}`
+        : label;
   const windows = displayLimitWindows(pool);
   const m = useMessages();
   return (
-    <section className="flex flex-col gap-3">
+    <section aria-label={title} className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
         <ProviderInstanceIcon
           driverKind={pool.driver}
@@ -651,7 +674,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
           className="size-5"
           iconClassName="size-4 text-foreground/80"
         />
-        {label}
+        {title}
       </h2>
       {windows.map((window) => {
         const details =
@@ -682,22 +705,42 @@ export function UsageLimitsPooled({
   const m = useMessages();
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
-  const pools = collectLimitPools(collectLimitAccounts(presentations), now);
+  const pools = collectLimitPools(collectLimitAccounts(presentations), now, "dashboard");
+  const splitPoolsByDriver = new Map<LimitPool["driver"], LimitPool[]>();
+  for (const pool of pools) {
+    if (!isPerAccountDashboardDriver(pool.driver)) continue;
+    const list = splitPoolsByDriver.get(pool.driver);
+    if (list) list.push(pool);
+    else splitPoolsByDriver.set(pool.driver, [pool]);
+  }
+  const quotaSources = collectHttpQuotaSources(presentations);
   const notices = collectLimitNotices(presentations, m);
-  const externalLinks = collectExternalUsageLinks(presentations, m);
+  const externalLinks = collectDashboardUsageLinks(presentations, m);
   return (
     <div className="flex flex-col gap-8">
-      {pools.length === 0 && notices.length === 0 && externalLinks.length === 0 ? (
+      {pools.length === 0 &&
+      notices.length === 0 &&
+      externalLinks.length === 0 &&
+      quotaSources.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           <T>No provider on the selected environments reports subscription limits.</T>
         </p>
       ) : null}
       <SegmentPopoverContext value={segmentPopover}>
-        {pools.map((pool) => (
-          <Fragment key={pool.driver}>
-            <PoolSection pool={pool} now={now} />
-          </Fragment>
-        ))}
+        {pools.map((pool) => {
+          const split = isPerAccountDashboardDriver(pool.driver);
+          const driverPools = splitPoolsByDriver.get(pool.driver);
+          return (
+            <PoolSection
+              key={split ? pool.accounts[0]!.key : pool.driver}
+              pool={pool}
+              now={now}
+              accountNumber={
+                driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined
+              }
+            />
+          );
+        })}
       </SegmentPopoverContext>
       <Popover handle={segmentPopover} actionsRef={segmentPopoverActions}>
         {({ payload }) =>
@@ -712,9 +755,34 @@ export function UsageLimitsPooled({
           ) : null
         }
       </Popover>
+      {quotaSources.map((source) => (
+        <section key={source.key} className="space-y-3 rounded-xl border p-4">
+          <h2 className="text-sm font-medium">{source.label}</h2>
+          {source.quotaAccounts?.map((account) => (
+            <div key={account.id} className="space-y-1">
+              <h3 className="text-sm font-medium">{account.label}</h3>
+              {account.windows.map((window) => {
+                const reset = formatResetsIn(window, now, m);
+                return (
+                  <div
+                    key={window.id}
+                    className="flex justify-between gap-3 text-sm text-muted-foreground"
+                  >
+                    <span>{window.label}</span>
+                    <span>
+                      {gt("{remaining}% left", { remaining: remainingPercent(window) })}
+                      {reset ? ` · ${reset}` : ""}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </section>
+      ))}
       {externalLinks.map((link) => (
         <section
-          key={link.url}
+          key={link.key}
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4"
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">

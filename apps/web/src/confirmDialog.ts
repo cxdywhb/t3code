@@ -1,5 +1,15 @@
 import type { ConfirmDialogOptions, ConfirmDialogVariant } from "@t3tools/contracts";
 
+export type ConfirmDialogChoiceResult = "cancel" | "confirm" | "secondary";
+
+export interface ChoiceConfirmDialogOptions extends ConfirmDialogOptions {
+  readonly confirmLabel?: string;
+  readonly secondaryLabel?: string;
+  /** Runs when the secondary button is clicked without closing the dialog. */
+  readonly onSecondaryAction?: () => void;
+  readonly signal?: AbortSignal;
+}
+
 export type ConfirmDialogState =
   | { readonly status: "idle" }
   | {
@@ -7,19 +17,29 @@ export type ConfirmDialogState =
       readonly message: string;
       readonly variant: ConfirmDialogVariant;
       readonly initialFocus: ConfirmDialogOptions["initialFocus"];
+      readonly confirmLabel?: string;
+      readonly secondaryLabel?: string;
+      readonly onSecondaryAction?: () => void;
     }
   | {
       readonly status: "closing";
       readonly message: string;
       readonly variant: ConfirmDialogVariant;
       readonly initialFocus: ConfirmDialogOptions["initialFocus"];
+      readonly confirmLabel?: string;
+      readonly secondaryLabel?: string;
+      readonly onSecondaryAction?: () => void;
     };
 
 type PendingConfirmation = {
   readonly message: string;
   readonly variant: ConfirmDialogVariant;
   readonly initialFocus: ConfirmDialogOptions["initialFocus"];
-  readonly resolve: (confirmed: boolean) => void;
+  readonly confirmLabel?: string;
+  readonly secondaryLabel?: string;
+  readonly onSecondaryAction?: () => void;
+  readonly resolveChoice: (choice: ConfirmDialogChoiceResult | undefined) => void;
+  cleanupAbort?: (() => void) | undefined;
 };
 
 const idleState: ConfirmDialogState = { status: "idle" };
@@ -28,6 +48,26 @@ let activeConfirmation: PendingConfirmation | null = null;
 let queuedConfirmations: PendingConfirmation[] = [];
 const listeners = new Set<() => void>();
 
+function buildDialogState(
+  status: "confirming" | "closing",
+  source: Pick<
+    PendingConfirmation,
+    "message" | "variant" | "initialFocus" | "confirmLabel" | "secondaryLabel" | "onSecondaryAction"
+  >,
+): ConfirmDialogState {
+  return {
+    status,
+    message: source.message,
+    variant: source.variant,
+    initialFocus: source.initialFocus,
+    ...(source.confirmLabel === undefined ? {} : { confirmLabel: source.confirmLabel }),
+    ...(source.secondaryLabel === undefined ? {} : { secondaryLabel: source.secondaryLabel }),
+    ...(source.onSecondaryAction === undefined
+      ? {}
+      : { onSecondaryAction: source.onSecondaryAction }),
+  };
+}
+
 function publish(next: ConfirmDialogState): void {
   state = next;
   for (const listener of listeners) {
@@ -35,10 +75,16 @@ function publish(next: ConfirmDialogState): void {
   }
 }
 
-function resolvePendingConfirmations(confirmed: boolean): void {
-  activeConfirmation?.resolve(confirmed);
+function resolvePendingConfirmations(): void {
+  if (activeConfirmation) {
+    activeConfirmation.cleanupAbort?.();
+    activeConfirmation.cleanupAbort = undefined;
+    activeConfirmation.resolveChoice(undefined);
+  }
   for (const confirmation of queuedConfirmations) {
-    confirmation.resolve(confirmed);
+    confirmation.cleanupAbort?.();
+    confirmation.cleanupAbort = undefined;
+    confirmation.resolveChoice(undefined);
   }
   activeConfirmation = null;
   queuedConfirmations = [];
@@ -56,9 +102,69 @@ export function subscribeConfirmDialogHost(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     if (!listeners.delete(listener) || listeners.size > 0) return;
-    resolvePendingConfirmations(false);
+    resolvePendingConfirmations();
     publish(idleState);
   };
+}
+
+function enqueueChoiceConfirmation(
+  message: string,
+  options: {
+    readonly variant: ConfirmDialogVariant;
+    readonly initialFocus: ConfirmDialogOptions["initialFocus"];
+    readonly confirmLabel?: string;
+    readonly secondaryLabel?: string;
+    readonly onSecondaryAction?: () => void;
+    readonly signal?: AbortSignal;
+  },
+): Promise<ConfirmDialogChoiceResult | undefined> {
+  if (options.signal?.aborted) {
+    return Promise.resolve(undefined);
+  }
+
+  return new Promise<ConfirmDialogChoiceResult | undefined>((resolveChoice) => {
+    const pending: PendingConfirmation = {
+      message,
+      variant: options.variant,
+      initialFocus: options.initialFocus,
+      ...(options.confirmLabel === undefined ? {} : { confirmLabel: options.confirmLabel }),
+      ...(options.secondaryLabel === undefined ? {} : { secondaryLabel: options.secondaryLabel }),
+      ...(options.onSecondaryAction === undefined
+        ? {}
+        : { onSecondaryAction: options.onSecondaryAction }),
+      resolveChoice,
+    };
+
+    if (options.signal) {
+      const signal = options.signal;
+      const onAbort = () => {
+        pending.cleanupAbort = undefined;
+        if (activeConfirmation === pending) {
+          activeConfirmation = null;
+          pending.resolveChoice(undefined);
+          if (state.status === "confirming") {
+            publish(buildDialogState("closing", state));
+          }
+          return;
+        }
+        const queuedIndex = queuedConfirmations.indexOf(pending);
+        if (queuedIndex >= 0) {
+          queuedConfirmations.splice(queuedIndex, 1);
+          pending.resolveChoice(undefined);
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      pending.cleanupAbort = () => signal.removeEventListener("abort", onAbort);
+    }
+
+    if (activeConfirmation || state.status === "closing") {
+      queuedConfirmations.push(pending);
+      return;
+    }
+
+    activeConfirmation = pending;
+    publish(buildDialogState("confirming", pending));
+  });
 }
 
 /** Undefined means no themed host is available. */
@@ -68,46 +174,48 @@ export function requestConfirmDialog(
 ): Promise<boolean> | undefined {
   if (listeners.size === 0) return undefined;
 
-  const confirmation = new Promise<boolean>((resolve) => {
-    const pending = {
-      message,
-      variant: options?.variant ?? "default",
-      initialFocus: options?.initialFocus,
-      resolve,
-    } satisfies PendingConfirmation;
-    if (activeConfirmation || state.status === "closing") {
-      queuedConfirmations.push(pending);
-      return;
-    }
+  return enqueueChoiceConfirmation(message, {
+    variant: options?.variant ?? "default",
+    initialFocus: options?.initialFocus,
+  }).then((choice) => choice === "confirm");
+}
 
-    activeConfirmation = pending;
-    publish({
-      status: "confirming",
-      message,
-      variant: pending.variant,
-      initialFocus: pending.initialFocus,
-    });
+/** Undefined means no themed host is available. */
+export function requestChoiceConfirmDialog(
+  message: string,
+  options: ChoiceConfirmDialogOptions,
+): Promise<ConfirmDialogChoiceResult | undefined> | undefined {
+  if (listeners.size === 0) return undefined;
+
+  return enqueueChoiceConfirmation(message, {
+    variant: options.variant ?? "default",
+    initialFocus: options.initialFocus,
+    ...(options.confirmLabel === undefined ? {} : { confirmLabel: options.confirmLabel }),
+    ...(options.secondaryLabel === undefined ? {} : { secondaryLabel: options.secondaryLabel }),
+    ...(options.onSecondaryAction === undefined
+      ? {}
+      : { onSecondaryAction: options.onSecondaryAction }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
-
-  return confirmation;
 }
 
 export function isConfirmDialogActive(): boolean {
   return state.status !== "idle" || activeConfirmation !== null || queuedConfirmations.length > 0;
 }
 
-export function respondToConfirmDialog(confirmed: boolean): void {
+export function respondToConfirmDialogChoice(choice: ConfirmDialogChoiceResult): void {
   if (state.status !== "confirming" || !activeConfirmation) return;
 
   const confirmation = activeConfirmation;
   activeConfirmation = null;
-  confirmation.resolve(confirmed);
-  publish({
-    status: "closing",
-    message: state.message,
-    variant: state.variant,
-    initialFocus: state.initialFocus,
-  });
+  confirmation.cleanupAbort?.();
+  confirmation.cleanupAbort = undefined;
+  confirmation.resolveChoice(choice);
+  publish(buildDialogState("closing", state));
+}
+
+export function respondToConfirmDialog(confirmed: boolean): void {
+  respondToConfirmDialogChoice(confirmed ? "confirm" : "cancel");
 }
 
 export function completeConfirmDialogClose(): void {
@@ -120,16 +228,11 @@ export function completeConfirmDialogClose(): void {
   }
 
   activeConfirmation = next;
-  publish({
-    status: "confirming",
-    message: next.message,
-    variant: next.variant,
-    initialFocus: next.initialFocus,
-  });
+  publish(buildDialogState("confirming", next));
 }
 
 export function resetConfirmDialogForTests(): void {
   listeners.clear();
-  resolvePendingConfirmations(false);
+  resolvePendingConfirmations();
   publish(idleState);
 }

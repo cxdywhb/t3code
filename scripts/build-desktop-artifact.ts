@@ -30,11 +30,6 @@ import {
   updateReleasePackageVersions,
 } from "./update-release-package-versions.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
-import {
-  BRAND_ASSET_PATHS,
-  resolveWebAssetBrandForChannel,
-  type WebAssetBrand,
-} from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
   findInlinedExternalPackages,
@@ -383,7 +378,7 @@ export class LinuxDesktopBuildPrerequisitesMissingError extends Schema.TaggedErr
         ? ["Add the requested Rust target with:", `  rustup target add ${this.rustTarget}`]
         : []),
       "",
-      "For other distributions, see docs/operations/development.md#linux-appimage-prerequisites.",
+      "For other distributions, see docs/operations/00_development.md#linux-appimage-prerequisites.",
       "Then rerun `vp run dist:desktop:linux`.",
     ].join("\n");
   }
@@ -455,7 +450,7 @@ export class WindowsDesktopBuildPrerequisitesMissingError extends Schema.TaggedE
       "Install Rust from https://rustup.rs and add the requested target:",
       `  rustup target add ${this.rustTarget}`,
       "Install Python 3 and the Visual Studio Build Tools components listed in",
-      "docs/operations/development.md#windows-installer-prerequisites.",
+      "docs/operations/00_development.md#windows-installer-prerequisites.",
       "",
       "Then rerun the desktop artifact command.",
     ].join("\n");
@@ -1394,6 +1389,8 @@ ${associatedDomains}
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
     <true/>
     <!-- The hardened runtime denies camera and microphone to the app and every
          child process, with no prompt, unless the app claims these. Terminals
@@ -2734,6 +2731,7 @@ export function resolveDesktopRuntimeDependencies(
 
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
+  defaultRepository?: string,
 ) {
   const env = yield* Config.all({
     updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
@@ -2742,6 +2740,7 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
     Option.getOrUndefined(env.githubRepository)?.trim() ||
+    defaultRepository ||
     ""
   ).trim();
   if (!rawRepo) return undefined;
@@ -2766,23 +2765,11 @@ export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
 }
 
-export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
-  return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
-}
-
-export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
-    };
-  }
-
+export function resolveDesktopBuildIconAssets(): DesktopBuildIconAssets {
   return {
-    macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+    macIconPng: "assets/code/icon-1024.png",
+    linuxIconPng: "assets/code/icon-1024.png",
+    windowsIconIco: "assets/code/icon.ico",
   };
 }
 
@@ -2803,8 +2790,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "X Code (Nightly)"
+    : (desktopPackageJson.productName ?? "X Code");
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2827,7 +2814,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName:
+      platform === "mac" ? "X-Code-${version}-${arch}.${ext}" : "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2857,7 +2845,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // Missing publish config infers a GitHub feed from tokens; staging has no repository, so manifest generation would crash.
   buildConfig.publish = null;
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    const publishConfig = yield* resolveGitHubPublishConfig(
+      updateChannel,
+      platform === "mac" && !mockUpdates ? "cxdywhb/t3code" : undefined,
+    );
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
@@ -2881,21 +2872,23 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         // macOS 26 offers Messages/Mail codes in every text field unless opted out.
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
         NSLocalNetworkUsageDescription:
-          "T3 Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
+          "X Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
         NSCalendarsUsageDescription:
-          "Commands you run in T3 Code may need access to your calendars.",
+          "Commands you run in X Code may need access to your calendars.",
         NSCalendarsFullAccessUsageDescription:
-          "Commands you run in T3 Code may need to read and write your calendar events.",
+          "Commands you run in X Code may need to read and write your calendar events.",
         NSCalendarsWriteOnlyAccessUsageDescription:
-          "Commands you run in T3 Code may need to add events to your calendars.",
+          "Commands you run in X Code may need to add events to your calendars.",
         NSScreenCaptureUsageDescription:
-          "T3 Code captures the active window when you use the window capture shortcut.",
+          "X Code captures the active window when you use the window capture shortcut.",
         NSCameraUsageDescription:
-          "T3 Code lets commands run by terminals and coding agents use the camera.",
+          "X Code lets commands run by terminals and coding agents use the camera.",
         NSMicrophoneUsageDescription:
-          "T3 Code lets commands run by terminals and coding agents use the microphone.",
+          "X Code lets commands run by terminals and coding agents use the microphone.",
+        NSAppleEventsUsageDescription:
+          "X Code lets commands run by terminals and coding agents control other apps.",
         NSSpeechRecognitionUsageDescription:
-          "T3 Code transcribes your dictation on this Mac when you choose Apple Speech.",
+          "X Code transcribes your dictation on this Mac when you choose Apple Speech.",
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [
@@ -2909,7 +2902,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       },
       protocols: [
         {
-          name: "T3 Code",
+          name: "X Code",
           schemes: ["t3code", "t3code-dev"],
         },
         {
@@ -2918,7 +2911,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      ...(signed
+        ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") }
+        : { identity: "-", hardenedRuntime: false }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -2962,7 +2957,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       maintainer: "T3 Tools <hello@t3.codes>",
       protocols: [
         {
-          name: "T3 Code",
+          name: "X Code",
           schemes: ["t3code", "t3code-dev"],
         },
       ],
@@ -3750,7 +3745,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
   const appVersion =
     options.version ?? resolveTaggedSourceVersion(repoRoot, serverPackageJson.version);
-  const iconAssets = resolveDesktopBuildIconAssets(appVersion);
+  const iconAssets = resolveDesktopBuildIconAssets();
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
@@ -3841,9 +3836,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
-  const webAssetBrand = resolveDesktopWebAssetBrand(appVersion);
-  yield* applyWebBrandAssets(webAssetBrand, "apps/server/dist/client");
-  yield* Effect.log(`[desktop-artifact] Applied ${webAssetBrand} web client branding.`);
+  yield* applyWebBrandAssets("code", "apps/server/dist/client");
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
@@ -4001,10 +3994,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     private: true,
     packageManager: rootPackageJson.packageManager,
     description:
-      "T3 Code is an open-source desktop app for coding agents. Work with your existing agent subscriptions, review code changes, and run commands in your projects. Connect from desktop, web, or mobile to continue working remotely.",
+      "X Code is an open-source desktop app for coding agents. Work with your existing agent subscriptions, review code changes, and run commands in your projects. Connect from desktop, web, or mobile to continue working remotely.",
     license: "MIT",
-    homepage: "https://t3.codes",
-    author: "T3 Tools",
+    homepage: "https://github.com/cxdywhb/t3code",
+    author: "cxdywhb",
     main: "apps/desktop/dist-electron/boot.cjs",
     build: yield* createBuildConfig(
       options.platform,

@@ -23,6 +23,7 @@ import {
   LayersIcon,
   MessageSquareIcon,
   PlayIcon,
+  PencilIcon,
   SendIcon,
   ShieldAlertIcon,
   UsersIcon,
@@ -42,7 +43,7 @@ import {
 } from "~/components/pullRequest/PullRequestSummaryTab";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { cn } from "~/lib/utils";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button, InlineButton } from "../ui/button";
 import {
@@ -175,6 +176,7 @@ export function IssueAutomationInspectorContent({
   onManualWriteBack,
   onCancelTask,
   onOpenThread,
+  onEditConnector,
   onClose,
 }: {
   readonly environmentId: EnvironmentId;
@@ -204,6 +206,7 @@ export function IssueAutomationInspectorContent({
   readonly onManualWriteBack: (payload: ManualWriteBackPayload) => Promise<boolean>;
   readonly onCancelTask: (taskId: IssueAutomationTask["id"]) => void;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly onEditConnector?: (() => void) | undefined;
   readonly onClose: () => void;
 }) {
   const gt = useGT();
@@ -486,6 +489,14 @@ export function IssueAutomationInspectorContent({
                 <Alert variant="error">
                   <AlertTitle>{gt("Could not load issue details")}</AlertTitle>
                   <AlertDescription>{detailError}</AlertDescription>
+                  {onEditConnector ? (
+                    <AlertAction>
+                      <Button size="xs" variant="outline" onClick={onEditConnector}>
+                        <PencilIcon className="size-3.5" />
+                        <T>Edit connection</T>
+                      </Button>
+                    </AlertAction>
+                  ) : null}
                 </Alert>
               </div>
             ) : issueDetail !== null ? (
@@ -763,7 +774,10 @@ export function IssueAutomationInspectorContent({
           ) : null}
         </>
       ) : activeTask ? (
-        <div className="min-h-0 flex-1 overflow-y-auto pb-12" data-pull-request-summary-scroll>
+        <div
+          className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto pb-12"
+          data-pull-request-summary-scroll
+        >
           <div className="px-5 pt-4 pb-2">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0 flex-1 space-y-1.5">

@@ -67,11 +67,19 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   }
 }
 
+/** Links that open in the browser, for callers such as popups that carry no identity. */
+export const parseWebExternalUrl = (rawUrl: unknown): Option.Option<string> =>
+  Option.filter(parseSafeExternalUrl(rawUrl), (url) =>
+    SAFE_WEB_PROTOCOLS.has(new URL(url).protocol),
+  );
+
 export class ElectronShell extends Context.Service<
   ElectronShell,
   {
     readonly openExternal: (rawUrl: unknown) => Effect.Effect<boolean>;
     readonly openSystemSettings: (pane: SystemSettingsPane) => Effect.Effect<boolean>;
+    readonly showItemInFolder: (targetPath: string) => Effect.Effect<boolean>;
+    readonly openPath: (targetPath: string) => Effect.Effect<boolean>;
     readonly copyText: (text: string) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/electron/ElectronShell") {}
@@ -94,6 +102,28 @@ export const make = ElectronShell.of({
     return Effect.promise(() =>
       Electron.shell.openExternal(MAC_PERMISSION_SETTINGS_URLS[pane]).then(
         () => true,
+        () => false,
+      ),
+    );
+  }),
+  showItemInFolder: Effect.fn("ElectronShell.showItemInFolder")(function (targetPath) {
+    const trimmed = targetPath.trim();
+    if (trimmed.length === 0) return Effect.succeed(false);
+    return Effect.sync(() => {
+      try {
+        Electron.shell.showItemInFolder(trimmed);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }),
+  openPath: Effect.fn("ElectronShell.openPath")(function (targetPath) {
+    const trimmed = targetPath.trim();
+    if (trimmed.length === 0) return Effect.succeed(false);
+    return Effect.promise(() =>
+      Electron.shell.openPath(trimmed).then(
+        (errorMessage) => errorMessage.length === 0,
         () => false,
       ),
     );

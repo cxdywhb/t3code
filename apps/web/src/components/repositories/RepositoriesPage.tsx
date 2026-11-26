@@ -33,6 +33,7 @@ import {
   FolderTreeIcon,
   GitBranchIcon,
   GlobeIcon,
+  KeyRoundIcon,
   LayersIcon,
   LockIcon,
   PencilIcon,
@@ -42,11 +43,20 @@ import {
   ShieldIcon,
   UserIcon,
   XIcon,
+  ZapIcon,
 } from "lucide-react";
 import { useState, type CSSProperties } from "react";
 
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
-import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
+import { GhostBar, PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
+import { PullRequestSearchInput } from "~/components/pullRequest/PullRequestListFilters";
+import { RelativeTime } from "~/components/RelativeTime";
+import {
+  WORKSPACE_BAR_ENTER_CLASS,
+  WORKSPACE_TAB_PANEL_CLASS,
+  WorkspacePageHeader,
+  WorkspacePageTitle,
+  WorkspacePageToolbar,
+} from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -54,6 +64,7 @@ import { RESIZABLE_WIDTH_PROPERTY, useResizableWidth } from "~/hooks/useResizabl
 import { m } from "~/i18n/messages";
 import { observeResize } from "~/lib/observeResize";
 import { cn, newProjectId } from "~/lib/utils";
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { useProjects, waitForProject } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { filesystemEnvironment, useFilesystemReadAccess } from "~/state/filesystem";
@@ -69,6 +80,7 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import {
   Empty,
   EmptyContent,
@@ -85,7 +97,6 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
-import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -113,7 +124,6 @@ const GITLAB_KIND = SourceControlProviderKind.make("gitlab");
 const REPOSITORIES_PER_PAGE = PositiveInt.make(50);
 const EMPTY_CLONES: ReturnType<typeof useEnvironmentProjectClones> = [];
 const GROUP_SKELETON_KEYS = ["g1", "g2", "g3", "g4", "g5", "g6"] as const;
-const REPO_SKELETON_KEYS = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"] as const;
 
 type SelectedNamespace =
   | { readonly mode: "all" }
@@ -124,17 +134,6 @@ type SelectedNamespace =
       readonly label: string;
       readonly path: string;
     };
-
-function formatActivityDate(value: string | null): string | null {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) return null;
-  return new Date(timestamp).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 function VisibilityIcon({
   visibility,
@@ -184,10 +183,10 @@ function NamespaceTreeBranch({
                 if (hasChildren) onToggleExpand(namespace.id);
               }}
               className={cn(
-                "group flex min-h-9 select-none items-center gap-1 rounded-lg px-1.5 py-1.5 text-sm transition-colors",
+                "group flex min-h-9 select-none items-center gap-1 rounded-md px-1.5 py-1.5 text-sm transition-colors duration-150",
                 isSelected
-                  ? "bg-accent text-accent-foreground font-medium shadow-2xs"
-                  : "text-foreground/85 hover:bg-muted/70",
+                  ? "bg-accent text-accent-foreground font-medium"
+                  : "text-foreground/85 hover:bg-accent/60",
               )}
             >
               {hasChildren ? (
@@ -265,16 +264,20 @@ function NamespaceTreeBranch({
                 ) : null}
               </button>
             </div>
-            {hasChildren && isExpanded ? (
-              <NamespaceTreeBranch
-                nodes={children}
-                depth={depth + 1}
-                selected={selected}
-                expandedIds={expandedIds}
-                forceExpand={forceExpand}
-                onToggleExpand={onToggleExpand}
-                onSelect={onSelect}
-              />
+            {hasChildren ? (
+              <Collapsible open={isExpanded}>
+                <CollapsiblePanel>
+                  <NamespaceTreeBranch
+                    nodes={children}
+                    depth={depth + 1}
+                    selected={selected}
+                    expandedIds={expandedIds}
+                    forceExpand={forceExpand}
+                    onToggleExpand={onToggleExpand}
+                    onSelect={onSelect}
+                  />
+                </CollapsiblePanel>
+              </Collapsible>
             ) : null}
           </li>
         );
@@ -491,12 +494,15 @@ function CloneRootPopover({
                   }}
                 >
                   <Toggle value="flat">
+                    <FolderIcon />
                     <T>Flat</T>
                   </Toggle>
                   <Toggle value="group">
+                    <FolderTreeIcon />
                     <T>By group</T>
                   </Toggle>
                   <Toggle value="ghq">
+                    <GlobeIcon />
                     <T>Host + group</T>
                   </Toggle>
                 </ToggleGroup>
@@ -648,6 +654,7 @@ export function RepositoriesPage() {
   const hasGitLabAccess =
     configuredHosts.length > 0 ||
     (gitlabDiscovery?.status === "available" && gitlabDiscovery.auth.status === "authenticated");
+  const { Icon: GitLabIcon } = getSourceControlPresentationForKind(GITLAB_KIND);
 
   const namespacesQuery = useEnvironmentQuery(
     activeEnvironmentId && hasGitLabAccess
@@ -928,64 +935,15 @@ export function RepositoriesPage() {
 
   return (
     <SidebarInset className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <WorkspacePageHeader electron={isElectron} className="justify-between border-b border-border">
-        <div className="flex min-w-0 items-center gap-3 [-webkit-app-region:no-drag]">
-          <WorkspaceBreadcrumb ariaLabel={gt("Repositories")}>
-            <WorkspaceBreadcrumbItem current>
-              <span className="flex items-center gap-2">
-                <FolderGit2Icon className="size-4 text-muted-foreground" />
-                <T>Repositories</T>
-              </span>
-            </WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
-
-          {environments.length > 1 && activeEnvironmentId ? (
-            <Select
-              value={activeEnvironmentId}
-              onValueChange={(value) => {
-                if (!value) return;
-                setSelectedEnvironmentId(value as EnvironmentId);
-                setSelectedHost("");
-                setSelectedNamespace({ mode: "all" });
-                setPage(1);
-                setSelectedRepos(new Map());
-              }}
-            >
-              <SelectTrigger size="sm" className="w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup>
-                {environments.map((env) => (
-                  <SelectItem key={env.environmentId} value={env.environmentId}>
-                    {env.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          ) : null}
-
-          {configuredHosts.length > 0 ? (
-            <Select
-              value={activeHost}
-              onValueChange={(value) => {
-                if (typeof value === "string" && value.length > 0) handleSelectHost(value);
-              }}
-            >
-              <SelectTrigger size="sm" className="w-52">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup>
-                {configuredHosts.map((host) => (
-                  <SelectItem key={host} value={host}>
-                    <span className="font-mono text-xs">{host}</span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          ) : null}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+      <WorkspacePageHeader electron={isElectron} className="relative bg-background">
+        <WorkspacePageTitle ariaLabel={gt("Repositories")}>
+          <T>Repositories</T>
+        </WorkspacePageTitle>
+        <div className="min-w-0 flex-1" />
+        <div
+          className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]"
+          data-workspace-titlebar-controls
+        >
           {batchSummary.total > 0 ? (
             <Button
               size="sm"
@@ -1028,25 +986,6 @@ export function RepositoriesPage() {
             />
           ) : null}
 
-          <ToggleGroup
-            value={[protocol]}
-            onValueChange={(values) => {
-              const next = values[0] as SourceControlCloneProtocol | undefined;
-              if (next) setProtocol(next);
-            }}
-            className="hidden lg:flex"
-          >
-            <Toggle value="auto">
-              <T>Auto</T>
-            </Toggle>
-            <Toggle value="ssh">
-              <T>SSH</T>
-            </Toggle>
-            <Toggle value="https">
-              <T>HTTPS</T>
-            </Toggle>
-          </ToggleGroup>
-
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1078,6 +1017,82 @@ export function RepositoriesPage() {
           </Button>
         </div>
       </WorkspacePageHeader>
+
+      <WorkspacePageToolbar>
+        {environments.length > 1 && activeEnvironmentId ? (
+          <Select
+            value={activeEnvironmentId}
+            onValueChange={(value) => {
+              if (!value) return;
+              setSelectedEnvironmentId(value as EnvironmentId);
+              setSelectedHost("");
+              setSelectedNamespace({ mode: "all" });
+              setPage(1);
+              setSelectedRepos(new Map());
+            }}
+          >
+            <SelectTrigger size="sm" className="w-40">
+              <SelectValue>
+                {environments.find((env) => env.environmentId === activeEnvironmentId)?.label ??
+                  activeEnvironmentId}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              {environments.map((env) => (
+                <SelectItem key={env.environmentId} value={env.environmentId}>
+                  {env.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        ) : null}
+
+        {configuredHosts.length > 0 ? (
+          <Select
+            value={activeHost}
+            onValueChange={(value) => {
+              if (typeof value === "string" && value.length > 0) handleSelectHost(value);
+            }}
+          >
+            <SelectTrigger size="sm" className="w-52">
+              <GitLabIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <SelectValue>
+                <span className="font-mono text-xs">{activeHost}</span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              {configuredHosts.map((host) => (
+                <SelectItem key={host} value={host}>
+                  <span className="inline-flex items-center gap-1.5 font-mono text-xs">
+                    <GitLabIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span>{host}</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        ) : null}
+        <ToggleGroup
+          value={[protocol]}
+          onValueChange={(values) => {
+            const next = values[0] as SourceControlCloneProtocol | undefined;
+            if (next) setProtocol(next);
+          }}
+        >
+          <Toggle value="auto">
+            <ZapIcon />
+            <T>Auto</T>
+          </Toggle>
+          <Toggle value="ssh">
+            <KeyRoundIcon />
+            <T>SSH</T>
+          </Toggle>
+          <Toggle value="https">
+            <GlobeIcon />
+            <T>HTTPS</T>
+          </Toggle>
+        </ToggleGroup>
+      </WorkspacePageToolbar>
 
       {!activeEnvironmentId ? (
         <div className="flex flex-1 items-center justify-center p-6">
@@ -1148,7 +1163,7 @@ export function RepositoriesPage() {
               return observeResize(row, measure);
             }}
             className={cn(
-              "relative flex w-full shrink-0 flex-col border-b border-border bg-muted/15 md:border-r md:border-b-0",
+              "relative flex w-full shrink-0 flex-col border-b border-border/60 bg-background md:border-r md:border-b-0",
               !desktopGroupsResizable && "md:w-76 lg:w-80",
             )}
             style={
@@ -1160,7 +1175,7 @@ export function RepositoriesPage() {
                 : undefined
             }
           >
-            <div className="border-b border-border p-3">
+            <div className="border-b border-border/60 p-3">
               <InputGroup>
                 <InputGroupAddon>
                   <SearchIcon className="size-3.5 text-muted-foreground" />
@@ -1180,10 +1195,10 @@ export function RepositoriesPage() {
                   type="button"
                   onClick={() => handleSelectNamespace({ mode: "all" })}
                   className={cn(
-                    "flex min-h-9 cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                    "flex min-h-9 cursor-pointer select-none items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors duration-150",
                     selectedNamespace.mode === "all"
-                      ? "bg-accent text-accent-foreground font-medium shadow-2xs"
-                      : "text-foreground/85 hover:bg-muted/70",
+                      ? "bg-accent text-accent-foreground font-medium"
+                      : "text-foreground/85 hover:bg-accent/60",
                   )}
                 >
                   <LayersIcon
@@ -1212,11 +1227,11 @@ export function RepositoriesPage() {
                       })
                     }
                     className={cn(
-                      "flex min-h-9 cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                      "flex min-h-9 cursor-pointer select-none items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors duration-150",
                       selectedNamespace.mode === "namespace" &&
                         selectedNamespace.id === namespaceTree.personal.id
-                        ? "bg-accent text-accent-foreground font-medium shadow-2xs"
-                        : "text-foreground/85 hover:bg-muted/70",
+                        ? "bg-accent text-accent-foreground font-medium"
+                        : "text-foreground/85 hover:bg-accent/60",
                     )}
                   >
                     <UserIcon
@@ -1286,9 +1301,9 @@ export function RepositoriesPage() {
               </div>
 
               {namespacesQuery.isPending && !namespacesQuery.data ? (
-                <div className="grid gap-1.5 p-2">
+                <div className="loading-shimmer grid gap-2 p-2">
                   {GROUP_SKELETON_KEYS.map((key) => (
-                    <Skeleton key={key} className="h-6 w-full" />
+                    <GhostBar key={key} className="h-5 w-full" />
                   ))}
                 </div>
               ) : namespacesQuery.error ? (
@@ -1376,43 +1391,30 @@ export function RepositoriesPage() {
           {/* Right pane: Repository list & batch clone bar */}
           <main className="flex min-h-0 min-w-0 flex-1 flex-col">
             {/* Filter & search toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border px-4 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border/50 px-4 py-2.5">
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                 <div className="min-w-52 flex-1 max-w-sm">
-                  <InputGroup>
-                    <InputGroupAddon>
-                      <SearchIcon className="size-3.5 text-muted-foreground" />
-                    </InputGroupAddon>
-                    <InputGroupInput
-                      size="sm"
-                      value={searchInput}
-                      onChange={(event) => {
-                        setSearchInput(event.target.value);
-                        setPage(1);
-                      }}
-                      placeholder={
-                        selectedNamespace.mode === "namespace"
-                          ? gt("Search in {group}…", { group: selectedNamespace.path })
-                          : gt("Search all accessible repositories…")
-                      }
-                    />
-                    {searchInput ? (
-                      <InputGroupAddon align="inline-end">
-                        <Button
-                          type="button"
-                          size="icon-xs"
-                          variant="ghost"
-                          onClick={() => {
-                            setSearchInput("");
-                            setPage(1);
-                          }}
-                          aria-label={gt("Clear search")}
-                        >
-                          <XIcon className="size-3.5" />
-                        </Button>
-                      </InputGroupAddon>
-                    ) : null}
-                  </InputGroup>
+                  <PullRequestSearchInput
+                    value={searchInput}
+                    busy={
+                      searchInput.trim() !== debouncedSearch ||
+                      (debouncedSearch.length > 0 && repositoriesQuery.isPending)
+                    }
+                    label={gt("Search all accessible repositories…")}
+                    placeholder={
+                      selectedNamespace.mode === "namespace"
+                        ? gt("Search in {group}…", { group: selectedNamespace.path })
+                        : gt("Search all accessible repositories…")
+                    }
+                    onChange={(next) => {
+                      setSearchInput(next);
+                      setPage(1);
+                    }}
+                    onSubmit={(next) => {
+                      setSearchInput(next);
+                      setPage(1);
+                    }}
+                  />
                 </div>
 
                 <ToggleGroup
@@ -1423,12 +1425,15 @@ export function RepositoriesPage() {
                   }}
                 >
                   <Toggle value="all">
+                    <LayersIcon />
                     <T>All</T>
                   </Toggle>
                   <Toggle value="not_cloned">
+                    <DownloadIcon />
                     <T>Not cloned</T>
                   </Toggle>
                   <Toggle value="imported">
+                    <CheckCircle2Icon />
                     <T>Imported</T>
                   </Toggle>
                 </ToggleGroup>
@@ -1466,7 +1471,7 @@ export function RepositoriesPage() {
             </div>
 
             {/* Scope header + batch selection bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 bg-muted/20 px-4 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-background px-4 py-2">
               <div className="flex min-w-0 items-center gap-2.5">
                 <Checkbox
                   checked={allVisibleSelected}
@@ -1495,7 +1500,7 @@ export function RepositoriesPage() {
               </div>
 
               {selectableSelectedRepos.length > 0 ? (
-                <div className="flex items-center gap-2">
+                <div className={cn("flex items-center gap-2", WORKSPACE_BAR_ENTER_CLASS)}>
                   <Badge size="sm" variant="secondary">
                     <T>
                       <Var>{selectableSelectedRepos.length}</Var> selected
@@ -1521,12 +1526,10 @@ export function RepositoriesPage() {
             </div>
 
             {/* Repository rows */}
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
               {repositoriesQuery.isPending && !repositoriesQuery.data ? (
-                <div className="grid gap-2 p-4">
-                  {REPO_SKELETON_KEYS.map((key) => (
-                    <Skeleton key={key} className="h-16 w-full" />
-                  ))}
+                <div className="p-2">
+                  <PullRequestListGhost rows={8} />
                 </div>
               ) : repositoriesQuery.error ? (
                 <div className="p-4">
@@ -1561,18 +1564,23 @@ export function RepositoriesPage() {
                   </Empty>
                 </div>
               ) : (
-                <ul className="divide-y divide-border/70">
+                <ul
+                  key={`${selectedNamespace.mode === "namespace" ? selectedNamespace.id : "all"}:${statusFilter}`}
+                  className={cn("flex flex-col gap-0.5 p-2", WORKSPACE_TAB_PANEL_CLASS)}
+                >
                   {visibleRepositories.map(
                     ({ repo, match, isCloning, isImported, existsLocally, localFolderPath }) => {
                       const isSelected = !existsLocally && selectedRepos.has(repo.id);
                       const clone = match.clone;
-                      const updatedLabel = formatActivityDate(repo.lastActivityAt);
+                      const updatedTime = repo.lastActivityAt ? (
+                        <RelativeTime timestamp={repo.lastActivityAt} />
+                      ) : null;
                       return (
                         <li
                           key={repo.id}
                           className={cn(
-                            "flex flex-col gap-2 px-4 py-3 transition-colors sm:flex-row sm:items-center sm:justify-between",
-                            isSelected ? "bg-primary/5" : "hover:bg-muted/25",
+                            "flex flex-col gap-2 rounded-md px-3 py-2.5 transition-colors duration-150 sm:flex-row sm:items-center sm:justify-between",
+                            isSelected ? "bg-accent" : "hover:bg-accent/60",
                           )}
                         >
                           <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -1627,10 +1635,10 @@ export function RepositoriesPage() {
                                     {repo.defaultBranch}
                                   </span>
                                 ) : null}
-                                {updatedLabel ? (
+                                {updatedTime ? (
                                   <span>
                                     <T>
-                                      Updated <Var>{updatedLabel}</Var>
+                                      Updated <Var>{updatedTime}</Var>
                                     </T>
                                   </span>
                                 ) : null}
@@ -1648,7 +1656,7 @@ export function RepositoriesPage() {
                                   </div>
                                   <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                                     <div
-                                      className="h-full rounded-full bg-primary transition-all"
+                                      className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out motion-reduce:transition-none"
                                       style={{ width: `${clone.percent ?? 15}%` }}
                                     />
                                   </div>
@@ -1783,7 +1791,7 @@ export function RepositoriesPage() {
 
             {/* Pagination bar */}
             {repositoriesQuery.data && (page > 1 || repositoriesQuery.data.nextPage !== null) ? (
-              <div className="flex items-center justify-between border-t border-border px-4 py-2 text-xs text-muted-foreground">
+              <div className="flex items-center justify-between border-t border-border/60 px-4 py-2 text-xs text-muted-foreground">
                 <span>
                   <T>
                     Page <Var>{page}</Var>

@@ -19,11 +19,14 @@ import { issueAutomationWorkbenchTitleZh } from "@t3tools/shared/issueAutomation
 import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, useLocale } from "gt-react";
 import {
+  ActivityIcon,
   BarChart3Icon,
   BotIcon,
+  CheckCircle2Icon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   CircleDotIcon,
   ClockIcon,
   FolderGit2Icon,
@@ -31,19 +34,27 @@ import {
   LayersIcon,
   MessageSquareIcon,
   PanelRightIcon,
+  PencilIcon,
   PlayIcon,
   Plug2Icon,
   Settings2Icon,
   UserRoundIcon,
+  WorkflowIcon,
+  XCircleIcon,
   XIcon,
 } from "lucide-react";
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import { ComposerSurface } from "~/components/chat/ComposerSurface";
 import {
   OfficialModelPicker,
   useOfficialModelCatalog,
 } from "~/components/chat/OfficialModelPicker";
+import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import { PullRequestSearchInput } from "~/components/pullRequest/PullRequestListFilters";
 import {
   PULL_REQUEST_ROW_CLASS,
@@ -53,8 +64,14 @@ import {
 import { PullRequestMetaLine } from "~/components/pullRequest/pullRequestPresentation";
 import { RelativeTime } from "~/components/RelativeTime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
-import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
+import { WorkspaceInspectorDrawer } from "~/components/WorkspaceInspectorDrawer";
+import {
+  WORKSPACE_BAR_ENTER_CLASS,
+  WORKSPACE_TAB_PANEL_CLASS,
+  WorkspacePageHeader,
+  WorkspacePageTitle,
+  WorkspacePageToolbar,
+} from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -67,7 +84,7 @@ import { issueAutomationEnvironment, useIssueAutomationLiveState } from "~/state
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -91,7 +108,6 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Sheet, SheetPopup } from "../ui/sheet";
 import { SidebarInset } from "../ui/sidebar";
-import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -236,6 +252,7 @@ export function IssueAutomationPage() {
     snapshot.connectors.find((c) => c.id === prefs.selectedConnectorId) ??
     snapshot.connectors[0] ??
     null;
+  const activeConnectorHealthy = activeConnector !== null && activeConnector.status === "connected";
 
   const sortedConnectorScopes = activeConnector ? sortScopesByIdDesc(activeConnector.scopes) : [];
 
@@ -275,6 +292,7 @@ export function IssueAutomationPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorSubTab>("detail");
+  const [isDraggingInspector, setIsDraggingInspector] = useState(false);
 
   const [connectorModalOpen, setConnectorModalOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<IssueAutomationConnector | null>(null);
@@ -599,6 +617,7 @@ export function IssueAutomationPage() {
 
   const startResizeInspector = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    setIsDraggingInspector(true);
     const startX = event.clientX;
     const startWidth = inspectorWidth;
     let latestWidth = startWidth;
@@ -609,6 +628,7 @@ export function IssueAutomationPage() {
       setPrefs((prev) => ({ ...prev, inspectorWidth: latestWidth }));
     };
     const onUp = () => {
+      setIsDraggingInspector(false);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -649,6 +669,16 @@ export function IssueAutomationPage() {
       selectedConnectorId: profile.connectorId,
       scopeByConnector: { ...prev.scopeByConnector, [profile.connectorId]: profile.scopeId },
     }));
+  };
+
+  const handleInspectorSplitterKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const step = event.shiftKey ? 64 : 24;
+    const delta = event.key === "ArrowLeft" ? step : -step;
+    const maxAllowed = Math.min(MAX_INSPECTOR_WIDTH, Math.round(window.innerWidth * 0.62));
+    const nextWidth = Math.max(MIN_INSPECTOR_WIDTH, Math.min(maxAllowed, inspectorWidth + delta));
+    setPrefs((prev) => ({ ...prev, inspectorWidth: nextWidth }));
   };
 
   const handleDispatchIssues = async (keysToRun: ReadonlyArray<string>) => {
@@ -902,6 +932,14 @@ export function IssueAutomationPage() {
         onManualWriteBack={handleManualWriteBack}
         onCancelTask={(taskId) => void handleCancelTask(taskId)}
         onOpenThread={openThread}
+        onEditConnector={
+          activeConnector
+            ? () => {
+                setEditingConnector(activeConnector);
+                setConnectorModalOpen(true);
+              }
+            : undefined
+        }
         onClose={() => setInspectorOpen(false)}
       />
     ) : null;
@@ -914,52 +952,9 @@ export function IssueAutomationPage() {
             data-chat-header
             electron={isElectron}
             reserveNativeControls={!desktopInspectorVisible}
-            className="relative shrink-0 border-b border-border/50 bg-background"
+            className="relative bg-background"
           >
-            <WorkspaceBreadcrumb ariaLabel={pageTitle}>
-              <WorkspaceBreadcrumbItem current>
-                <h1 className="truncate font-semibold">{pageTitle}</h1>
-              </WorkspaceBreadcrumbItem>
-            </WorkspaceBreadcrumb>
-
-            {snapshot.connectors.length > 0 ? (
-              <div className="hidden items-center [-webkit-app-region:no-drag] sm:flex">
-                <ToggleGroup
-                  variant="segmented"
-                  size="segmented"
-                  value={[activeTab]}
-                  onValueChange={(next) => {
-                    const picked = next[0] as WorkbenchTab | undefined;
-                    if (picked) setActiveTab(picked);
-                  }}
-                >
-                  <Toggle value="issues">
-                    <T>Issue list</T>
-                  </Toggle>
-                  <Toggle value="runs">
-                    <span className="inline-flex items-center gap-1.5">
-                      {snapshot.activeRunCount > 0 ? <Spinner size="xs" /> : null}
-                      <T>Runs</T>
-                      <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                        {taskGroups.length}
-                      </span>
-                    </span>
-                  </Toggle>
-                  <Toggle value="analytics">
-                    <T>Analytics</T>
-                  </Toggle>
-                  <Toggle value="rules">
-                    <span className="inline-flex items-center gap-1.5">
-                      <T>Automation</T>
-                      <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                        {snapshot.profiles.length}
-                      </span>
-                    </span>
-                  </Toggle>
-                </ToggleGroup>
-              </div>
-            ) : null}
-
+            <WorkspacePageTitle ariaLabel={pageTitle}>{pageTitle}</WorkspacePageTitle>
             <div className="min-w-0 flex-1" />
 
             <div
@@ -967,19 +962,41 @@ export function IssueAutomationPage() {
               data-workspace-titlebar-controls
             >
               {activeConnector ? (
-                <span className="hidden items-center gap-1.5 text-xs text-muted-foreground xl:inline-flex">
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "size-2 rounded-full",
-                      activeConnector.status === "connected" ? "bg-primary" : "bg-warning",
-                    )}
-                  />
-                  <span className="max-w-48 truncate">{activeConnector.name}</span>
-                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant={activeConnectorHealthy ? "ghost" : "outline"}
+                        aria-label={gt("Edit connection settings")}
+                        onClick={() => {
+                          setEditingConnector(activeConnector);
+                          setConnectorModalOpen(true);
+                        }}
+                      />
+                    }
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        activeConnectorHealthy ? "bg-primary" : "bg-warning",
+                      )}
+                    />
+                    <span className="max-w-28 truncate xl:max-w-48">
+                      {activeConnector.name}
+                      <span className="hidden text-muted-foreground xl:inline">
+                        {" "}
+                        · {activeConnector.viewerName ?? activeConnector.name}
+                      </span>
+                    </span>
+                    <PencilIcon className="size-3 shrink-0 opacity-70" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">{gt("Edit connection settings")}</TooltipPopup>
+                </Tooltip>
               ) : (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="outline"
                   disabled={!canConfigureConnector}
                   onClick={() => {
@@ -1007,7 +1024,7 @@ export function IssueAutomationPage() {
                 </Button>
               ) : activeConnector ? (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="outline"
                   onClick={() => {
                     setEditingProfile(matchedScopeProfile);
@@ -1043,10 +1060,9 @@ export function IssueAutomationPage() {
           </WorkspacePageHeader>
 
           {snapshot.connectors.length > 0 ? (
-            <div className="flex shrink-0 border-b border-border/50 bg-background px-5 py-2.5 sm:hidden">
+            <WorkspacePageToolbar>
               <ToggleGroup
-                variant="segmented"
-                size="segmented"
+                className="max-w-full flex-wrap"
                 value={[activeTab]}
                 onValueChange={(next) => {
                   const picked = next[0] as WorkbenchTab | undefined;
@@ -1054,19 +1070,27 @@ export function IssueAutomationPage() {
                 }}
               >
                 <Toggle value="issues">
+                  <CircleDotIcon className="size-3.5" />
                   <T>Issue list</T>
                 </Toggle>
                 <Toggle value="runs">
+                  {snapshot.activeRunCount > 0 ? (
+                    <Spinner size="xs" />
+                  ) : (
+                    <WorkflowIcon className="size-3.5" />
+                  )}
                   <T>Runs</T> ({taskGroups.length})
                 </Toggle>
                 <Toggle value="analytics">
+                  <BarChart3Icon className="size-3.5" />
                   <T>Analytics</T>
                 </Toggle>
                 <Toggle value="rules">
-                  <T>Automation</T> ({snapshot.profiles.length})
+                  <Settings2Icon className="size-3.5" />
+                  <T>Automation</T>
                 </Toggle>
               </ToggleGroup>
-            </div>
+            </WorkspacePageToolbar>
           ) : null}
 
           {snapshot.connectors.length === 0 ? (
@@ -1102,7 +1126,10 @@ export function IssueAutomationPage() {
               </Empty>
             </div>
           ) : activeTab === "issues" ? (
-            <>
+            <div
+              key="issues"
+              className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
+            >
               {/* Fixed Non-Scrolling Issues Toolbar */}
               <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-2.5 sm:px-7">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1115,7 +1142,7 @@ export function IssueAutomationPage() {
                       </Button>
                     </div>
                   ) : (
-                    <div className="min-w-48 flex-1">
+                    <div className="min-w-32 max-w-64 flex-1">
                       <PullRequestSearchInput
                         value={keyword}
                         busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
@@ -1246,10 +1273,10 @@ export function IssueAutomationPage() {
                       popupSide="bottom"
                       popupAlign="end"
                       triggerClassName={cn(
-                        "h-8 min-w-0",
+                        "h-8 min-w-0 text-left",
                         desktopInspectorVisible
-                          ? "hidden w-44 2xl:inline-flex"
-                          : "hidden w-52 xl:inline-flex",
+                          ? "hidden w-36 2xl:inline-flex"
+                          : "hidden w-40 xl:inline-flex",
                       )}
                     />
                   ) : null}
@@ -1330,20 +1357,29 @@ export function IssueAutomationPage() {
               </div>
 
               {/* Independent Scrollable Issue Rows */}
-              <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-24 sm:px-7">
+              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-24 sm:px-7">
                 {remoteIssuesQuery.isPending && issues.length === 0 ? (
-                  <div className="space-y-2 pt-2">
-                    <Skeleton className="h-12 w-full" />
-                    <Skeleton className="h-12 w-full" />
-                    <Skeleton className="h-12 w-full" />
-                    <Skeleton className="h-12 w-full" />
-                    <Skeleton className="h-12 w-full" />
-                  </div>
+                  <PullRequestListGhost rows={6} />
                 ) : remoteIssuesQuery.error !== null && issues.length === 0 ? (
                   <div className="pt-3">
                     <Alert variant="error">
                       <AlertTitle>{gt("Could not load issues from ZenTao")}</AlertTitle>
                       <AlertDescription>{remoteIssuesQuery.error}</AlertDescription>
+                      {activeConnector ? (
+                        <AlertAction>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingConnector(activeConnector);
+                              setConnectorModalOpen(true);
+                            }}
+                          >
+                            <PencilIcon className="size-3.5" />
+                            <T>Edit connection</T>
+                          </Button>
+                        </AlertAction>
+                      ) : null}
                     </Alert>
                   </div>
                 ) : issues.length === 0 ? (
@@ -1462,9 +1498,12 @@ export function IssueAutomationPage() {
                   </div>
                 )}
               </div>
-            </>
+            </div>
           ) : activeTab === "runs" ? (
-            <>
+            <div
+              key="runs"
+              className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
+            >
               {/* Fixed Non-Scrolling Runs Toolbar + Compact Telemetry Strip */}
               <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-3 sm:px-7">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1478,7 +1517,8 @@ export function IssueAutomationPage() {
                     }}
                   >
                     <Toggle value="all">
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <LayersIcon />
                         <T>All</T>
                         <span className="font-mono text-2xs text-muted-foreground tabular-nums">
                           {groupCounts.all}
@@ -1486,7 +1526,8 @@ export function IssueAutomationPage() {
                       </span>
                     </Toggle>
                     <Toggle value="active">
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <ActivityIcon />
                         <T>Running</T>
                         {groupCounts.active > 0 ? (
                           <span className="font-mono text-2xs text-info tabular-nums">
@@ -1496,7 +1537,8 @@ export function IssueAutomationPage() {
                       </span>
                     </Toggle>
                     <Toggle value="needs_human">
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CircleAlertIcon />
                         <T>Needs review</T>
                         {groupCounts.needs_human > 0 ? (
                           <span className="font-mono text-2xs text-warning tabular-nums">
@@ -1506,7 +1548,8 @@ export function IssueAutomationPage() {
                       </span>
                     </Toggle>
                     <Toggle value="completed">
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CheckCircle2Icon />
                         <T>Completed</T>
                         <span className="font-mono text-2xs text-muted-foreground tabular-nums">
                           {groupCounts.completed}
@@ -1514,7 +1557,8 @@ export function IssueAutomationPage() {
                       </span>
                     </Toggle>
                     <Toggle value="failed">
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <XCircleIcon />
                         <T>Failed</T>
                         {groupCounts.failed > 0 ? (
                           <span className="font-mono text-2xs text-destructive tabular-nums">
@@ -1584,7 +1628,7 @@ export function IssueAutomationPage() {
               </div>
 
               {/* Independent Scrollable Run Rows */}
-              <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
+              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
                 {filteredGroups.length === 0 ? (
                   <Empty size="compact" className="my-12">
                     <EmptyHeader>
@@ -1786,9 +1830,12 @@ export function IssueAutomationPage() {
                   </div>
                 )}
               </div>
-            </>
+            </div>
           ) : activeTab === "analytics" ? (
-            <>
+            <div
+              key="analytics"
+              className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
+            >
               {/* Fixed Non-Scrolling Analytics Filter Bar */}
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-background px-5 py-3 sm:px-7">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1802,9 +1849,11 @@ export function IssueAutomationPage() {
                     }}
                   >
                     <Toggle value="all">
+                      <LayersIcon />
                       <T>All products</T>
                     </Toggle>
                     <Toggle value="current">
+                      <FolderGit2Icon />
                       <span className="max-w-52 truncate">
                         {effectiveScopeName
                           ? `#${effectiveScopeId} · ${effectiveScopeName}`
@@ -1848,7 +1897,7 @@ export function IssueAutomationPage() {
                 </ToggleGroup>
               </div>
 
-              <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 sm:px-7">
+              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 sm:px-7">
                 <IssueAutomationAnalyticsView
                   summary={analyticsSummary}
                   onJumpToRuns={(targetFilter) => {
@@ -1860,9 +1909,15 @@ export function IssueAutomationPage() {
                   }}
                 />
               </div>
-            </>
+            </div>
           ) : (
-            <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-24 sm:px-7">
+            <div
+              key="rules"
+              className={cn(
+                "topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-24 sm:px-7",
+                WORKSPACE_TAB_PANEL_CLASS,
+              )}
+            >
               <IssueAutomationRulesView
                 environmentId={environmentId}
                 canConfigureConnector={canConfigureConnector}
@@ -1912,7 +1967,13 @@ export function IssueAutomationPage() {
           )}
 
           {activeTab === "issues" && checkedIssueKeys.length > 0 ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
+            <div
+              className={cn(
+                "pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4",
+                WORKSPACE_BAR_ENTER_CLASS,
+                "starting:translate-y-2",
+              )}
+            >
               <ComposerSurface.Shell className="pointer-events-auto w-full max-w-3xl">
                 <ComposerSurface.Host>
                   <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5">
@@ -2000,21 +2061,23 @@ export function IssueAutomationPage() {
           ) : null}
         </div>
 
-        {desktopInspectorVisible ? (
-          <aside
-            className="relative hidden h-full min-h-0 shrink-0 border-l border-border bg-background lg:flex"
-            style={{ width: `${String(inspectorWidth)}px` }}
-          >
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label={gt("Resize detail inspector")}
-              onPointerDown={startResizeInspector}
-              className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize transition-colors hover:bg-ring/30"
-            />
-            {inspectorBody}
-          </aside>
-        ) : null}
+        <WorkspaceInspectorDrawer
+          open={desktopInspectorVisible}
+          scopeKey={environmentId}
+          width={inspectorWidth}
+          isResizing={isDraggingInspector}
+          resizeLabel={gt("Resize detail inspector")}
+          onResizePointerDown={startResizeInspector}
+          onResizeKeyDown={handleInspectorSplitterKeyDown}
+          onResizeDoubleClick={() =>
+            setPrefs((prev) => ({
+              ...prev,
+              inspectorWidth: DEFAULT_WORKBENCH_PREFS.inspectorWidth,
+            }))
+          }
+        >
+          {inspectorBody}
+        </WorkspaceInspectorDrawer>
 
         {!isWideDesktop && inspectorActive ? (
           <Sheet open={inspectorActive} onOpenChange={setInspectorOpen}>
@@ -2027,11 +2090,20 @@ export function IssueAutomationPage() {
 
       {environmentId && connectorModalOpen ? (
         <ConnectorModal
+          key={editingConnector?.id ?? "new"}
           open={connectorModalOpen}
           onOpenChange={setConnectorModalOpen}
           environmentId={environmentId}
           platforms={snapshot.platforms}
           initial={editingConnector}
+          onSaved={(saved) => {
+            if (!editingConnector) {
+              handleSelectConnector(saved.id);
+            } else if (saved.id === activeConnector?.id) {
+              remoteIssuesQuery.refresh();
+              remoteDetailQuery.refresh();
+            }
+          }}
         />
       ) : null}
 

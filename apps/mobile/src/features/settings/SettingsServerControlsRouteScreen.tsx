@@ -64,7 +64,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "sidebarAutoSettleOnMerge",
     "sidebarAutoSettleAfterDays",
   ],
-  "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge"],
+  "source-control": ["defaultAutoPull", "pullRequestOriginOnly", "removeAgentCreditsOnMerge"],
   worktrees: [
     "newWorktreesStartFromOrigin",
     "worktreeSubmodules",
@@ -434,6 +434,21 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     disabled={disabledFor("removeAgentCreditsOnMerge")}
                     onValueChange={(value) => write({ removeAgentCreditsOnMerge: value })}
                   />
+                  <View className="border-t border-border-subtle">
+                    <SettingsSwitchRow
+                      icon="arrow.triangle.branch"
+                      label={gt("Use origin remote only")}
+                      subtitle={managedSubtitle(
+                        "pullRequestOriginOnly",
+                        gt(
+                          "Ignore upstream remotes and list pull requests only from each repository's origin remote. Explicit links to upstream pull requests still open.",
+                        ),
+                      )}
+                      value={uniform("pullRequestOriginOnly")}
+                      disabled={disabledFor("pullRequestOriginOnly")}
+                      onValueChange={(value) => write({ pullRequestOriginOnly: value })}
+                    />
+                  </View>
                 </SettingsSection>
                 <SettingsSection title={gt("Default branch")}>
                   <SettingsSwitchRow

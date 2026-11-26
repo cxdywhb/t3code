@@ -1003,7 +1003,7 @@ export function PullRequestTimelineTab({
       tabIndex={-1}
       data-workspace-focus-default
       className="scrollbar-gutter-both h-full px-4 outline-none"
-      contentContainerClassName="relative mx-auto w-full max-w-3xl before:absolute before:bottom-10 before:left-[15px] before:top-6 before:w-px before:bg-border/45"
+      contentContainerClassName="relative w-full max-w-3xl before:absolute before:bottom-10 before:left-[15px] before:top-6 before:w-px before:bg-border/45"
       ListHeaderComponent={
         anchor !== null && targetIndex < 0 && revealUrl === undefined ? (
           <p role="status" className="py-4 text-xs text-muted-foreground">

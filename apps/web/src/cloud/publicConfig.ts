@@ -62,12 +62,19 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
 }
 
 let desktopRelayTelemetry: boolean | null = null;
+let serverRelayTelemetry: boolean | null = null;
 
-/** Whether relay spans may be exported now; the desktop host may not know yet at startup. */
+export function setServerRelayTelemetry(allowed: boolean | null): void {
+  serverRelayTelemetry = allowed;
+}
+
 export function relayTelemetryEnabled(): boolean | null {
-  if (typeof window === "undefined" || !window.desktopBridge) return true;
-  desktopRelayTelemetry ??= window.desktopBridge.getRelayTelemetryEnabled();
-  return desktopRelayTelemetry;
+  if (typeof window === "undefined") return false;
+  if (window.desktopBridge) {
+    desktopRelayTelemetry ??= window.desktopBridge.getRelayTelemetryEnabled();
+    return desktopRelayTelemetry;
+  }
+  return serverRelayTelemetry;
 }
 
 export function resolveRelayTracingConfig() {

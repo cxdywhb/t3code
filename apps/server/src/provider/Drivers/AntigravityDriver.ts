@@ -2,6 +2,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import {
   AntigravitySettings,
   ProviderDriverKind,
+  ProviderInstanceId,
   ProviderSetupError,
   RuntimeMode,
   settingsSecretLiteral,
@@ -580,6 +581,7 @@ export const AntigravityDriver: ProviderDriver<
       profileDirectory,
       authMethod: auth.authMethod,
       environment: processEnvironment,
+      allowKeyringFallback: instanceId === ProviderInstanceId.make(DRIVER),
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -700,7 +702,9 @@ export const AntigravityDriver: ProviderDriver<
               detail: isAntigravitySignInRequiredError(cause)
                 ? "Sign in to Antigravity in provider settings before refreshing models."
                 : cause._tag === "ProviderSetupError" &&
-                    (cause.operation === "configure" || cause.operation === "start")
+                    (cause.operation === "configure" ||
+                      cause.operation === "resolve" ||
+                      cause.operation === "start")
                   ? cause.detail
                   : cause._tag === "AcpTransportError" &&
                       isProviderSetupError(cause.cause) &&

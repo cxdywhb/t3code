@@ -74,6 +74,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     userInfoAt?: number;
     missingToken?: boolean;
     authMethod?: "oauth-personal" | "oauth-business" | "gemini-api-key";
+    allowKeyringFallback?: boolean;
     keyringSecret?: string;
     /** Reads the OS keyring instead of `keyringSecret`. */
     nativeKeyring?: boolean;
@@ -146,6 +147,9 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     profileDirectory,
     authMethod: options.authMethod ?? "oauth-personal",
     environment: options.environment ?? {},
+    ...(options.allowKeyringFallback === undefined
+      ? {}
+      : { allowKeyringFallback: options.allowKeyringFallback }),
     ...(options.nativeKeyring ? {} : { readKeyringSecret: Effect.succeed(options.keyringSecret) }),
   }).pipe(Effect.provideService(HttpClient.HttpClient, options.httpClient ?? http));
   return { ...usage, requests, writeToken, tokenPath };
@@ -745,6 +749,43 @@ describe("Antigravity subscription limits", () => {
         "Sign in with Google to see Antigravity limits.",
       );
       expect(limits.unavailable?.reason).not.toBe("unsupported");
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("falls back to the OS keyring only when allowed and prefers the profile file", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-09T12:00:00Z")));
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const keyringSecret = JSON.stringify({
+        token: {
+          access_token: "access-token",
+          refresh_token: "keyring-refresh",
+          expiry: "2026-10-09T14:00:00Z",
+        },
+      });
+      const fallback = yield* fixture({
+        missingToken: true,
+        allowKeyringFallback: true,
+        keyringSecret,
+      });
+      const keyringLimits = yield* fallback.probe;
+      expect(keyringLimits.unavailable).toBeUndefined();
+      expect(keyringLimits.windows).toHaveLength(4);
+
+      yield* fs.writeFileString(
+        path.join(path.dirname(fallback.tokenPath), "antigravity-oauth-token"),
+        JSON.stringify({
+          token: {
+            access_token: "access-token",
+            refresh_token: "profile-refresh",
+            expiry: "2026-10-09T14:00:00Z",
+          },
+        }),
+      );
+      const fileLimits = yield* fallback.probe;
+      expect(fileLimits.unavailable).toBeUndefined();
+      expect(fileLimits.credentialFingerprint).not.toBe(keyringLimits.credentialFingerprint);
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 

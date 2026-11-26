@@ -5,12 +5,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { act, fakeTimers, render } from "../../../test/render";
 
 vi.mock("~/hooks/useSettings", () => ({
-  useEnvironmentIdentificationMode: () => "none",
   useClientSettings: () => false,
-}));
-vi.mock("../SidebarStageBackdrop", () => ({
-  StageBackdropButtonArt: () => null,
-  useSidebarStageBackdropVariant: () => null,
 }));
 
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -34,6 +29,27 @@ function setup() {
     onSubmitMessage: vi.fn(),
   } satisfies ComponentProps<typeof ComposerPrimaryActions>;
 }
+
+it("keeps Send and Stop aligned with the same inset circle and hit target", async () => {
+  const props = setup();
+  await using screen = await render(<ComposerPrimaryActions {...props} />);
+  const stop = screen.getByRole("button", { name: "Stop generation" }).element();
+  const stopBox = stop.getBoundingClientRect();
+  const inset = getComputedStyle(stop, "::before").left;
+  expect(inset).toBe("3px");
+  await screen.rerender(
+    <ComposerPrimaryActions {...props} isRunning={false} canInterrupt={false} hasSendableContent />,
+  );
+  const send = screen.getByRole("button", { name: "Submit message" }).element();
+  const sendBox = send.getBoundingClientRect();
+  expect([sendBox.x, sendBox.y, sendBox.width, sendBox.height]).toEqual([
+    stopBox.x,
+    stopBox.y,
+    stopBox.width,
+    stopBox.height,
+  ]);
+  expect(getComputedStyle(send, "::before").left).toBe(inset);
+});
 
 it.each(["resume", "draft", "question"] as const)(
   "keeps repeat Stop clicks from reaching the action that replaces it (%s)",

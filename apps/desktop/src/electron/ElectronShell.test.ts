@@ -2,14 +2,18 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { openExternalMock, writeTextMock } = vi.hoisted(() => ({
+const { openExternalMock, openPathMock, showItemInFolderMock, writeTextMock } = vi.hoisted(() => ({
   openExternalMock: vi.fn(),
+  openPathMock: vi.fn(),
+  showItemInFolderMock: vi.fn(),
   writeTextMock: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   shell: {
     openExternal: openExternalMock,
+    openPath: openPathMock,
+    showItemInFolder: showItemInFolderMock,
   },
   clipboard: {
     writeText: writeTextMock,
@@ -21,6 +25,8 @@ import * as ElectronShell from "./ElectronShell.ts";
 describe("ElectronShell", () => {
   beforeEach(() => {
     openExternalMock.mockReset();
+    openPathMock.mockReset();
+    showItemInFolderMock.mockReset();
     writeTextMock.mockReset();
   });
 
@@ -188,6 +194,22 @@ describe("ElectronShell", () => {
 
       assert.equal(result, false);
       assert.equal(openExternalMock.mock.calls.length, 0);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("reveals local files and opens folders through Electron shell", () =>
+    Effect.gen(function* () {
+      openPathMock.mockResolvedValueOnce("").mockResolvedValueOnce("No such directory");
+      const electronShell = yield* ElectronShell.ElectronShell;
+
+      assert.equal(yield* electronShell.showItemInFolder("   "), false);
+      assert.equal(yield* electronShell.showItemInFolder("/tmp/T3-Code-1.2.4.zip"), true);
+      assert.deepEqual(showItemInFolderMock.mock.calls, [["/tmp/T3-Code-1.2.4.zip"]]);
+
+      assert.equal(yield* electronShell.openPath("   "), false);
+      assert.equal(yield* electronShell.openPath("/tmp/updates"), true);
+      assert.equal(yield* electronShell.openPath("/tmp/missing"), false);
+      assert.deepEqual(openPathMock.mock.calls, [["/tmp/updates"], ["/tmp/missing"]]);
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 });

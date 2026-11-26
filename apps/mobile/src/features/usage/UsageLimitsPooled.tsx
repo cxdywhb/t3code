@@ -4,16 +4,19 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { providerClients } from "@t3tools/client-runtime/provider-clients";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
+  collectHttpQuotaSources,
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
+  isPerAccountDashboardDriver,
   paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
+  type LimitPool,
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
 import {
-  collectExternalUsageLinks,
+  collectDashboardUsageLinks,
   collectLimitNotices,
   cursorUsageWindowDetails,
 } from "@t3tools/shared/usageLimitsCopy";
@@ -195,7 +198,7 @@ function PoolWindowCard({
   const inlineLabels = wide && segmentWidth >= 96;
   const inlineReset = wide && segmentWidth >= 150;
   const inlineName = wide && segmentWidth >= 220;
-  const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
+  const nextRefill = pool.resets.find((reset) => reset.at > now && reset.restoresPercent > 0);
   const openAccount = (account: LimitAccount) =>
     navigation.navigate("SettingsUsageAccount", {
       accountKey: account.key,
@@ -481,10 +484,18 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const pools = collectLimitPools(collectLimitAccounts(selected), now);
+  const pools = collectLimitPools(collectLimitAccounts(selected), now, "dashboard");
+  const splitPoolsByDriver = new Map<LimitPool["driver"], LimitPool[]>();
+  for (const pool of pools) {
+    if (!isPerAccountDashboardDriver(pool.driver)) continue;
+    const list = splitPoolsByDriver.get(pool.driver);
+    if (list) list.push(pool);
+    else splitPoolsByDriver.set(pool.driver, [pool]);
+  }
+  const quotaSources = collectHttpQuotaSources(selected);
   const m = useMessages();
   const notices = collectLimitNotices(selected, m);
-  const externalLinks = collectExternalUsageLinks(selected, m);
+  const externalLinks = collectDashboardUsageLinks(selected, m);
   const colors = useProviderColors();
   const gt = useGT();
   return (
@@ -492,23 +503,58 @@ export function UsageLimitsSection({
       {pools.length === 0 &&
       notices.length === 0 &&
       failedLabels.length === 0 &&
-      externalLinks.length === 0 ? (
+      externalLinks.length === 0 &&
+      quotaSources.length === 0 ? (
         <Text className="py-12 text-center text-base text-foreground-muted">
           {selected.size === 0
             ? gt("Select an environment to see limits.")
             : gt("No provider on the selected environments reports subscription limits.")}
         </Text>
       ) : null}
+      {quotaSources.map((source) => (
+        <View key={source.key} className="gap-3 rounded-[24px] bg-grouped-card p-4">
+          <Text className="text-base font-t3-medium text-foreground">{source.label}</Text>
+          {source.quotaAccounts?.map((account) => (
+            <View key={account.id} className="gap-1">
+              <Text className="text-sm font-t3-medium text-foreground">{account.label}</Text>
+              {account.windows.map((window) => {
+                const reset = resetLabels(window, now, m);
+                return (
+                  <View key={window.id} className="flex-row justify-between gap-3">
+                    <Text className="shrink text-sm text-foreground-muted">{window.label}</Text>
+                    <Text className="text-sm text-foreground-muted">
+                      {gt("{remaining}% left", { remaining: remainingPercent(window) })}
+                      {reset ? ` · ${reset.compact}` : ""}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+      ))}
       {pools.map((pool) => {
         const windows = displayLimitWindows(pool);
+        const splitAccount = isPerAccountDashboardDriver(pool.driver)
+          ? pool.accounts[0]
+          : undefined;
+        const driverPools = splitPoolsByDriver.get(pool.driver);
+        const accountNumber =
+          driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined;
+        const providerLabel = providerClients.get(pool.driver)?.label ?? pool.driver;
+        const accountLabel = splitAccount ? accountName(splitAccount, m) : null;
+        const title =
+          accountLabel && accountLabel !== providerLabel
+            ? `${providerLabel} · ${accountLabel}`
+            : accountNumber
+              ? `${providerLabel} #${accountNumber}`
+              : providerLabel;
         return (
-          <Fragment key={pool.driver}>
+          <Fragment key={splitAccount?.key ?? pool.driver}>
             <View className="gap-3">
               <View className="flex-row items-center gap-2 px-1">
                 <ProviderIcon provider={pool.driver} size={18} />
-                <Text className="text-base font-t3-medium text-foreground">
-                  {providerClients.get(pool.driver)?.label ?? pool.driver}
-                </Text>
+                <Text className="text-base font-t3-medium text-foreground">{title}</Text>
               </View>
               {windows.map((window) => {
                 const details =
@@ -535,7 +581,7 @@ export function UsageLimitsSection({
         );
       })}
       {externalLinks.map((link) => (
-        <View key={link.url} className="gap-3 rounded-xl border border-border-subtle p-4">
+        <View key={link.key} className="gap-3 rounded-xl border border-border-subtle p-4">
           <Text className="text-base font-t3-medium text-foreground">{link.label}</Text>
           <Text className="text-xs text-foreground-muted">{link.accounts.join(", ")}</Text>
           {link.message ? (
@@ -605,8 +651,8 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
       : new Map([...presentations].filter(([id]) => selectedIds.has(id)));
   const accounts = collectLimitAccounts(selected);
   const account = accounts.find((candidate) => candidate.key === accountKey);
-  const pool = collectLimitPools(accounts, now)
-    .find((candidate) => candidate.driver === account?.driver)
+  const pool = collectLimitPools(accounts, now, "dashboard")
+    .find((candidate) => candidate.accounts.some((member) => member.key === accountKey))
     ?.windows.find((candidate) => candidate.id === windowId && candidate.kind === windowKind);
   const window = pool?.members.find((member) => member.account.key === accountKey)?.window;
   const evenPace = window ? paceRemainingPercent(window, now) : null;

@@ -4,12 +4,17 @@ import ReactDOM from "react-dom/client";
 import "@fontsource-variable/inter";
 import "./index.css";
 
+import { trackKeyboardLayout } from "./keyboardLayout";
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
 import { isElectron } from "./env";
 import { startAppServices } from "./appInit";
 import { AppRoot } from "./AppRoot";
 import { whenLocaleReady } from "./i18n/runtime";
+import { dismissBootSplash } from "./lib/bootSplash";
 import { chunkLoadState } from "./lib/chunkReloadGuard";
+
+const stopTrackingKeyboardLayout = trackKeyboardLayout();
+import.meta.hot?.dispose(stopTrackingKeyboardLayout);
 
 const router = startAppServices();
 
@@ -42,6 +47,7 @@ export const startup = Promise.all([
         )}
       </React.StrictMode>,
     );
+    void dismissBootSplash();
   })
   .catch((error: unknown) => {
     if (chunkLoadState.reloadScheduled) return;

@@ -89,6 +89,7 @@ import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { diagnosisThreadId, isDiagnosisThread } from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectService from "../project/ProjectService.ts";
 import { buildZenTaoBugWebUrl } from "./connectors/zentao/ZenTaoClient.ts";
 import { sendFeishuTaskNotification } from "./FeishuTaskNotification.ts";
@@ -695,7 +696,10 @@ const make = Effect.gen(function* () {
             const launched = yield* threadLaunch.launch({
               ...sender,
               title: input.title,
-              runtimeMode: "full-access",
+              ...(input.summary.mode === "diagnose"
+                ? { threadId: diagnosisThreadId(NodeCrypto.randomUUID()) }
+                : {}),
+              runtimeMode: input.summary.mode === "diagnose" ? "approval-required" : "full-access",
               interactionMode: "default",
               workspaceStrategy: input.workspaceStrategy,
               initialMessage: message,
@@ -1560,7 +1564,7 @@ const make = Effect.gen(function* () {
     const normalized = yield* Effect.try({
       try: () => ({
         mcpUrl: parseMcpUrl(input.mcpUrl),
-        baseUrl: plugin.normalizeBaseUrl(input.baseUrl),
+        baseUrl: existing?.baseUrl ?? plugin.normalizeBaseUrl(input.baseUrl),
       }),
       catch: (cause) => mcpError("startConnectorAuth", cause),
     });
@@ -2073,7 +2077,9 @@ const make = Effect.gen(function* () {
     if (
       !isRepair &&
       previousThread &&
-      (previousThread.thread.archivedAt !== null ||
+      (!isDiagnosisThread(previousThread.thread.id) ||
+        previousThread.thread.runtimeMode !== "approval-required" ||
+        previousThread.thread.archivedAt !== null ||
         previousThread.thread.deletedAt !== null ||
         previousThread.thread.projectId !== previous?.targetProjectId ||
         previousThread.thread.worktreePath !== null ||
@@ -2087,7 +2093,7 @@ const make = Effect.gen(function* () {
     ) {
       return yield* new IssueAutomationError({
         operation: "analyzeIssues",
-        detail: "原会话尚未停止或工作区已经变更，暂时无法在原会话重新诊断",
+        detail: "只能复用已停止的只读诊断会话。请确认运行状态，旧会话请重新发起诊断。",
       });
     }
     const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));

@@ -104,6 +104,8 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  getDatabaseMigrationProgress: () =>
+    ipcRenderer.invoke(IpcChannels.GET_DATABASE_MIGRATION_PROGRESS_CHANNEL),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {
@@ -338,6 +340,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   downloadUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_DOWNLOAD_CHANNEL),
   installUpdate: (expectedVersion) =>
     ipcRenderer.invoke(IpcChannels.UPDATE_INSTALL_CHANNEL, expectedVersion),
+  revealDownloadedUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_REVEAL_DOWNLOADED_CHANNEL),
   cliCommand: {
     getState: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_GET_STATE_CHANNEL),
     install: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_INSTALL_CHANNEL),

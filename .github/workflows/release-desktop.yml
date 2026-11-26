@@ -281,6 +281,15 @@ jobs:
           name: js-bundle
           path: apps
 
+      - name: Restore web asset manifest
+        shell: bash
+        run: |
+          client=apps/server/dist/client
+          if [[ -f "$client/vite-manifest.release.json" ]]; then
+            mkdir -p "$client/.vite"
+            mv "$client/vite-manifest.release.json" "$client/.vite/manifest.json"
+          fi
+
       - name: Install cargo-xwin
         if: inputs.platform == 'win' && steps.resource_monitor_cache.outputs.cache-hit != 'true'
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
@@ -309,16 +318,10 @@ jobs:
           chmod +x "$dir/jsign"
           echo "T3CODE_JSIGN=$dir/jsign" >> "$GITHUB_ENV"
 
-      # The desktop build applies the same branding to apps/server/dist/client
-      # (resolveDesktopWebAssetBrand in scripts/build-desktop-artifact.ts); the
-      # CLI archive below ships that client and is now built first.
       - name: Apply web client branding
         if: inputs.cli_archive
         shell: bash
-        run: |
-          brand=production
-          if [[ "${{ inputs.version }}" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then brand=nightly; fi
-          node scripts/apply-web-brand-assets.ts "$brand" apps/server/dist/client
+        run: node scripts/apply-web-brand-assets.ts code apps/server/dist/client
 
       - name: Resolve target Node.js for the CLI executable
         id: target_node

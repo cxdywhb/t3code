@@ -163,7 +163,7 @@ export const PanelAnimationDurationMs = Schema.Int.check(
   }),
 );
 export type PanelAnimationDurationMs = typeof PanelAnimationDurationMs.Type;
-const DEFAULT_PANEL_ANIMATION_DURATION_MS: PanelAnimationDurationMs = 0;
+const DEFAULT_PANEL_ANIMATION_DURATION_MS: PanelAnimationDurationMs = 175;
 
 export const MIN_INTERFACE_FONT_SIZE = 12;
 export const MAX_INTERFACE_FONT_SIZE = 20;
@@ -352,6 +352,10 @@ export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 export const ChatWidth = Schema.Literals(["comfortable", "wide", "full"]);
 export type ChatWidth = typeof ChatWidth.Type;
 
+/** How wide inline HTML previews grow: "chat" keeps them in the chat column. */
+export const HtmlPreviewWidth = Schema.Literals(["chat", "wide", "full"]);
+export type HtmlPreviewWidth = typeof HtmlPreviewWidth.Type;
+
 /** How the composer shows reasoning effort: the level's name, or rising bars. */
 export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
@@ -418,6 +422,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
+  htmlPreviewWidth: HtmlPreviewWidth.pipe(
+    Schema.withDecodingDefault(Effect.succeed("chat" as const)),
+  ),
   effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("label" as const))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -555,6 +562,7 @@ export const ClientSettingsSchema = Schema.Struct({
   threadDetailsItems: Schema.Record(Schema.String, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  sidebarFixedCreationOrder: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -592,7 +600,7 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   speechCorrectionWord: SpeechCorrectionCue.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // A locale code or "system". Open string so new locales and downgrades need no migration.
-  language: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("en"))),
+  language: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("system"))),
   snapShotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   snapShotIncludeAccessibility: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
@@ -942,7 +950,7 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
 export const UsageLimitSourceConfig = Schema.Struct({
-  kind: Schema.Literal("cliproxy"),
+  kind: Schema.Literals(["cliproxy", "http"]),
   label: Schema.optional(TrimmedNonEmptyString),
   url: TrimmedNonEmptyString,
   managementKey: SettingsSecretValue.pipe(
@@ -1144,6 +1152,10 @@ export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
 
+/** `on-request`: agents report only when the user asks. `auto`: they also report on their own. */
+export const AgentFeedbackMode = Schema.Literals(["off", "on-request", "auto"]);
+export type AgentFeedbackMode = typeof AgentFeedbackMode.Type;
+
 const StorageRetentionDays = Schema.NullOr(
   Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3650 })),
 );
@@ -1202,6 +1214,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "branchNamePrefix",
   "branchNameInstructions",
   "pullRequestMergeMethod",
+  "pullRequestOriginOnly",
   "sidebarAutoSettleOnMerge",
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleKeepPullRequests",
@@ -1240,6 +1253,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   branchNamePrefix: Schema.optionalKey(TrimmedString),
   branchNameInstructions: Schema.optionalKey(TrimmedString),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
+  pullRequestOriginOnly: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
@@ -1359,6 +1373,12 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const DEFAULT_WORKFLOW_SKIPPED_RUNS_KEPT = 500;
+export const MAX_WORKFLOW_SKIPPED_RUNS_KEPT = 10_000;
+const WorkflowSkippedRunsKept = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: MAX_WORKFLOW_SKIPPED_RUNS_KEPT }),
+);
+
 const UsageHistoryRetentionDays = Schema.Union([
   Schema.Int.check(Schema.isGreaterThan(0)),
   Schema.Literal("unlimited"),
@@ -1394,6 +1414,9 @@ export const ServerSettings = Schema.Struct({
   responseStreamingMode: ResponseStreamingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
   ),
+  agentFeedback: Schema.Struct({
+    mode: AgentFeedbackMode.pipe(Schema.withDecodingDefaultKey(Effect.succeed("off" as const))),
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({ mode: "off" as const }))),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
@@ -1494,6 +1517,12 @@ export const ServerSettings = Schema.Struct({
    * and tasks on another machine; tasks already running there finish.
    */
   linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Beta: durable workflows from the workflows folder of the T3 home. Off runs none of them. */
+  workflowsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Skipped top-level runs kept per workflow; older ones are deleted. */
+  workflowSkippedRunsKept: WorkflowSkippedRunsKept.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKFLOW_SKIPPED_RUNS_KEPT)),
+  ),
   /** Beta: Claude and Codex predict the next prompt after completed turns. Codex follows a change at once; open Claude threads after they restart. */
   promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
@@ -1577,6 +1606,7 @@ export const ServerSettings = Schema.Struct({
   pullRequestMergeMethod: Schema.NullOr(PullRequestMergeMethod).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  pullRequestOriginOnly: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 
   // Schema.Unknown preserves unknown-driver configs across versions; see providerInstance.ts.
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
@@ -1865,6 +1895,7 @@ export const ServerSettingsPatch = Schema.Struct({
   worktreesDirectory: Schema.optionalKey(TrimmedString),
   fastWorktreeCheckout: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
+  agentFeedback: Schema.optionalKey(Schema.Struct({ mode: AgentFeedbackMode })),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
@@ -1930,6 +1961,8 @@ export const ServerSettingsPatch = Schema.Struct({
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
+  workflowsEnabled: Schema.optionalKey(Schema.Boolean),
+  workflowSkippedRunsKept: Schema.optionalKey(WorkflowSkippedRunsKept),
   promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
@@ -1970,6 +2003,7 @@ export const ServerSettingsPatch = Schema.Struct({
   reviewGuideModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   reviewGuideInstructions: Schema.optionalKey(TrimmedString),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
+  pullRequestOriginOnly: Schema.optionalKey(Schema.Boolean),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
@@ -2011,6 +2045,17 @@ export const ClientServerSettingsPatch = ServerSettingsPatch.mapFields(
   Struct.omit(["defaultTheme", "defaultThemeSetAt", "defaultAppearance", "defaultAppearanceSetAt"]),
 );
 
+/** The host runs saved project scripts, some without anyone asking: on worktree creation and on settle. */
+function carriesProjectScripts(patch: ServerSettingsPatch): boolean {
+  return (
+    patch.defaultProjectScripts !== undefined ||
+    Object.values(patch.projectScriptOverrides ?? {}).some((scripts) => scripts !== null) ||
+    Object.values(patch.projectSettingsOverrides ?? {}).some(
+      (overrides) => overrides?.defaultProjectScripts !== undefined,
+    )
+  );
+}
+
 export function requiredScopesForServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ReadonlyArray<AuthEnvironmentScope> {
@@ -2043,6 +2088,8 @@ export function requiredScopesForServerSettingsPatch(
     ...(changesSettings || (!changesProviders && !changesAccess) ? [AuthSettingsWriteScope] : []),
     ...(changesProviders ? [AuthProvidersManageScope] : []),
     ...(changesAccess ? [AuthAccessWriteScope] : []),
+    // Saving a script is choosing a command for the host to run, wherever the patch carries it.
+    ...(carriesProjectScripts(patch) ? [AuthOrchestrationOperateScope] : []),
   ];
 }
 
@@ -2054,8 +2101,10 @@ export function requiredScopesForProjectMutation(
     return [AuthOrchestrationOperateScope];
   }
   return [
-    AuthOrchestrationOperateScope,
-    ...requiredScopesForServerSettingsPatch({ defaultProjectScripts: mutation.scripts }),
+    ...new Set([
+      AuthOrchestrationOperateScope,
+      ...requiredScopesForServerSettingsPatch({ defaultProjectScripts: mutation.scripts }),
+    ]),
   ];
 }
 
@@ -2064,6 +2113,7 @@ export const ClientSettingsPatch = Schema.Struct({
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),
+  htmlPreviewWidth: Schema.optionalKey(HtmlPreviewWidth),
   effortDisplay: Schema.optionalKey(EffortDisplay),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
@@ -2121,6 +2171,7 @@ export const ClientSettingsPatch = Schema.Struct({
   screenReaderWindowTitle: Schema.optionalKey(Schema.Boolean),
   threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),
   threadDetailsItems: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
+  sidebarFixedCreationOrder: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

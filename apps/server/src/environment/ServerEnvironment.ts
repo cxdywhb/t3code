@@ -237,6 +237,7 @@ export const make = Effect.gen(function* () {
       issueAutomationRetry: true,
       issueAutomationRepair: true,
       prReview: true,
+      issueTrackerAccounts: true,
       sideChats: true,
       vcsBranchStatus: true,
       inlineMessageContext: true,
@@ -311,6 +312,7 @@ export const make = Effect.gen(function* () {
       mcpHostedApproval: true,
       shellThreadFamilies: true,
       shellOlderSettled: true,
+      agentFeedback: true,
     },
   };
 

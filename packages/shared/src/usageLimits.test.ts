@@ -1149,6 +1149,32 @@ describe("pools", () => {
       "env-a:hub:a",
       "env-a:hub:b",
     ]);
+
+    // Changing reset order must preserve the rounded percentages for the same readings.
+    for (const { readings, used, left } of [
+      { readings: [94, 94.3, 97.9, 99.8], used: 97, left: 4 },
+      { readings: [70, 87, 85.50000000000001, 1e-30, 1e-30], used: 49, left: 51 },
+    ]) {
+      const resetTimes = readings.map((_, index) => `2026-09-03T1${3 + index}:00:00.000Z`);
+      for (const order of [resetTimes, [...resetTimes].reverse()]) {
+        const [pooled] = collectLimitPools(
+          readings.map((usedPercent, index) => ({
+            key: `pooled-${index}`,
+            driver: claude,
+            displayName: `Pooled ${index}`,
+            email: undefined,
+            plan: undefined,
+            accentColor: undefined,
+            environments: [],
+            sourceLabel: null,
+            redeem: null,
+            limits: { checkedAt, windows: [{ ...window, usedPercent, resetsAt: order[index] }] },
+          })),
+          now,
+        );
+        expect(pooled?.windows[0]).toMatchObject({ usedPercent: used, remainingPercent: left });
+      }
+    }
   });
 });
 
@@ -1374,6 +1400,29 @@ describe("pooled account columns", () => {
       now,
     );
     expect(keys(pool!)).toEqual([["b", "a"]]);
+  });
+
+  it("splits Antigravity accounts into separate pools in dashboard view while keeping pooled view combined", () => {
+    const first = {
+      ...account("ag-a", [{ ...window, id: "gemini-5h" }]),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Antigravity",
+    };
+    const second = {
+      ...account("ag-b", [{ ...window, id: "gemini-5h", usedPercent: 60 }]),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Work",
+    };
+    const pooled = collectLimitPools([first, second], now, "pooled");
+    expect(pooled).toHaveLength(1);
+    expect(pooled[0]?.accounts.map((member) => member.key)).toEqual(["ag-a", "ag-b"]);
+
+    const dashboard = collectLimitPools([first, second], now, "dashboard");
+    expect(dashboard).toHaveLength(2);
+    expect(dashboard.map((pool) => pool.accounts.map((member) => member.key))).toEqual([
+      ["ag-a"],
+      ["ag-b"],
+    ]);
   });
 });
 
