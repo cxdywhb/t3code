@@ -173,9 +173,9 @@ export const make = Effect.gen(function* () {
     telemetryConfig.enabled && policyAllows && posthogHost !== null && posthogKey.length > 0;
   if (!canEverSend) {
     return AnalyticsService.of({
-      record: () => Effect.succeed(false),
+      record: Effect.fn("AnalyticsService.record")(() => Effect.succeed(false)),
       flush: Effect.void,
-      recordOwners: () => Effect.void,
+      recordOwners: Effect.fn("AnalyticsService.recordOwners")(() => Effect.void),
     });
   }
   // A cached PATH does not establish consent from the current login shell.
