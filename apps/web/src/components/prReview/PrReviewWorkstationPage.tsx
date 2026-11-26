@@ -11,7 +11,7 @@ import type {
   PullRequestListState,
   ThreadId,
 } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { T, useGT, Var } from "gt-react";
 import {
   ActivityIcon,
@@ -734,68 +734,79 @@ export function PrReviewWorkstationPage() {
                               onCheckedChange={() => toggleChecked(key)}
                             />
                             <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
-                            <div className="@container/pr-review-item min-w-0 flex-1">
-                              <PullRequestRowLines
-                                number={
-                                  <span className="inline-flex min-w-0 max-w-[40%] items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
-                                    <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                    <Tooltip>
-                                      <TooltipTrigger render={<span className="truncate" />}>
-                                        {entry.repository}
-                                      </TooltipTrigger>
-                                      <TooltipPopup>{entry.repository}</TooltipPopup>
-                                    </Tooltip>
-                                    <span className="-ms-1 shrink-0">
-                                      {sigil}
-                                      {entry.number}
-                                    </span>
-                                  </span>
-                                }
-                                title={entry.title}
-                                signals={
-                                  <>
-                                    {isCloudUncloned ? (
-                                      <span className="hidden @md/pr-review-item:inline-flex">
-                                        <Badge variant="outline" size="sm">
-                                          <T>Cloud MR</T>
-                                        </Badge>
+                            <div className="@container/pr-review-item flex min-w-0 flex-1 items-start gap-1.5">
+                              <Link
+                                to="/pull-requests"
+                                search={{
+                                  involvement: "all",
+                                  state: "all",
+                                  repository: entry.repository,
+                                  number: entry.number,
+                                  selectedProjectId: entry.projectId,
+                                  selectedEnvironmentId: entry.environmentId,
+                                  selectedHost: entry.host,
+                                }}
+                                aria-label={entry.title}
+                                className="flex min-w-0 flex-1 rounded-sm hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                              >
+                                <PullRequestRowLines
+                                  number={
+                                    <span className="inline-flex min-w-0 max-w-[40%] items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
+                                      <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                      <Tooltip>
+                                        <TooltipTrigger render={<span className="truncate" />}>
+                                          {entry.repository}
+                                        </TooltipTrigger>
+                                        <TooltipPopup>{entry.repository}</TooltipPopup>
+                                      </Tooltip>
+                                      <span className="-ms-1 shrink-0">
+                                        {sigil}
+                                        {entry.number}
                                       </span>
-                                    ) : null}
-                                    {latestTask ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => setSelectedTaskId(latestTask.id)}
-                                        className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
-                                      >
-                                        <span className="hidden @md/pr-review-item:contents">
-                                          {isPrReviewStageActive(latestTask.stage) ? (
-                                            <PrReviewStageBadge stage={latestTask.stage} />
-                                          ) : (
-                                            <PrReviewVerdictBadge verdict={latestTask.verdict} />
-                                          )}
-                                        </span>
-                                        <span className="text-2xs whitespace-nowrap text-muted-foreground">
-                                          <T>Report</T>
-                                        </span>
-                                      </button>
-                                    ) : null}
-                                  </>
-                                }
-                                meta={
-                                  <PullRequestMetaLine className="min-w-0">
-                                    <span className="shrink-0">
-                                      @{entry.author?.login ?? "unknown"}
                                     </span>
-                                    <PullRequestRowBranches
-                                      head={entry.headBranch}
-                                      base={entry.baseBranch}
-                                    />
-                                    <span className="shrink-0">
-                                      <RelativeTime timestamp={entry.updatedAt} />
-                                    </span>
-                                  </PullRequestMetaLine>
-                                }
-                              />
+                                  }
+                                  title={entry.title}
+                                  meta={
+                                    <PullRequestMetaLine className="min-w-0">
+                                      <span className="shrink-0">
+                                        @{entry.author?.login ?? "unknown"}
+                                      </span>
+                                      <PullRequestRowBranches
+                                        head={entry.headBranch}
+                                        base={entry.baseBranch}
+                                      />
+                                      <span className="shrink-0">
+                                        <RelativeTime timestamp={entry.updatedAt} />
+                                      </span>
+                                    </PullRequestMetaLine>
+                                  }
+                                />
+                              </Link>
+                              {isCloudUncloned ? (
+                                <span className="hidden shrink-0 @md/pr-review-item:inline-flex">
+                                  <Badge variant="outline" size="sm">
+                                    <T>Cloud MR</T>
+                                  </Badge>
+                                </span>
+                              ) : null}
+                              {latestTask ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedTaskId(latestTask.id)}
+                                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
+                                >
+                                  <span className="hidden @md/pr-review-item:contents">
+                                    {isPrReviewStageActive(latestTask.stage) ? (
+                                      <PrReviewStageBadge stage={latestTask.stage} />
+                                    ) : (
+                                      <PrReviewVerdictBadge verdict={latestTask.verdict} />
+                                    )}
+                                  </span>
+                                  <span className="text-2xs whitespace-nowrap text-muted-foreground">
+                                    <T>Report</T>
+                                  </span>
+                                </button>
+                              ) : null}
                             </div>
 
                             <div className="flex shrink-0 items-center gap-1.5">

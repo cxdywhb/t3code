@@ -18,7 +18,7 @@ const pr = {
   provider: "gitlab",
   host: "gitlab.example.test",
   repository,
-  projectId: "layout-test",
+  projectId: "cloud:gitlab.example.test",
   projectTitle: "Platform",
   headBranch: "fix/refresh",
   baseBranch: "main",
@@ -134,4 +134,28 @@ it("keeps a report and both review actions reachable as the queue narrows", asyn
   await expect.element(screen.getByText("Request Changes", { exact: true })).not.toBeVisible();
   await userEvent.click(report);
   await expect.element(page.getByText(summary)).toBeVisible();
+  expect(screen.router?.history.location.pathname).toBe("/");
+});
+
+it("opens the matching cloud MR in the Pull Requests page from the queue row", async () => {
+  await using screen = await render(<PrReviewWorkstationPage />, { router: "/pr-review" });
+  await userEvent.click(screen.getByRole("checkbox"));
+  await expect.element(screen.getByRole("checkbox")).toBeChecked();
+  expect(screen.router?.history.location.pathname).toBe("/pr-review");
+
+  await userEvent.click(screen.getByText("@alex", { exact: true }));
+  await vi.waitFor(() => {
+    expect(screen.router?.state.location).toMatchObject({
+      pathname: "/pull-requests",
+      search: {
+        repository,
+        number: entry.number,
+        selectedProjectId: entry.projectId,
+        selectedEnvironmentId: environmentId,
+        selectedHost: entry.host,
+        involvement: "all",
+        state: "all",
+      },
+    });
+  });
 });
