@@ -7326,7 +7326,7 @@
   "ca287eb07dcd839a": "Abrir {term, select, mr {o merge request} cr {a solicitação de alteração} other {o pull request}} #{number} no host",
   "9e895407c233789c": "Abrir o repositório {repository}",
   "2b55951478b71805": "Voltar aos pull requests",
-  "efe5701992b34dfd": "recebe alterações de",
+  "abc3407c39ea0b14": "envia alterações para",
   "26c22a87e8064697": "Abas do pull request",
   "ccb3210828c51d7a": "Não foi possível mesclar {term, select, mr {este merge request} cr {esta solicitação de alteração} other {este pull request}}",
   "c62dad153b80c083": "Não foi possível marcar como pronto para revisão",

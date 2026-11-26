@@ -7338,7 +7338,7 @@
   "ca287eb07dcd839a": "在托管平台上打开 {term, select, mr {MR} cr {change request} other {PR}} #{number}",
   "9e895407c233789c": "打开 {repository} 仓库",
   "2b55951478b71805": "返回到 PR",
-  "efe5701992b34dfd": "接收来自以下分支的更改",
+  "abc3407c39ea0b14": "将变更合入",
   "26c22a87e8064697": "PR 标签页",
   "ccb3210828c51d7a": "无法合并此 {term, select, mr {MR} cr {change request} other {PR}}",
   "c62dad153b80c083": "无法将其标记为可审查",

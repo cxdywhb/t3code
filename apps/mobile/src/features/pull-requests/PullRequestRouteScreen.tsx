@@ -272,24 +272,24 @@ function PullRequestIdentity(props: {
       <View className="flex-row items-start gap-1.5">
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={gt("Copy base branch {branch}", { branch: pr.baseBranch })}
-          onPress={() => void Clipboard.setStringAsync(pr.baseBranch)}
-          className="min-w-0 shrink active:opacity-70"
-          hitSlop={8}
-        >
-          <Text className="font-mono text-2xs text-foreground-muted">{pr.baseBranch}</Text>
-        </Pressable>
-        <View className="pt-0.5">
-          <SymbolView name="arrow.left" size={11} tintColorClassName="accent-icon-muted" />
-        </View>
-        <Pressable
-          accessibilityRole="button"
           accessibilityLabel={gt("Copy head branch {branch}", { branch: pr.headBranch })}
           onPress={() => void Clipboard.setStringAsync(pr.headBranch)}
           className="min-w-0 shrink active:opacity-70"
           hitSlop={8}
         >
           <Text className="font-mono text-2xs text-foreground-muted">{pr.headBranch}</Text>
+        </Pressable>
+        <View className="pt-0.5">
+          <SymbolView name="arrow.right" size={11} tintColorClassName="accent-icon-muted" />
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={gt("Copy base branch {branch}", { branch: pr.baseBranch })}
+          onPress={() => void Clipboard.setStringAsync(pr.baseBranch)}
+          className="min-w-0 shrink active:opacity-70"
+          hitSlop={8}
+        >
+          <Text className="font-mono text-2xs text-foreground-muted">{pr.baseBranch}</Text>
         </Pressable>
       </View>
     </View>

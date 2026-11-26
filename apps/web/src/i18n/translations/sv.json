@@ -7332,7 +7332,7 @@
   "ca287eb07dcd839a": "Öppna {term, select, mr {merge request} cr {ändringsbegäran} other {pull request}} #{number} på värden",
   "9e895407c233789c": "Öppna repot {repository}",
   "2b55951478b71805": "Tillbaka till pull requests",
-  "efe5701992b34dfd": "tar emot ändringar från",
+  "abc3407c39ea0b14": "skickar ändringar till",
   "26c22a87e8064697": "Flikar för pull request",
   "ccb3210828c51d7a": "Kunde inte merga den här {term, select, mr {merge requesten} cr {ändringsbegäran} other {pull requesten}}",
   "c62dad153b80c083": "Kunde inte markera den som redo för granskning",

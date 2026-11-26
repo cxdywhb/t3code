@@ -7326,7 +7326,7 @@
   "ca287eb07dcd839a": "Abrir la {term, select, mr {merge request} cr {solicitud de cambios} other {pull request}} #{number} en el host",
   "9e895407c233789c": "Abrir el repositorio {repository}",
   "2b55951478b71805": "Volver a las pull requests",
-  "efe5701992b34dfd": "recibe cambios de",
+  "abc3407c39ea0b14": "envía cambios a",
   "26c22a87e8064697": "Pestañas de la pull request",
   "ccb3210828c51d7a": "No se pudo fusionar esta {term, select, mr {merge request} cr {solicitud de cambios} other {pull request}}",
   "c62dad153b80c083": "No se pudo marcar como lista para revisión",

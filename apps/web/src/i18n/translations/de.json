@@ -7326,7 +7326,7 @@
   "ca287eb07dcd839a": "{term, select, mr {Merge Request #{number} auf dem Host öffnen} cr {Änderungsanfrage #{number} auf dem Host öffnen} other {Pull Request #{number} auf dem Host öffnen}}",
   "9e895407c233789c": "Repository {repository} öffnen",
   "2b55951478b71805": "Zurück zu den Pull Requests",
-  "efe5701992b34dfd": "erhält Änderungen von",
+  "abc3407c39ea0b14": "sendet Änderungen an",
   "26c22a87e8064697": "Pull-Request-Tabs",
   "ccb3210828c51d7a": "{term, select, mr {Dieser Merge Request konnte nicht gemergt werden} cr {Diese Änderungsanfrage konnte nicht gemergt werden} other {Dieser Pull Request konnte nicht gemergt werden}}",
   "c62dad153b80c083": "Konnte nicht als bereit für Review markiert werden",

@@ -31,7 +31,6 @@ import {
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
-  ArrowLeftIcon,
   CircleDotIcon,
   FileDiffIcon,
   GitCommitHorizontalIcon,
@@ -92,6 +91,7 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import {
+  PullRequestBranchArrow,
   PullRequestChecksStatusLine,
   PullRequestDetailHeaderBody,
   PullRequestPrivateBadge,
@@ -1811,6 +1811,17 @@ export function PullRequestDetailPanel({
                     </span>
                     <span aria-hidden className="h-3 w-px shrink-0 bg-border/70" />
                     <span className="flex min-w-0 flex-1 items-center gap-1.5 font-mono text-2xs text-muted-foreground/65">
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <code className="flex min-w-0">
+                              <MiddleTruncate value={detail.headBranch} showTitle={false} />
+                            </code>
+                          }
+                        />
+                        <TooltipPopup side="top">{detail.headBranch}</TooltipPopup>
+                      </Tooltip>
+                      <PullRequestBranchArrow className="size-3" />
                       <PullRequestBaseBranch
                         baseBranch={detail.baseBranch}
                         freshness={freshness}
@@ -1819,23 +1830,6 @@ export function PullRequestDetailPanel({
                         onUpdate={(method) => void perform("update-branch", undefined, method)}
                         iconClassName="size-3"
                       />
-                      <ArrowLeftIcon
-                        aria-label={gt("receives changes from", {
-                          $context:
-                            "screen reader label for an arrow between the base branch, read before it, and the head branch, read after it",
-                        })}
-                        className="size-3 shrink-0 opacity-60"
-                      />
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <code className="flex min-w-0 flex-1">
-                              <MiddleTruncate value={detail.headBranch} showTitle={false} />
-                            </code>
-                          }
-                        />
-                        <TooltipPopup side="top">{detail.headBranch}</TooltipPopup>
-                      </Tooltip>
                     </span>
                     <span className="ml-auto inline-flex shrink-0 items-baseline justify-end gap-2 text-2xs">
                       <span

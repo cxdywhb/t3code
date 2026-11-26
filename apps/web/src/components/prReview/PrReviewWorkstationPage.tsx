@@ -747,7 +747,7 @@ export function PrReviewWorkstationPage() {
                                   selectedHost: entry.host,
                                 }}
                                 aria-label={entry.title}
-                                className="flex min-w-0 flex-1 rounded-sm hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                                className="flex min-w-0 flex-1 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                               >
                                 <PullRequestRowLines
                                   number={

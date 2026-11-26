@@ -7333,7 +7333,7 @@
   "ca287eb07dcd839a": "Open {term, select, mr {merge request} cr {change request} other {pull request}} #{number} on host",
   "9e895407c233789c": "Open {repository} repository",
   "2b55951478b71805": "Back to pull requests",
-  "efe5701992b34dfd": "receives changes from",
+  "abc3407c39ea0b14": "sends changes to",
   "26c22a87e8064697": "Pull request tabs",
   "ccb3210828c51d7a": "Could not merge this {term, select, mr {merge request} cr {change request} other {pull request}}",
   "c62dad153b80c083": "Could not mark this ready for review",

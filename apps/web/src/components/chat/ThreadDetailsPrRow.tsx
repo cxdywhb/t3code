@@ -340,7 +340,7 @@ export function ThreadDetailsPrRow({
             <div className="flex min-w-0 items-center gap-2">
               <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
               <div className="min-w-0 truncate text-foreground/75">
-                {detail.baseBranch} ← {detail.headBranch}
+                {detail.headBranch} → {detail.baseBranch}
               </div>
             </div>
             {detail.state === "open" && checksState !== "none" ? (

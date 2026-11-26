@@ -7327,7 +7327,7 @@
   "ca287eb07dcd839a": "Ouvrir la {term, select, mr {merge request} cr {demande de modification} other {pull request}} #{number} sur l’hôte",
   "9e895407c233789c": "Ouvrir le dépôt {repository}",
   "2b55951478b71805": "Retour aux pull requests",
-  "efe5701992b34dfd": "reçoit les modifications de",
+  "abc3407c39ea0b14": "envoie les modifications vers",
   "26c22a87e8064697": "Onglets de la pull request",
   "ccb3210828c51d7a": "Impossible de fusionner cette {term, select, mr {merge request} cr {demande de modification} other {pull request}}",
   "c62dad153b80c083": "Impossible de la marquer comme prête pour la revue",
