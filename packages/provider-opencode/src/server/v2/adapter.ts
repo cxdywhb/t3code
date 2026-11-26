@@ -4482,6 +4482,20 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       let mcpAvailable = false;
       if (wanted !== undefined) {
         const fresh = state.mcp === undefined;
+        const sharedServers = new Map(
+          Object.entries(mcpSession?.sharedResources?.mcpServers ?? {}).map(
+            ([sharedName, server]) => [`${wanted.name}_${sharedName}`, server],
+          ),
+        );
+        const sharedNames = [...(state.mcp?.sharedNames ?? [])];
+        if (state.mcp !== undefined) state.mcp = { ...state.mcp, sharedNames };
+        // 撤销成功后才移出清理名单；移除失败时停止本轮，避免继续使用已撤销的工具。
+        for (const registered of sharedNames.filter((name) => !sharedServers.has(name))) {
+          yield* client.mcp
+            .remove({ server: registered, location: { directory } })
+            .pipe(Effect.timeout(INVENTORY_TIMEOUT));
+          sharedNames.splice(sharedNames.indexOf(registered), 1);
+        }
         mcpAvailable = yield* client.mcp
           .add({
             server: name,
@@ -4503,14 +4517,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ),
           );
         if (mcpAvailable) {
-          const sharedNames: string[] = [];
           state.mcp = { ...wanted, sharedNames };
-          for (const [sharedName, server] of Object.entries(
-            mcpSession?.sharedResources?.mcpServers ?? {},
-          )) {
-            const name = `${wanted.name}_${sharedName}`;
+          for (const [name, server] of sharedServers) {
             // 每个线程独立注册，关闭一个线程不能撤销另一个线程的工具。
-            yield* client.mcp
+            const added = yield* client.mcp
               .add({
                 server: name,
                 location: { directory },
@@ -4528,8 +4538,18 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                         oauth: false,
                       }),
               })
-              .pipe(Effect.timeout(INVENTORY_TIMEOUT));
-            sharedNames.push(name);
+              .pipe(
+                Effect.timeout(INVENTORY_TIMEOUT),
+                Effect.as(true),
+                // SDK 错误包含请求配置，不能把凭据或上游响应写入日志。
+                Effect.catch((error) =>
+                  Effect.logWarning("Could not add shared MCP server to OpenCode.", {
+                    server: name,
+                    reason: error._tag,
+                  }).pipe(Effect.as(false)),
+                ),
+              );
+            if (added && !sharedNames.includes(name)) sharedNames.push(name);
           }
         }
         // Before 2.2.6, OpenCode loads a new server's tools 100 ms after it connects, and a prompt sent sooner lacks them.

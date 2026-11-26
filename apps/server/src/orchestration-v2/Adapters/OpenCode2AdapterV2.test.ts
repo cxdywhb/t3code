@@ -33,6 +33,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
@@ -175,7 +176,7 @@ const withInstructions = (
         "rpc.call",
       ].includes(String(entry.frame.type)),
   );
-  const after = entries.findIndex(
+  const after = entries.findLastIndex(
     (entry, index) =>
       index < first &&
       entry.type === "emit_inbound" &&
@@ -5809,6 +5810,189 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       );
       assert.equal(answer?.type === "assistant_message" ? answer.phase : null, "final_answer");
     }),
+  );
+
+  it.effect.each(["error", "timeout"] as const)(
+    "continues past a shared MCP registration %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId,
+          providerSessionId: "mcp:opencode2-adapter",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer thread-credential",
+          browserToolsAvailable: false,
+          sharedResources: {
+            skills: [],
+            warnings: [],
+            mcpServers: {
+              broken: { type: "stdio", command: "broken", args: [], env: {} },
+              healthy: { type: "stdio", command: "healthy", args: [], env: {} },
+            },
+          },
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
+        const server = "t3-code-thread_opencode2-adapter";
+        const stalled = yield* Deferred.make<void>();
+        const prompts: unknown[] = [];
+        const warnings: unknown[] = [];
+        const logger = Logger.make(({ logLevel, message }) => {
+          if (logLevel === "Warn") warnings.push(message);
+        });
+        const { runtime, thread } = yield* resumed(
+          [
+            out("mcp.add", { server, "location[directory]": WORK, config: "<any>" }),
+            reply("mcp.add", null),
+            out("mcp.add", {
+              server: `${server}_broken`,
+              "location[directory]": WORK,
+              config: { type: "local", command: ["broken"], environment: {} },
+            }),
+            reply(
+              "mcp.add",
+              failure === "error"
+                ? { status: 500, body: { message: "private-upstream-response" } }
+                : null,
+            ),
+            out("mcp.add", {
+              server: `${server}_healthy`,
+              "location[directory]": WORK,
+              config: { type: "local", command: ["healthy"], environment: {} },
+            }),
+            reply("mcp.add", null),
+            out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+            promptAccepted,
+            event("session.execution.succeeded", { sessionID: SESSION }),
+            out("mcp.remove", { server, "location[directory]": WORK }),
+            reply("mcp.remove", null),
+            out("mcp.remove", { server: `${server}_healthy`, "location[directory]": WORK }),
+            reply("mcp.remove", null),
+          ],
+          {
+            version: "2.2.6",
+            onPrompt: (input) => prompts.push(input),
+            beforeResponse: (path) =>
+              failure === "timeout" && path.endsWith(`${server}_broken`)
+                ? Deferred.succeed(stalled, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.void,
+          },
+        );
+        const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const started = yield* runtime
+          .startTurn(turnInput(thread))
+          .pipe(
+            Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+            Effect.forkScoped,
+          );
+        if (failure === "timeout") {
+          yield* Deferred.await(stalled);
+          yield* TestClock.adjust("5 seconds");
+        }
+        yield* Fiber.join(started);
+        assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+        assert.lengthOf(prompts, 1);
+        assert.lengthOf(warnings, 1);
+        const diagnostic = JSON.stringify(warnings);
+        assert.include(diagnostic, `${server}_broken`);
+        assert.notInclude(diagnostic, "private-upstream-response");
+        assert.notInclude(diagnostic, "thread-credential");
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }),
+  );
+
+  it.effect(
+    "removes revoked shared MCP servers before prompting and retains cleanup ownership",
+    () =>
+      Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const session = {
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId,
+          providerSessionId: "mcp:opencode2-adapter",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer thread-credential",
+          browserToolsAvailable: false,
+        };
+        const shared = { type: "stdio" as const, command: "shared", args: [], env: {} };
+        yield* mcpSessions.set({
+          ...session,
+          sharedResources: {
+            skills: [],
+            warnings: [],
+            mcpServers: { retired: shared, retained: shared },
+          },
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
+        const server = "t3-code-thread_opencode2-adapter";
+        const add = (name: string) => [
+          out("mcp.add", { server: name, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+        ];
+        const remove = (name: string) => [
+          out("mcp.remove", { server: name, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ];
+        const turn = [
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ];
+        const prompts: unknown[] = [];
+        const { runtime, thread } = yield* resumed(
+          [
+            ...add(server),
+            ...add(`${server}_retired`),
+            ...add(`${server}_retained`),
+            ...turn,
+            ...remove(`${server}_retired`),
+            ...add(server),
+            out("mcp.add", {
+              server: `${server}_retained`,
+              "location[directory]": WORK,
+              config: "<any>",
+            }),
+            reply("mcp.add", { status: 500, body: { message: "Refresh failed" } }),
+            ...turn,
+            out("mcp.remove", { server: `${server}_retained`, "location[directory]": WORK }),
+            reply("mcp.remove", { status: 500, body: { message: "Removal failed" } }),
+            ...remove(`${server}_retained`),
+            ...add(server),
+            ...turn,
+            ...remove(server),
+          ],
+          { version: "2.2.6", onPrompt: (input) => prompts.push(input) },
+        );
+        for (let index = 0; index < 4; index++) {
+          if (index === 1)
+            yield* mcpSessions.set({
+              ...session,
+              sharedResources: {
+                skills: [],
+                warnings: [],
+                mcpServers: { retained: shared },
+              },
+            });
+          if (index === 2) yield* mcpSessions.set(session);
+          if (index === 2) {
+            assert.isTrue(Exit.isFailure(yield* Effect.exit(runtime.startTurn(turnInput(thread)))));
+            assert.lengthOf(
+              prompts,
+              2,
+              "prompted with a shared MCP server that could not be revoked",
+            );
+            continue;
+          }
+          const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+          yield* runtime.startTurn(turnInput(thread));
+          assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+        }
+        assert.lengthOf(prompts, 3);
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }),
   );
 
   it.effect("re-registers T3 MCP each turn and drops its instructions when adding fails", () =>
