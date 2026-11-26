@@ -339,6 +339,43 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect("downloads updates found by desktop checks without installing them", () => {
+    let published = "1.2.5";
+    const harness = makeHarness({
+      checkForUpdates: Effect.sync(() => harness.emit("update-available", { version: published })),
+      downloadUpdate: Effect.sync(() => harness.emit("update-downloaded", { version: published })),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        yield* TestClock.adjust("15 seconds");
+
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.5");
+        assert.equal(harness.checkCount(), 1);
+        assert.equal(harness.downloadCount(), 1);
+        assert.equal(harness.quitAndInstalls(), 0);
+
+        published = "1.2.4";
+        yield* TestClock.adjust("4 hours");
+
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.5");
+        assert.equal(harness.checkCount(), 2);
+        assert.equal(harness.downloadCount(), 1);
+
+        published = "1.2.6";
+        const manualCheck = yield* updates.check("web-ui", { downloadInBackground: true });
+
+        assert.isTrue(manualCheck.checked);
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.6");
+        assert.equal(harness.downloadCount(), 2);
+        assert.equal(harness.quitAndInstalls(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect.each([
     { action: "download", offer: "update-available", found: null, accepted: true },
     { action: "install", offer: "update-downloaded", found: null, accepted: true },
