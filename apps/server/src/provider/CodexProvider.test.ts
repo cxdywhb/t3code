@@ -13,11 +13,26 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
   applyPreferredCodexDefaultModel,
+  codexAppServerEnvironment,
   codexCustomEndpoint,
   codexRoutesSpendNativeQuota,
   makeCodexSkillsProbe,
   mapCodexModelCapabilities,
 } from "./CodexProvider.ts";
+
+it("keeps Codex loopback MCP traffic out of an HTTPS proxy", () => {
+  const proxy = "http://proxy.test:8080";
+  const environment = codexAppServerEnvironment({
+    https_proxy: proxy,
+    no_proxy: ".internal.test",
+  });
+
+  assert.equal(environment.https_proxy, proxy);
+  assert.equal(environment.NO_PROXY, ".internal.test,localhost,127.0.0.1,::1");
+  assert.equal(environment.no_proxy, environment.NO_PROXY);
+  assert.equal(codexAppServerEnvironment({ HTTPS_PROXY: proxy, NO_PROXY: "*" }).NO_PROXY, "*");
+  assert.isUndefined(codexAppServerEnvironment({}).NO_PROXY);
+});
 
 function makeFakeCodexAppServers() {
   const helpers: Array<{

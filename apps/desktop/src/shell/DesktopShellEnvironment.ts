@@ -99,6 +99,7 @@ export class DesktopShellEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/shell/DesktopShellEnvironment") {}
 
+const PROXY_ENV_NAMES = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] as const;
 const LOGIN_SHELL_ENV_NAMES = [
   "PATH",
   "ANDROID_HOME",
@@ -122,6 +123,7 @@ const LOGIN_SHELL_ENV_NAMES = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
+  ...PROXY_ENV_NAMES.flatMap((name) => [name, name.toLowerCase()]),
   "T3CODE_TELEMETRY_ENABLED",
   "DO_NOT_TRACK",
   "T3CODE_FEATURE_FLAGS",
@@ -573,6 +575,14 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       if (!config.env[name] && shellEnvironment[name]) {
         config.env[name] = shellEnvironment[name];
       }
+    }
+
+    // 代理客户端对大小写的优先级不同，已有任一写法时保留启动器的配置。
+    for (const name of PROXY_ENV_NAMES) {
+      const lower = name.toLowerCase();
+      if (config.env[name] !== undefined || config.env[lower] !== undefined) continue;
+      if (shellEnvironment[name]) config.env[name] = shellEnvironment[name];
+      if (shellEnvironment[lower]) config.env[lower] = shellEnvironment[lower];
     }
 
     // The device host picks the Android SDK from ANDROID_HOME before ANDROID_SDK_ROOT,

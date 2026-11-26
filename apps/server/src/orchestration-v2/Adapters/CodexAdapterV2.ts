@@ -2074,7 +2074,7 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
   return yield* makeCodexAdapterV2({
     instanceId,
     settings,
-    environment: yield* mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
     clientFactory,
     digest,
     fileSystem,
@@ -2089,7 +2089,7 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
 export interface CodexAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
-  readonly environment: NodeJS.ProcessEnv;
+  readonly environment: Effect.Effect<NodeJS.ProcessEnv>;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /** The provider's published models, read per turn for catalog defaults. */
@@ -2147,15 +2147,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        // 桌面 Shell 探测可能晚于 Provider 注册，每次启动都重新读取宿主环境。
+        const environment = resolvedRuntime?.environment ?? (yield* adapterOptions.environment);
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment,
         });
-        const codexZone = codexTimeZone(resolvedRuntime?.environment ?? adapterOptions.environment);
+        const codexZone = codexTimeZone(environment);
         const additionalContextByThread = yield* Ref.make(
           new Map<string, NonNullable<CodexTurnStartParams["additionalContext"]>>(),
         );
