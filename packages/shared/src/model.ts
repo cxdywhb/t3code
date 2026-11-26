@@ -148,6 +148,79 @@ export function withImplicitFastModeDefault(
   return [...(modelOptions ?? []), { id: "fastMode", value: false }];
 }
 
+export const REASONING_EFFORT_OPTION_IDS: ReadonlyArray<string> = [
+  "reasoningEffort",
+  "effort",
+  "reasoning",
+  "variant",
+  "reasoning_effort",
+  "thinking_level",
+  "thought_level",
+];
+
+const REASONING_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
+  ...REASONING_EFFORT_OPTION_IDS,
+  "thinking",
+]);
+
+/** The model's reasoning control: a known effort id, or a select its agent marked as reasoning. */
+export function isReasoningControl(descriptor: ProviderOptionDescriptor): boolean {
+  return (
+    (descriptor.type === "select" && descriptor.role === "reasoning") ||
+    REASONING_DESCRIPTOR_IDS.has(descriptor.id)
+  );
+}
+
+export function isReasoningSelect(
+  descriptor: ProviderOptionDescriptor,
+): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> {
+  return descriptor.type === "select" && isReasoningControl(descriptor);
+}
+
+function mediumReasoningChoice(descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>) {
+  return descriptor.options.find(
+    (choice) =>
+      choice.id.toLowerCase() === "medium" && !descriptor.promptInjectedValues?.includes(choice.id),
+  );
+}
+
+export function withMediumReasoningDefault(caps: ModelCapabilities): ModelCapabilities {
+  const descriptors = caps.optionDescriptors;
+  if (!descriptors) return caps;
+  const index = descriptors.findIndex(isReasoningSelect);
+  const descriptor = descriptors[index];
+  if (descriptor?.type !== "select") return caps;
+  const medium = mediumReasoningChoice(descriptor);
+  if (!medium) return caps;
+  const optionDescriptors = [...descriptors];
+  optionDescriptors[index] = {
+    ...descriptor,
+    currentValue: medium.id,
+    options: descriptor.options.map(({ isDefault: _isDefault, ...choice }) =>
+      choice.id === medium.id ? { ...choice, isDefault: true } : choice,
+    ),
+  };
+  return { ...caps, optionDescriptors };
+}
+
+/** Use the model's advertised medium effort when there is no usable saved choice. */
+export function withImplicitReasoningEffortDefault(
+  caps: ModelCapabilities,
+  modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  const descriptor = caps.optionDescriptors?.find(isReasoningSelect);
+  const medium = descriptor && mediumReasoningChoice(descriptor);
+  if (!descriptor || !medium) return modelOptions ?? undefined;
+  const selections = withLegacyUltracodeEffort(caps.optionDescriptors, modelOptions);
+  const saved = getRawSelectionValueById(selections, descriptor.id);
+  if (typeof saved === "string" && descriptor.options.some((choice) => choice.id === saved))
+    return selections ?? undefined;
+  return [
+    ...(selections ?? []).filter((selection) => selection.id !== descriptor.id),
+    { id: descriptor.id, value: medium.id },
+  ];
+}
+
 function resolveDescriptorChoiceValue(
   descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
   raw: string | null | undefined,

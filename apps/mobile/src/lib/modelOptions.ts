@@ -21,6 +21,7 @@ import {
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
+  withMediumReasoningDefault,
 } from "@t3tools/shared/model";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 import { resolveProvidersForCwd } from "@t3tools/client-runtime/providerSkills";
@@ -161,7 +162,7 @@ function normalizeSelectionOptions(
   }
   const options = buildExplicitProviderOptionSelectionsFromDescriptors(
     getProviderOptionDescriptors({
-      caps: capabilities,
+      caps: withMediumReasoningDefault(capabilities),
       selections: selection.options,
     }),
     selection.options,

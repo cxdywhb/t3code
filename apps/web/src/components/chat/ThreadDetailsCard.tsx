@@ -155,7 +155,7 @@ export function ThreadDetailsCard({
           data-workspace-focus-key={`details:${threadRef.environmentId}:${threadRef.threadId}`}
           // Skip the return transition to avoid overlapping the rising preview.
           className={cn(
-            "absolute z-20",
+            "absolute z-20 group-has-[[data-chat-provider-model-picker][aria-expanded=true]]/chat-workspace:invisible",
             topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
           )}
           style={{

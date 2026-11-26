@@ -446,6 +446,7 @@ export function resolveAppModelSelectionState(
       models: entry.models,
       modelOptions: selectedEntry ? selection.options : undefined,
       includePlanAgent: selectsPlanAgent(selection.options),
+      preferMediumReasoning: false,
     });
 
     return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);

@@ -21,6 +21,8 @@ import {
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
+  withImplicitReasoningEffortDefault,
+  withMediumReasoningDefault,
 } from "@t3tools/shared/model";
 import { msg, T, useMessages } from "gt-react";
 import { memo } from "react";
@@ -62,6 +64,49 @@ const SAVED_OPTION_LABELS: Readonly<Record<string, string>> = {
   reasoningEffort: msg("Reasoning effort"),
   variant: msg("Reasoning", { $context: "model option name" }),
 };
+
+const reasoningLabels = new Map([
+  ["Reasoning", msg("Reasoning", { $context: "model option name" })],
+  ["Reasoning effort", msg("Reasoning effort")],
+  ["Thinking", msg("Thinking", { $context: "model option name" })],
+  ["Effort", msg("Effort", { $context: "model option name" })],
+  ["None", msg("None", { $context: "reasoning level" })],
+  ["Off", msg("Off", { $context: "reasoning level" })],
+  ["Minimal", msg("Minimal", { $context: "reasoning level" })],
+  ["Low", msg("Low", { $context: "reasoning level" })],
+  ["Medium", msg("Medium", { $context: "reasoning level" })],
+  ["High", msg("High", { $context: "reasoning level" })],
+  ["Extra High", msg("Extra High", { $context: "reasoning level" })],
+  ["Max", msg("Max", { $context: "reasoning level" })],
+  ["Ultra", msg("Ultra", { $context: "reasoning level" })],
+]);
+
+const accessLabels = new Map([
+  ["Cyber Access", msg("Cyber Access", { $context: "Codex access program" })],
+  ["Standard", msg("Standard", { $context: "Codex access program" })],
+  ["Daybreak Blue", msg("Daybreak Blue", { $context: "Codex access program" })],
+  ["Daybreak Red", msg("Daybreak Red", { $context: "Codex access program" })],
+]);
+
+function localizeTrait(descriptor: ProviderOptionDescriptor, resolve: MessageResolver) {
+  if (descriptor.type !== "select") return descriptor;
+  const labels =
+    descriptor.id === "cyberAccessProgram"
+      ? accessLabels
+      : isReasoningSelect(descriptor)
+        ? reasoningLabels
+        : null;
+  if (!labels) return descriptor;
+  const translate = (label: string) => {
+    const message = labels.get(label);
+    return message ? resolve(message) : label;
+  };
+  return {
+    ...descriptor,
+    label: translate(descriptor.label),
+    options: descriptor.options.map((choice) => ({ ...choice, label: translate(choice.label) })),
+  };
+}
 
 function savedOptionLabel(id: string, resolve: MessageResolver): string {
   const saved = SAVED_OPTION_LABELS[id];
@@ -126,11 +171,16 @@ function getSelectedTraits(
   includePlanAgent: boolean | undefined,
   resolve: MessageResolver = m,
 ) {
-  const caps = getProviderModelCapabilities(models, model, provider, includePlanAgent);
+  const caps = withMediumReasoningDefault(
+    getProviderModelCapabilities(models, model, provider, includePlanAgent),
+  );
   const modelIsUnavailable =
     keepsUnavailableModelOptions(provider, model) &&
     !models.some((candidate) => candidate.slug === normalizeModelSlug(model, provider));
-  const descriptors = modelIsUnavailable
+  const selections = modelIsUnavailable
+    ? modelOptions
+    : withImplicitReasoningEffortDefault(caps, modelOptions);
+  const rawDescriptors = modelIsUnavailable
     ? buildUnavailableModelOptionDescriptors(
         includePlanAgent
           ? modelOptions
@@ -139,8 +189,9 @@ function getSelectedTraits(
       )
     : getProviderOptionDescriptors({
         caps,
-        selections: modelOptions,
+        selections,
       });
+  const descriptors = rawDescriptors.map((descriptor) => localizeTrait(descriptor, resolve));
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",
@@ -177,6 +228,7 @@ function getSelectedTraits(
 
   return {
     caps,
+    selections,
     descriptors,
     selectDescriptors,
     booleanDescriptors,
@@ -241,9 +293,8 @@ export function getTraitsSectionVisibility(input: {
 }
 
 /**
- * `modelOptions` must already carry the composer's implicit defaults (see
- * `withImplicitFastModeDefault`) so the persisted selection matches what the
- * picker would write.
+ * `modelOptions` already carries the composer's implicit defaults so the persisted
+ * selection matches what the picker would write.
  */
 export function getReasoningTraitStep(input: {
   provider: ProviderDriverKind;
@@ -275,7 +326,7 @@ export function getReasoningTraitStep(input: {
       ? "ultrathink"
       : getDescriptorStringValue(
           descriptor,
-          { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] },
+          { instanceId: input.instanceId, model: input.model, options: selected.selections ?? [] },
           input.reportedModelSelection,
         );
   // Walk the full catalog order so a typed Ultrathink keeps its place, then land on a pickable level.
@@ -323,8 +374,6 @@ export function useTraitsSelection({
   triggerClassName: _triggerClassName,
   ...persistence
 }: TraitsSelectionInput) {
-  const modelSelection =
-    instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const resolve = useMessages();
   const updateModelOptions = (nextOptions: ProviderOptions | undefined) => {
@@ -353,6 +402,8 @@ export function useTraitsSelection({
     includePlanAgent,
     resolve,
   });
+  const modelSelection =
+    instanceId && model ? { instanceId, model, options: selected.selections ?? [] } : null;
   return {
     ...selected,
     /** The option a select shows, where an Ultrathink prompt owns the primary select. */
@@ -525,7 +576,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       ultrathinkPromptControlled: traits.ultrathinkPromptControlled,
       modelSelection:
         props.instanceId && props.model
-          ? { instanceId: props.instanceId, model: props.model, options: props.modelOptions ?? [] }
+          ? { instanceId: props.instanceId, model: props.model, options: traits.selections ?? [] }
           : null,
       reportedModelSelection: props.reportedModelSelection,
     },

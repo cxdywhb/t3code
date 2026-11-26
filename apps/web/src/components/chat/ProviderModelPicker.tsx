@@ -8,7 +8,6 @@ import {
 import { RegistryContext } from "@effect/atom-react";
 import { T, useGT } from "gt-react";
 import {
-  createContext,
   memo,
   type ReactNode,
   useContext,
@@ -53,7 +52,7 @@ function lockBackgroundScroll(popup: HTMLElement | null) {
     return (
       target instanceof Element &&
       target.closest(
-        "[data-model-picker-content], [data-model-picker-effort], [data-model-picker-option-menu]",
+        "[data-model-picker-content], [data-model-picker-scroll], [data-model-picker-option-menu]",
       )
     );
   };
@@ -84,9 +83,6 @@ function lockBackgroundScroll(popup: HTMLElement | null) {
     body.style.paddingRight = previousBodyPaddingRight;
   };
 }
-
-/** What a docked effort column needs from its picker: the model it serves. */
-export const DockedPickerContext = createContext<{ modelLabel: string }>({ modelLabel: "" });
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   environmentId: EnvironmentId | null;
@@ -200,9 +196,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const focusEffort = (rows: "levels" | "any") => {
     const column = popupRef.current?.querySelector("[data-model-picker-effort]");
     const level =
+      column?.querySelector<HTMLElement>("[data-effort-slider] input:enabled") ??
       column?.querySelector<HTMLElement>(
         '[data-effort-level][aria-checked="true"]:not(:disabled)',
-      ) ?? column?.querySelector<HTMLElement>("[data-effort-level]:not(:disabled)");
+      ) ??
+      column?.querySelector<HTMLElement>("[data-effort-level]:not(:disabled)");
     // No aria-checked here: an On switch is checked but is not where focus belongs.
     const row =
       level ??
@@ -324,7 +322,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         ? {
             docked,
             onFocusEffort: () => void focusEffort("any"),
-            // Inside the fixed height, so switching to or from a ChatGPT plan never resizes it.
             ...(props.selectedModels === undefined
               ? { listFooter: <ChatGptSharingControl provider={activeEntry?.snapshot ?? null} /> }
               : {}),
@@ -479,29 +476,31 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         touchBackdrop
       >
         {props.effortColumn ? (
-          <DockedPickerContext value={{ modelLabel: triggerTitle }}>
-            <div className="flex max-h-(--available-height) flex-col">
-              {/* One fixed height, so a model with more options never resizes the popup. Short
-                  windows shrink it and keep the footer. */}
-              <div className="flex h-86.5 min-h-0 max-sm:h-auto max-sm:flex-col">
-                {picker}
-                <div
-                  data-model-picker-effort
-                  className="flex min-h-0 w-48 flex-col sm:shrink-0 border-l border-border/70 bg-muted/40 max-sm:h-64 max-sm:w-full max-sm:border-t max-sm:border-l-0"
-                  onKeyDown={(event) => {
-                    if (event.key !== "ArrowLeft" || event.altKey || event.ctrlKey || event.metaKey)
-                      return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    searchInputRef.current?.focus();
-                  }}
-                >
-                  {props.effortColumn}
-                </div>
-              </div>
-              {props.footer}
+          <div
+            data-model-picker-scroll
+            className="max-h-(--available-height) overflow-x-hidden overflow-y-auto overscroll-contain"
+          >
+            {picker}
+            <div
+              data-model-picker-effort
+              className="border-t border-border/70 bg-muted/40"
+              onKeyDown={(event) => {
+                if (event.altKey || event.ctrlKey || event.metaKey) return;
+                const backFromSlider =
+                  event.key === "Tab" &&
+                  event.shiftKey &&
+                  event.target instanceof Element &&
+                  event.target.closest("[data-effort-slider]");
+                if (event.key !== "ArrowLeft" && !backFromSlider) return;
+                event.preventDefault();
+                event.stopPropagation();
+                searchInputRef.current?.focus();
+              }}
+            >
+              {props.effortColumn}
             </div>
-          </DockedPickerContext>
+            {props.footer}
+          </div>
         ) : (
           picker
         )}

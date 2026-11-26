@@ -21,7 +21,6 @@ import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts"
 import {
   buildCodexInitializeParams,
   codexAppServerEnvironment,
-  codexDefaultReasoningEffortOverride,
 } from "../../provider/CodexProvider.ts";
 import {
   codexRateLimitsToUpdate,
@@ -948,9 +947,10 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
             ],
           }
         : baseSandboxPolicy;
-    const selectedEffort =
-      getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
-      codexDefaultReasoningEffortOverride(input.modelSelection.model);
+    const selectedEffort = getModelSelectionStringOptionValue(
+      input.modelSelection,
+      "reasoningEffort",
+    );
     const effort =
       selectedEffort === undefined ? undefined : yield* decodeTurnReasoningEffort(selectedEffort);
     const serviceTier =

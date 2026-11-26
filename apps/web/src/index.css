@@ -493,6 +493,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
+@utility pt-empty-composer {
+  padding-top: min(14dvh, --spacing(28));
+}
+
 @utility topbar-scroll-fade {
   -webkit-mask-image:
     linear-gradient(

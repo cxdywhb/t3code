@@ -29,7 +29,7 @@ import {
 import * as Schema from "effect/Schema";
 
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
-import { withImplicitFastModeSelection } from "../lib/providerOptions";
+import { withImplicitModelOptionSelection } from "../lib/providerOptions";
 import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -136,7 +136,7 @@ export function resolveQueuedThreadSettings(
     }
   > = [],
 ): ThreadSettingsSnapshot {
-  const modelSelection = withImplicitFastModeSelection(
+  const modelSelection = withImplicitModelOptionSelection(
     message.modelSelection ?? thread.modelSelection,
     providers,
   );

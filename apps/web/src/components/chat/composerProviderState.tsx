@@ -14,6 +14,8 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
   withImplicitFastModeDefault,
+  withImplicitReasoningEffortDefault,
+  withMediumReasoningDefault,
 } from "@t3tools/shared/model";
 
 import type { DraftId } from "../../composerDraftStore";
@@ -31,6 +33,7 @@ type ComposerProviderStateInput = {
   promptInjectionState?: ComposerPromptInjectionState;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
   includePlanAgent?: boolean | undefined;
+  preferMediumReasoning?: boolean;
 };
 
 type ComposerPromptInjectionState = "none" | "ultrathink";
@@ -69,12 +72,20 @@ function resolveComposerOptionSelections(
   provider: ProviderDriverKind,
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   includePlanAgent: boolean | undefined,
+  preferMediumReasoning = true,
 ): {
   caps: ModelCapabilities;
   selections: ReadonlyArray<ProviderOptionSelection> | undefined;
 } {
-  const caps = getProviderModelCapabilities(models, model, provider, includePlanAgent);
-  return { caps, selections: withImplicitFastModeDefault(caps, modelOptions) };
+  const catalog = getProviderModelCapabilities(models, model, provider, includePlanAgent);
+  const caps = preferMediumReasoning ? withMediumReasoningDefault(catalog) : catalog;
+  const selections = withImplicitFastModeDefault(caps, modelOptions);
+  return {
+    caps,
+    selections: preferMediumReasoning
+      ? withImplicitReasoningEffortDefault(caps, selections)
+      : selections,
+  };
 }
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
@@ -85,6 +96,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     modelOptions,
     promptInjectionState = "none",
     includePlanAgent,
+    preferMediumReasoning,
   } = input;
   if (keepsUnavailableModelOptions(provider, model)) {
     const normalizedModel = normalizeModelSlug(model, provider);
@@ -107,6 +119,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     provider,
     modelOptions,
     includePlanAgent,
+    preferMediumReasoning,
   );
   const descriptors = getProviderOptionDescriptors({ caps, selections });
   const primarySelectDescriptor = descriptors.find(
