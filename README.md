@@ -29,6 +29,16 @@
 - **从其他设备继续工作。** 通过局域网、Tailscale 或 T3 Connect 连接运行智能体的电脑，查看同一组会话并处理授权请求。
 - **沿用已有账号。** X Code 调用你在本机登录的智能体，模型用量和费用由对应服务商管理。
 
+### 用星流滑轨调节推理强度
+
+打开模型选择器，搜索或从收藏中挑选模型，再用星流滑轨调整推理强度。档位随模型能力变化，支持「中」档的模型默认选择该档。拖动时滑钮跟随指针，松手时吸附到对应档位。支持速度切换的模型可在底部选择「标准」或「快速」，星点和流光也会随之变速。
+
+<p align="center">
+  <img src="./assets/readme/model-picker-medium.png" width="29%" alt="模型选择器：中档推理、标准速度" />
+  <img src="./assets/readme/model-picker-fast.png" width="29%" alt="模型选择器：高档推理、快速模式" />
+  <img src="./assets/readme/model-picker-favorites.png" width="29%" alt="模型选择器：收藏模型与当前选中状态" />
+</p>
+
 ## 使用文档
 
 - [安装与首次运行](./docs/user/install.md)
@@ -48,3 +58,7 @@
 ## 许可证与商标
 
 源代码采用 [MIT 许可证](./LICENSE)。T3 Code 的名称、标志和应用图标受上游[商标与品牌政策](./TRADEMARK.md)约束。公开分发衍生版本时须使用独立品牌，并清楚标明非官方身份。
+
+## 设计参考
+
+推理强度滑轨的星流效果参考了 Obsidian Prism（黑曜棱镜）的星空推理滑块。 [RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism)
