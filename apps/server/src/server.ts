@@ -62,7 +62,10 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
+import * as IssueAutomationRepository from "./issueAutomation/IssueAutomationRepository.ts";
 import * as IssueAutomationService from "./issueAutomation/IssueAutomationService.ts";
+import * as IssueAutomationOAuthCallback from "./issueAutomation/oauthCallbackHttp.ts";
+import * as IssueAutomationPluginRegistry from "./issueAutomation/plugin/PluginRegistry.ts";
 import * as PrReviewService from "./prReview/PrReviewService.ts";
 import * as IssueTrackerBindings from "./persistence/IssueTrackerBindings.ts";
 import * as IssueTrackerRegistry from "./issue/IssueTrackerRegistry.ts";
@@ -925,6 +928,7 @@ const layerMakeRoutes = Layer.mergeAll(
     PreviewTunnel.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
+    IssueAutomationOAuthCallback.layer,
     speechStreamRouteLayer,
   ),
   McpHttpServer.layer.pipe(
@@ -949,7 +953,14 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   Layer.provide(
     IssueAutomationService.layer.pipe(
-      Layer.provide(Layer.merge(layerThreadIssueService, layerGitWorkflow)),
+      Layer.provide(
+        Layer.mergeAll(
+          IssueAutomationRepository.layer,
+          IssueAutomationPluginRegistry.layer,
+          layerThreadIssueService,
+          layerGitWorkflow,
+        ),
+      ),
     ),
   ),
   Layer.provide(layerThreadIssueService),

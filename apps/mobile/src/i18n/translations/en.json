@@ -395,6 +395,11 @@
   "071ab90b0e0f5e76": "Compacting…",
   "2fb1845862c9a087": "Auto-compacted before cache expiry",
   "552d31d19f1df851": "Context compacted before sending",
+  "d2e270032ef37711": "Diagnose only · No code changes",
+  "1d1ffac1dfa1aeed": "Diagnose and repair",
+  "eaabadc64b84731c": "Review the fix",
+  "36fac9a5376678ef": "View ZenTao {issueKey}",
+  "ef0b494565c4f4b2": "View issue {issueKey}",
   "476ca970255eaea4": "Link this environment to T3 Connect for a public URL.",
   "6b80f5b38a8f9950": "Only this computer can call this address. Link T3 Connect for a public URL.",
   "c5a7b1d3891dd0b8": "Works wherever this environment's address is reachable, for example over Tailscale or your own proxy. Link T3 Connect for a public URL.",
@@ -5704,5 +5709,6 @@
   "ad208e3e32c85029": "Hide all",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Tool calls in chat",
-  "8d545d54c0a9e950": "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show."
+  "8d545d54c0a9e950": "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show.",
+  "603661e55748ac0f": "Diagnosis restarted · Run {number}"
 }

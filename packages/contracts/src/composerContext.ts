@@ -311,10 +311,22 @@ export const GuestMessageAttribution = Schema.Struct({
 });
 export type GuestMessageAttribution = typeof GuestMessageAttribution.Type;
 
+export const IssueAutomationMessageSummary = Schema.Struct({
+  mode: Schema.Literals(["diagnose", "repair", "review"]),
+  scopeName: Schema.String,
+  moduleName: Schema.NullOr(Schema.String),
+  platform: Schema.String,
+  issueKey: Schema.String,
+  issueUrl: Schema.String,
+  attemptNumber: Schema.optionalKey(PositiveInt),
+});
+export type IssueAutomationMessageSummary = typeof IssueAutomationMessageSummary.Type;
+
 /** Structured context riding on a user message. Undecodable records are dropped, not fatal. */
 export const OrchestrationMessageContext = Schema.Struct({
   version: Schema.Literal(1),
   guest: Schema.optional(GuestMessageAttribution),
+  issueAutomation: Schema.optional(IssueAutomationMessageSummary),
   records: Schema.Array(Schema.Unknown)
     .check(
       Schema.isMaxLength(COMPOSER_CONTEXT_MAX_RECORDS),

@@ -189,8 +189,22 @@ export function isStageRunning(stage: IssueAutomationStage): boolean {
     stage === "routing" ||
     stage === "diagnosing" ||
     stage === "reviewing" ||
-    stage === "writing_back"
+    stage === "writing_back" ||
+    stage === "cancelling"
   );
+}
+
+export function groupIssueAutomationTasks(tasks: ReadonlyArray<IssueAutomationTask>) {
+  const groups = new Map<string, IssueAutomationTask[]>();
+  for (const task of tasks.toSorted((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  )) {
+    const key = JSON.stringify([task.connectorId, task.issueKey]);
+    const group = groups.get(key);
+    if (group) group.push(task);
+    else groups.set(key, [task]);
+  }
+  return [...groups].map(([key, attempts]) => ({ key, latest: attempts[0]!, attempts }));
 }
 
 export function resolveTaskDurationMs(

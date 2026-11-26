@@ -3,11 +3,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TABLE collaboration_templates (
+  yield* sql`CREATE TABLE IF NOT EXISTS collaboration_templates (
     id TEXT PRIMARY KEY,
     template_json TEXT NOT NULL
   )`;
-  yield* sql`CREATE TABLE collaboration_requirements (
+  yield* sql`CREATE TABLE IF NOT EXISTS collaboration_requirements (
     key TEXT PRIMARY KEY,
     request_json TEXT NOT NULL,
     input_json TEXT NOT NULL

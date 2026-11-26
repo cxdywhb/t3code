@@ -2256,7 +2256,8 @@ function renderFeedEntry(
   if (entry.type === "message") {
     const { message } = entry;
     const isUser = message.role === "user";
-    const presentation = resolveUserMessagePresentation(message);
+    const presentation = resolveUserMessagePresentation(message, m);
+    const { hasIssueSummary } = presentation;
     const renderedText = presentation.text;
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = props.formatMessageTime(isUser ? message.createdAt : message.updatedAt);
@@ -2549,7 +2550,7 @@ function renderFeedEntry(
                       value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
                     >
                       <CollapsibleUserMessageBody
-                        collapsible={foldRowId === null}
+                        collapsible={foldRowId === null && !hasIssueSummary}
                         expanded={props.expandedWorkRows[`message:${message.id}`] ?? false}
                         onToggle={() =>
                           props.onToggleUserMessage(`message:${message.id}`, entry.id)
@@ -2634,7 +2635,7 @@ function renderFeedEntry(
                 <UserMessageCopyButton
                   text={presentation.text}
                   onCopy={
-                    message.context && presentation.attribution !== "guest"
+                    message.context && !hasIssueSummary && presentation.attribution !== "guest"
                       ? () =>
                           writeComposerContextClipboard(message.text, {
                             version: 1,
@@ -4190,7 +4191,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           info.item.message.projectedItem?.item.type === "user_message" &&
           info.item.message.projectedItem.item.freshContext ? (
             <ThreadContextDivider
-              label={gt("New session")}
+              label={
+                info.item.message.projectedItem.item.context?.issueAutomation?.attemptNumber ===
+                undefined
+                  ? gt("New session")
+                  : gt("Diagnosis restarted · Run {number}", {
+                      number:
+                        info.item.message.projectedItem.item.context.issueAutomation.attemptNumber,
+                    })
+              }
               icon="arrow.clockwise"
               iconColor={iconSubtleColor}
             />

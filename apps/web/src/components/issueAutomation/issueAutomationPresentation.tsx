@@ -1,4 +1,8 @@
-import type { IssueAutomationActionMode, IssueAutomationStage } from "@t3tools/contracts";
+import type {
+  IssueAutomationActionMode,
+  IssueAutomationStage,
+  IssueAutomationTask,
+} from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
 import {
   CheckCircle2Icon,
@@ -39,7 +43,8 @@ export function isStageActive(stage: IssueAutomationStage): boolean {
     stage === "routing" ||
     stage === "diagnosing" ||
     stage === "reviewing" ||
-    stage === "writing_back"
+    stage === "writing_back" ||
+    stage === "cancelling"
   );
 }
 
@@ -61,6 +66,7 @@ export function stageStepIndex(stage: IssueAutomationStage): number {
     case "needs_human":
       return 6;
     case "failed":
+    case "cancelling":
     case "cancelled":
       return -1;
   }
@@ -139,10 +145,19 @@ export function TaskStageGlyph({
 export function StageBadge({
   stage,
   size = "sm",
+  task,
 }: {
   readonly stage: IssueAutomationStage;
   readonly size?: "sm" | "default";
+  readonly task?: IssueAutomationTask;
 }) {
+  if (task?.repairOfTaskId !== undefined && isStageActive(stage) && stage !== "cancelling") {
+    return (
+      <Badge variant="info" size={size}>
+        <T>Repair in progress</T>
+      </Badge>
+    );
+  }
   switch (stage) {
     case "queued":
       return (
@@ -203,13 +218,19 @@ export function StageBadge({
     case "completed":
       return (
         <Badge variant="success" size={size}>
-          <T>Completed</T>
+          {task?.repairConfirmedAt ? (
+            <T>Repair confirmed</T>
+          ) : task?.actionMode === "diagnose_only" ? (
+            <T>Diagnosis complete</T>
+          ) : (
+            <T>Completed</T>
+          )}
         </Badge>
       );
     case "needs_human":
       return (
         <Badge variant="warning" size={size}>
-          <T>Needs review</T>
+          {task?.repairOfTaskId !== undefined ? <T>Repair awaiting review</T> : <T>Needs review</T>}
         </Badge>
       );
     case "failed":
@@ -222,6 +243,12 @@ export function StageBadge({
       return (
         <Badge variant="outline" size={size}>
           <T>Cancelled</T>
+        </Badge>
+      );
+    case "cancelling":
+      return (
+        <Badge variant="warning" size={size}>
+          <T>Cancelling</T>
         </Badge>
       );
   }
@@ -255,11 +282,11 @@ export function useActionModeLabel() {
   return (mode: IssueAutomationActionMode): string => {
     switch (mode) {
       case "diagnose_only":
-        return gt("Diagnose only + Comment");
+        return gt("Diagnose the root cause only");
       case "fix_worktree_review":
-        return gt("Worktree fix + Comment");
+        return gt("Fix in an isolated worktree");
       case "auto_resolve":
-        return gt("Auto fix + Mark resolved");
+        return gt("Fix in an isolated worktree and mark as resolved");
     }
   };
 }

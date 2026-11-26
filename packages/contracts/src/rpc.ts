@@ -227,6 +227,7 @@ import {
   IssueAutomationAnalyzeIssuesInput,
   IssueAutomationAnalyzeIssuesResult,
   IssueAutomationCancelTaskInput,
+  IssueAutomationConfirmRepairInput,
   IssueAutomationConnector,
   IssueAutomationDeleteConnectorInput,
   IssueAutomationDeleteProfileInput,
@@ -237,8 +238,12 @@ import {
   IssueAutomationProfile,
   IssueAutomationRefreshScopesInput,
   IssueAutomationRemoteIssueDetail,
-  IssueAutomationSaveConnectorInput,
+  IssueAutomationStartConnectorAuthInput,
+  IssueAutomationStartConnectorAuthResult,
+  IssueAutomationFinishConnectorAuthInput,
   IssueAutomationSaveProfileInput,
+  IssueAutomationScanProfileIssuesInput,
+  IssueAutomationScanProfileIssuesResult,
   IssueAutomationSetProfileEnabledInput,
   IssueAutomationStateSnapshot,
   IssueAutomationTriggerPollInput,
@@ -767,10 +772,12 @@ export const WS_METHODS = {
   // Pluggable issue automation methods
   issueAutomationGetState: "issueAutomation.getState",
   issueAutomationSubscribe: "issueAutomation.subscribe",
-  issueAutomationSaveConnector: "issueAutomation.saveConnector",
+  issueAutomationStartConnectorAuth: "issueAutomation.startConnectorAuth",
+  issueAutomationFinishConnectorAuth: "issueAutomation.finishConnectorAuth",
   issueAutomationDeleteConnector: "issueAutomation.deleteConnector",
   issueAutomationRefreshScopes: "issueAutomation.refreshScopes",
   issueAutomationListRemoteIssues: "issueAutomation.listRemoteIssues",
+  issueAutomationScanProfileIssues: "issueAutomation.scanProfileIssues",
   issueAutomationGetRemoteIssueDetail: "issueAutomation.getRemoteIssueDetail",
   issueAutomationSaveProfile: "issueAutomation.saveProfile",
   issueAutomationDeleteProfile: "issueAutomation.deleteProfile",
@@ -778,6 +785,7 @@ export const WS_METHODS = {
   issueAutomationTriggerPoll: "issueAutomation.triggerPoll",
   issueAutomationAnalyzeIssues: "issueAutomation.analyzeIssues",
   issueAutomationCancelTask: "issueAutomation.cancelTask",
+  issueAutomationConfirmRepair: "issueAutomation.confirmRepair",
   issueAutomationWriteBack: "issueAutomation.writeBack",
 
   // Multi-model PR fusion review workstation methods
@@ -1631,11 +1639,23 @@ const WsIssueAutomationSubscribeRpc = Rpc.make(WS_METHODS.issueAutomationSubscri
   stream: true,
 });
 
-const WsIssueAutomationSaveConnectorRpc = Rpc.make(WS_METHODS.issueAutomationSaveConnector, {
-  payload: IssueAutomationSaveConnectorInput,
-  success: IssueAutomationConnector,
-  error: IssueAutomationRpcError,
-});
+const WsIssueAutomationStartConnectorAuthRpc = Rpc.make(
+  WS_METHODS.issueAutomationStartConnectorAuth,
+  {
+    payload: IssueAutomationStartConnectorAuthInput,
+    success: IssueAutomationStartConnectorAuthResult,
+    error: IssueAutomationRpcError,
+  },
+);
+
+const WsIssueAutomationFinishConnectorAuthRpc = Rpc.make(
+  WS_METHODS.issueAutomationFinishConnectorAuth,
+  {
+    payload: IssueAutomationFinishConnectorAuthInput,
+    success: IssueAutomationConnector,
+    error: IssueAutomationRpcError,
+  },
+);
 
 const WsIssueAutomationDeleteConnectorRpc = Rpc.make(WS_METHODS.issueAutomationDeleteConnector, {
   payload: IssueAutomationDeleteConnectorInput,
@@ -1654,6 +1674,15 @@ const WsIssueAutomationListRemoteIssuesRpc = Rpc.make(WS_METHODS.issueAutomation
   success: IssueAutomationListRemoteIssuesResult,
   error: IssueAutomationRpcError,
 });
+
+const WsIssueAutomationScanProfileIssuesRpc = Rpc.make(
+  WS_METHODS.issueAutomationScanProfileIssues,
+  {
+    payload: IssueAutomationScanProfileIssuesInput,
+    success: IssueAutomationScanProfileIssuesResult,
+    error: IssueAutomationRpcError,
+  },
+);
 
 const WsIssueAutomationGetRemoteIssueDetailRpc = Rpc.make(
   WS_METHODS.issueAutomationGetRemoteIssueDetail,
@@ -1701,6 +1730,11 @@ const WsIssueAutomationCancelTaskRpc = Rpc.make(WS_METHODS.issueAutomationCancel
   payload: IssueAutomationCancelTaskInput,
   success: Schema.Void,
   error: IssueAutomationRpcError,
+});
+
+const WsIssueAutomationConfirmRepairRpc = Rpc.make(WS_METHODS.issueAutomationConfirmRepair, {
+  payload: IssueAutomationConfirmRepairInput,
+  error: IssueAutomationError,
 });
 
 const WsIssueAutomationWriteBackRpc = Rpc.make(WS_METHODS.issueAutomationWriteBack, {
@@ -2993,10 +3027,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribePromptSuggestionRpc,
   WsIssueAutomationGetStateRpc,
   WsIssueAutomationSubscribeRpc,
-  WsIssueAutomationSaveConnectorRpc,
+  WsIssueAutomationStartConnectorAuthRpc,
+  WsIssueAutomationFinishConnectorAuthRpc,
   WsIssueAutomationDeleteConnectorRpc,
   WsIssueAutomationRefreshScopesRpc,
   WsIssueAutomationListRemoteIssuesRpc,
+  WsIssueAutomationScanProfileIssuesRpc,
   WsIssueAutomationGetRemoteIssueDetailRpc,
   WsIssueAutomationSaveProfileRpc,
   WsIssueAutomationDeleteProfileRpc,
@@ -3004,6 +3040,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssueAutomationTriggerPollRpc,
   WsIssueAutomationAnalyzeIssuesRpc,
   WsIssueAutomationCancelTaskRpc,
+  WsIssueAutomationConfirmRepairRpc,
   WsIssueAutomationWriteBackRpc,
   WsPrReviewListSkillsRpc,
   WsPrReviewGetStateRpc,

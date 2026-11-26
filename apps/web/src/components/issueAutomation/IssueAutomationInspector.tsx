@@ -1,3 +1,4 @@
+import { WORKSPACE_TAB_PANEL_CLASS } from "~/components/WorkspacePageHeader";
 import type {
   EnvironmentId,
   IssueAutomationActionMode,
@@ -5,6 +6,7 @@ import type {
   IssueAutomationProfile,
   IssueAutomationRemoteIssue,
   IssueAutomationRemoteIssueDetail,
+  IssueAutomationSyncRepairAction,
   IssueAutomationTask,
   ModelSelection,
   ThreadId,
@@ -16,14 +18,13 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleAlertIcon,
-  CircleDotIcon,
   ExternalLinkIcon,
   FolderGit2Icon,
   GitBranchIcon,
   LayersIcon,
   MessageSquareIcon,
-  PencilIcon,
   PlayIcon,
+  PencilIcon,
   SendIcon,
   ShieldAlertIcon,
   UsersIcon,
@@ -42,7 +43,6 @@ import {
   PullRequestSection,
 } from "~/components/pullRequest/PullRequestSummaryTab";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { WORKSPACE_TAB_PANEL_CLASS } from "~/components/WorkspacePageHeader";
 import { cn } from "~/lib/utils";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
@@ -52,7 +52,6 @@ import {
   MenuItem,
   MenuPopup,
   MenuSearchInput,
-  MenuSeparator,
   MenuSub,
   MenuSubPopup,
   MenuSubTrigger,
@@ -67,6 +66,7 @@ import {
   SELECTOR_SCROLL_LIST_STYLE,
   type SelectableProjectOption,
 } from "./IssueAutomationConfigModals";
+import { IssueAutomationRepairSyncDialog } from "./IssueAutomationRepairSyncDialog";
 import {
   cleanIssueText,
   formatIssueNumber,
@@ -82,6 +82,7 @@ import {
 export type InspectorSubTab = "detail" | "trace";
 
 export type ManualWriteBackPayload =
+  | IssueAutomationSyncRepairAction
   | { kind: "comment"; issueKey: string; comment: string; taskId?: IssueAutomationTask["id"] }
   | { kind: "confirm"; issueKey: string; comment?: string; taskId?: IssueAutomationTask["id"] }
   | {
@@ -169,6 +170,9 @@ export function IssueAutomationInspectorContent({
   onAdhocModeChange,
   dispatching,
   onDispatchIssue,
+  onStartRepair,
+  onConfirmRepair,
+  canWriteBack,
   writingBack,
   onManualWriteBack,
   onCancelTask,
@@ -196,6 +200,9 @@ export function IssueAutomationInspectorContent({
   readonly onAdhocModeChange: (next: IssueAutomationActionMode) => void;
   readonly dispatching: boolean;
   readonly onDispatchIssue: (issueKey: string) => void;
+  readonly onStartRepair?: (() => void) | undefined;
+  readonly onConfirmRepair?: ((taskId: IssueAutomationTask["id"]) => void) | undefined;
+  readonly canWriteBack: boolean;
   readonly writingBack: boolean;
   readonly onManualWriteBack: (payload: ManualWriteBackPayload) => Promise<boolean>;
   readonly onCancelTask: (taskId: IssueAutomationTask["id"]) => void;
@@ -204,6 +211,26 @@ export function IssueAutomationInspectorContent({
   readonly onClose: () => void;
 }) {
   const gt = useGT();
+  const canComment =
+    canWriteBack &&
+    connector?.status !== "disconnected" &&
+    connector?.writeActions.includes("comment");
+  const canConfirm =
+    canWriteBack &&
+    connector?.status !== "disconnected" &&
+    connector?.writeActions.includes("confirm");
+  const canResolve =
+    canWriteBack &&
+    connector?.status !== "disconnected" &&
+    connector?.writeActions.includes("resolve");
+  const canActivate =
+    canWriteBack &&
+    connector?.status !== "disconnected" &&
+    connector?.writeActions.includes("activate");
+  const canClose =
+    canWriteBack &&
+    connector?.status !== "disconnected" &&
+    connector?.writeActions.includes("close");
   const actionModeLabel = useActionModeLabel();
   const [commentDraft, setCommentDraft] = useState("");
   const commentRef = useRef<HTMLTextAreaElement>(null);
@@ -262,7 +289,7 @@ export function IssueAutomationInspectorContent({
 
   const submitComment = async () => {
     const body = commentDraft.trim();
-    if (!body || !targetIssueKey || writingBack) return;
+    if (!canComment || !body || !targetIssueKey || writingBack) return;
     const ok = await onManualWriteBack({
       kind: "comment",
       issueKey: targetIssueKey,
@@ -283,7 +310,9 @@ export function IssueAutomationInspectorContent({
           {scopeLabel}
         </span>
 
-        {issueDetail && targetIssueKey ? (
+        {issueDetail &&
+        targetIssueKey &&
+        ((!issueDetail.confirmed && canConfirm) || canResolve || canActivate || canClose) ? (
           <Menu>
             <MenuTrigger
               render={
@@ -305,7 +334,7 @@ export function IssueAutomationInspectorContent({
               <ChevronDownIcon aria-hidden className="size-3" />
             </MenuTrigger>
             <MenuPopup align="end">
-              {!issueDetail.confirmed ? (
+              {!issueDetail.confirmed && canConfirm ? (
                 <MenuItem
                   onClick={() =>
                     void onManualWriteBack({
@@ -320,61 +349,66 @@ export function IssueAutomationInspectorContent({
                 </MenuItem>
               ) : null}
 
-              {issueDetail.availableBuilds.length > 0 ? (
-                <ResolveBuildSubmenu
-                  builds={issueDetail.availableBuilds}
-                  onSelectBuild={(buildId) =>
-                    void onManualWriteBack({
-                      kind: "resolve",
-                      issueKey: targetIssueKey,
-                      resolution: "fixed",
-                      resolvedBuild: buildId,
-                      ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
-                    })
-                  }
-                />
-              ) : (
+              {canResolve ? (
+                issueDetail.availableBuilds.length > 0 ? (
+                  <ResolveBuildSubmenu
+                    builds={issueDetail.availableBuilds}
+                    onSelectBuild={(buildId) =>
+                      void onManualWriteBack({
+                        kind: "resolve",
+                        issueKey: targetIssueKey,
+                        resolution: "fixed",
+                        resolvedBuild: buildId,
+                        ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
+                      })
+                    }
+                  />
+                ) : (
+                  <MenuItem
+                    onClick={() =>
+                      void onManualWriteBack({
+                        kind: "resolve",
+                        issueKey: targetIssueKey,
+                        resolution: "fixed",
+                        resolvedBuild: "trunk",
+                        ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
+                      })
+                    }
+                  >
+                    <CheckCircle2Icon className="size-3.5 text-primary" />
+                    <T>Mark resolved (Fixed · trunk)</T>
+                  </MenuItem>
+                )
+              ) : null}
+
+              {canActivate ? (
                 <MenuItem
                   onClick={() =>
                     void onManualWriteBack({
-                      kind: "resolve",
+                      kind: "activate",
                       issueKey: targetIssueKey,
-                      resolution: "fixed",
-                      resolvedBuild: "trunk",
                       ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
                     })
                   }
                 >
-                  <CheckCircle2Icon className="size-3.5 text-primary" />
-                  <T>Mark resolved (Fixed · trunk)</T>
+                  <PlayIcon className="size-3.5" />
+                  <T>Reactivate bug</T>
                 </MenuItem>
-              )}
-
-              <MenuSeparator />
-              <MenuItem
-                onClick={() =>
-                  void onManualWriteBack({
-                    kind: "activate",
-                    issueKey: targetIssueKey,
-                    ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
-                  })
-                }
-              >
-                <PlayIcon className="size-3.5" />
-                <T>Reactivate bug</T>
-              </MenuItem>
-              <MenuItem
-                onClick={() =>
-                  void onManualWriteBack({
-                    kind: "close",
-                    issueKey: targetIssueKey,
-                    ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
-                  })
-                }
-              >
-                <XCircleIcon className="size-3.5" />
-                <T>Close bug</T>
-              </MenuItem>
+              ) : null}
+              {canClose ? (
+                <MenuItem
+                  onClick={() =>
+                    void onManualWriteBack({
+                      kind: "close",
+                      issueKey: targetIssueKey,
+                      ...(commentDraft.trim() ? { comment: commentDraft.trim() } : {}),
+                    })
+                  }
+                >
+                  <XCircleIcon className="size-3.5" />
+                  <T>Close bug</T>
+                </MenuItem>
+              ) : null}
             </MenuPopup>
           </Menu>
         ) : null}
@@ -427,10 +461,7 @@ export function IssueAutomationInspectorContent({
             }}
           >
             <Toggle value="detail">
-              <span className="inline-flex items-center gap-1.5">
-                <CircleDotIcon className="size-3.5" />
-                <T>Issue detail</T>
-              </span>
+              <T>Issue detail</T>
             </Toggle>
             <Toggle value="trace">
               <span className="inline-flex items-center gap-1.5">
@@ -440,7 +471,7 @@ export function IssueAutomationInspectorContent({
             </Toggle>
           </ToggleGroup>
 
-          <StageBadge stage={activeTask.stage} size="default" />
+          <StageBadge stage={activeTask.stage} size="default" task={activeTask} />
         </div>
       ) : null}
 
@@ -562,6 +593,7 @@ export function IssueAutomationInspectorContent({
                         />
 
                         <OfficialModelPicker
+                          driverKind={adhocMode === "diagnose_only" ? "claudeAgent" : undefined}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {
@@ -625,6 +657,22 @@ export function IssueAutomationInspectorContent({
                       environmentId={environmentId}
                       lineBreaks
                     />
+                    {issueDetail.imageUrls.length > 0 ? (
+                      <ul className="mt-2 list-disc space-y-1 ps-5 text-sm">
+                        {issueDetail.imageUrls.map((url, index) => (
+                          <li key={url}>
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary underline"
+                            >
+                              {gt("Download attachment {number}", { number: index + 1 })}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </PullRequestSection>
 
                   <PullRequestSection
@@ -674,8 +722,7 @@ export function IssueAutomationInspectorContent({
               ) : null}
             </div>
           </div>
-
-          {targetIssueKey ? (
+          {targetIssueKey && canComment ? (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-4 pb-4">
               <ComposerSurface.Shell className="pointer-events-auto">
                 <ComposerSurface.Host>
@@ -784,14 +831,19 @@ export function IssueAutomationInspectorContent({
                       <T>Cross-review Thread</T>
                     </Button>
                   ) : null}
-                  {isStageActive(activeTask.stage) ? (
+                  {isStageActive(activeTask.stage) &&
+                  (activeTask.stage !== "cancelling" || activeTask.lastError !== null) ? (
                     <Button
                       size="xs"
                       variant="ghost-destructive"
                       onClick={() => onCancelTask(activeTask.id)}
                     >
                       <XCircleIcon className="size-3.5" />
-                      <T>Cancel</T>
+                      {activeTask.stage === "cancelling" ? (
+                        <T>Retry cancellation</T>
+                      ) : (
+                        <T>Cancel</T>
+                      )}
                     </Button>
                   ) : null}
                 </div>
@@ -825,7 +877,7 @@ export function IssueAutomationInspectorContent({
                       )}
                       <span
                         className={cn(
-                          "truncate text-xs transition-colors duration-200",
+                          "truncate text-xs",
                           done
                             ? "font-medium text-foreground"
                             : current
@@ -851,90 +903,112 @@ export function IssueAutomationInspectorContent({
               ) : null}
             </div>
 
-            <PullRequestSection
-              key={`timeline:${activeTask.id}`}
-              title={gt("Execution timeline")}
-              keepMounted
-            >
-              <div className="relative ml-2 space-y-3 border-l border-border/70 pl-4">
-                {activeTask.steps.map((step, idx) => (
-                  <div
-                    key={`${step.at}-${String(idx)}`}
-                    className="relative flex flex-col gap-0.5 text-xs motion-safe:animate-step-in"
-                  >
-                    <span
-                      aria-hidden
-                      className="absolute -left-5 top-1.5 size-2 rounded-full bg-primary/70 ring-4 ring-background"
-                    />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                        {new Date(step.at).toLocaleTimeString()}
-                      </span>
-                      {step.modelLabel ? (
-                        <Badge variant="secondary" size="sm">
-                          {step.modelLabel}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <p className="leading-relaxed text-foreground">{step.message}</p>
-                  </div>
-                ))}
-              </div>
-            </PullRequestSection>
-
-            {activeTask.diagnosisReport ? (
+            {activeTask.diagnosisReport || onStartRepair ? (
               <PullRequestSection
                 key={`report:${activeTask.id}`}
-                title={gt("Root-cause analysis & solution report")}
+                title={
+                  activeTask.repairOfTaskId !== undefined
+                    ? gt("Repair report")
+                    : activeTask.actionMode === "diagnose_only"
+                      ? gt("Diagnosis report")
+                      : gt("Root-cause analysis & solution report")
+                }
                 keepMounted
                 actions={
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={writingBack}
-                      onClick={() =>
-                        void onManualWriteBack({
-                          kind: "comment",
-                          issueKey: activeTask.issueKey,
-                          comment: activeTask.diagnosisReport!,
-                          taskId: activeTask.id,
-                        })
-                      }
-                    >
-                      <SendIcon className="size-3" />
-                      {activeTask.commentSyncedAt ? <T>Re-sync comment</T> : <T>Sync to ZenTao</T>}
+                  onStartRepair ? (
+                    <Button size="xs" disabled={dispatching} onClick={onStartRepair}>
+                      {activeTask.repairOfTaskId !== undefined ? (
+                        <T>Retry repair</T>
+                      ) : (
+                        <T>Start repair</T>
+                      )}
                     </Button>
-                    <Button
-                      size="xs"
-                      disabled={writingBack}
-                      onClick={() =>
-                        void onManualWriteBack({
-                          kind: "resolve",
-                          issueKey: activeTask.issueKey,
-                          resolution: "fixed",
-                          resolvedBuild: "trunk",
-                          comment: activeTask.diagnosisReport!,
-                          taskId: activeTask.id,
-                        })
-                      }
-                    >
-                      <CheckCircle2Icon className="size-3" />
-                      <T>Sync & mark Resolved</T>
-                    </Button>
-                  </div>
+                  ) : activeTask.repairOfTaskId !== undefined ? (
+                    activeTask.stage === "needs_human" && onConfirmRepair ? (
+                      <Button
+                        size="xs"
+                        disabled={dispatching}
+                        onClick={() => onConfirmRepair(activeTask.id)}
+                      >
+                        <T>Confirm repair</T>
+                      </Button>
+                    ) : activeTask.repairConfirmedAt &&
+                      (canComment || canResolve) &&
+                      activeTask.diagnosisReport ? (
+                      <IssueAutomationRepairSyncDialog
+                        task={activeTask}
+                        report={activeTask.diagnosisReport}
+                        detail={issueDetail}
+                        environmentId={environmentId}
+                        cwd={
+                          projects.find((p) => p.id === activeTask.targetProjectId)
+                            ?.workspaceRoot ?? cwd
+                        }
+                        writingBack={writingBack}
+                        supportsComment={canComment === true}
+                        supportsResolve={canResolve === true}
+                        onSync={onManualWriteBack}
+                      />
+                    ) : null
+                  ) : activeTask.actionMode !== "diagnose_only" && (canComment || canResolve) ? (
+                    <div className="flex items-center gap-1.5">
+                      {canComment ? (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={writingBack}
+                          onClick={() =>
+                            void onManualWriteBack({
+                              kind: "comment",
+                              issueKey: activeTask.issueKey,
+                              comment: activeTask.diagnosisReport!,
+                              taskId: activeTask.id,
+                            })
+                          }
+                        >
+                          <SendIcon className="size-3" />
+                          {activeTask.commentSyncedAt ? (
+                            <T>Re-sync comment</T>
+                          ) : (
+                            <T>Sync to ZenTao</T>
+                          )}
+                        </Button>
+                      ) : null}
+                      {canResolve ? (
+                        <Button
+                          size="xs"
+                          disabled={writingBack}
+                          onClick={() =>
+                            void onManualWriteBack({
+                              kind: "resolve",
+                              issueKey: activeTask.issueKey,
+                              resolution: "fixed",
+                              resolvedBuild: "trunk",
+                              comment: activeTask.diagnosisReport!,
+                              taskId: activeTask.id,
+                            })
+                          }
+                        >
+                          <CheckCircle2Icon className="size-3" />
+                          <T>Sync & mark Resolved</T>
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null
                 }
               >
-                <div className="rounded-xl border border-border/60 bg-card/30 p-4">
-                  <PullRequestMarkdown
-                    text={activeTask.diagnosisReport}
-                    cwd={
-                      projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ??
-                      cwd
-                    }
-                    environmentId={environmentId}
-                  />
-                </div>
+                {activeTask.diagnosisReport ? (
+                  <div className="rounded-xl border border-border/60 bg-card/30 p-4">
+                    <PullRequestMarkdown
+                      text={activeTask.diagnosisReport}
+                      cwd={
+                        projects.find((p) => p.id === activeTask.targetProjectId)?.workspaceRoot ??
+                        cwd
+                      }
+                      environmentId={environmentId}
+                    />
+                  </div>
+                ) : null}
               </PullRequestSection>
             ) : null}
 
@@ -955,6 +1029,38 @@ export function IssueAutomationInspectorContent({
                 </div>
               </PullRequestSection>
             ) : null}
+
+            <PullRequestSection
+              key={`timeline:${activeTask.id}`}
+              title={gt("Execution timeline")}
+              defaultOpen={isStageActive(activeTask.stage) || !activeTask.diagnosisReport}
+              keepMounted
+            >
+              <div className="relative ml-2 space-y-3 border-l border-border/70 pl-4">
+                {activeTask.steps.map((step, idx) => (
+                  <div
+                    key={`${step.at}-${String(idx)}`}
+                    className="relative flex flex-col gap-0.5 text-xs"
+                  >
+                    <span
+                      aria-hidden
+                      className="absolute -left-5 top-1.5 size-2 rounded-full bg-primary/70 ring-4 ring-background"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                        {new Date(step.at).toLocaleTimeString()}
+                      </span>
+                      {step.modelLabel ? (
+                        <Badge variant="secondary" size="sm">
+                          {step.modelLabel}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <p className="leading-relaxed text-foreground">{step.message}</p>
+                  </div>
+                ))}
+              </div>
+            </PullRequestSection>
           </div>
         </div>
       ) : null}

@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   type ChatFileAttachment,
   type GuestMessageAttribution,
+  type IssueAutomationMessageSummary,
   type OrchestrationMessageContext,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
@@ -15,8 +16,10 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { imageMimeType } from "@t3tools/shared/image";
+import { readLegacyIssueAutomationSummary } from "@t3tools/shared/legacyIssueAutomationSummary";
 import { videoMimeType } from "@t3tools/shared/video";
-import { msg } from "gt-i18n";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 /** The working row while T3 Code's own compaction runs. */
 export const IDLE_COMPACTING_LABELS = {
@@ -59,18 +62,66 @@ export function resolveUserMessageFileCards(message: {
   return remaining.trim() === "" ? files : null;
 }
 
-export function resolveUserMessagePresentation(message: {
-  readonly id?: string;
-  readonly role: string;
-  readonly text: string;
-  readonly createdBy?: OrchestrationV2Actor;
-  readonly creationSource?: OrchestrationV2CreationSource;
-  readonly scheduledTaskId?: ScheduledTaskId | undefined;
-  readonly context?: { readonly guest?: GuestMessageAttribution | undefined } | undefined;
-}): {
+const issueAutomationModeLabels = {
+  diagnose: msg("Diagnose only · No code changes"),
+  repair: msg("Diagnose and repair"),
+  review: msg("Review the fix"),
+} satisfies Record<IssueAutomationMessageSummary["mode"], string>;
+
+function issueAutomationSummaryText(
+  summary: IssueAutomationMessageSummary,
+  resolve: MFunctionType,
+) {
+  const escapeText = (text: string) =>
+    text
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[\\`*_[\]<>!#~|]/g, "\\$&");
+  const scope = [summary.scopeName, summary.moduleName ?? ""]
+    .map(escapeText)
+    .filter(Boolean)
+    .join(" / ");
+  const label = resolve(
+    summary.platform === "zentao"
+      ? msg("View ZenTao {issueKey}", { issueKey: summary.issueKey })
+      : msg("View issue {issueKey}", { issueKey: summary.issueKey }),
+  );
+  let link = escapeText(label);
+  try {
+    const url = new URL(summary.issueUrl);
+    if (url.protocol === "https:" || url.protocol === "http:") {
+      link = `[${link}](<${url.href}>)`;
+    }
+  } catch {
+    // The issue label remains useful when the tracker has no usable web URL.
+  }
+  return [`**${resolve(issueAutomationModeLabels[summary.mode])}**`, scope, link]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function resolveUserMessagePresentation(
+  message: {
+    readonly id?: string;
+    readonly role: string;
+    readonly text: string;
+    readonly createdBy?: OrchestrationV2Actor;
+    readonly creationSource?: OrchestrationV2CreationSource;
+    readonly inputIntent?: OrchestrationV2UserMessageInputIntent | undefined;
+    readonly scheduledTaskId?: ScheduledTaskId | undefined;
+    readonly context?:
+      | {
+          readonly guest?: GuestMessageAttribution | undefined;
+          readonly issueAutomation?: IssueAutomationMessageSummary | undefined;
+        }
+      | undefined;
+  },
+  resolve: MFunctionType = mFallback,
+): {
   readonly text: string;
   readonly attribution: "automation" | "agent" | "t3code" | "guest" | null;
   readonly scheduledTaskId: ScheduledTaskId | undefined;
+  readonly hasIssueSummary?: true;
   /** Set when `attribution` is "guest". */
   readonly guestName?: string;
 } {
@@ -85,6 +136,17 @@ export function resolveUserMessagePresentation(message: {
       attribution: "guest",
       scheduledTaskId: undefined,
       guestName: guest.name,
+    };
+  }
+  // A cached snapshot can resume at the latest event without receiving the server's summary.
+  const issueSummary =
+    message.context?.issueAutomation ?? readLegacyIssueAutomationSummary(message);
+  if (issueSummary !== undefined) {
+    return {
+      text: issueAutomationSummaryText(issueSummary, resolve),
+      attribution: null,
+      scheduledTaskId: undefined,
+      hasIssueSummary: true,
     };
   }
   if (message.scheduledTaskId !== undefined) {
@@ -118,9 +180,7 @@ export function resolveUserMessagePresentation(message: {
   };
 }
 
-type GroupableUserMessage = Parameters<typeof resolveUserMessagePresentation>[0] & {
-  readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
-};
+type GroupableUserMessage = Parameters<typeof resolveUserMessagePresentation>[0];
 
 export function resolveUserMessageGrouping(
   message: GroupableUserMessage | undefined,

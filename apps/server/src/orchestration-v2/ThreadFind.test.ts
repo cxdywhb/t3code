@@ -381,11 +381,28 @@ describe("V2 thread find", () => {
   it.effect("searches visible rendered messages and plans in canonical item order", () =>
     Effect.gen(function* () {
       const projection = yield* setup;
+      const issue = item("issue", 5, "Private reproduction steps", "user_message");
+      assert(issue.type === "user_message");
       yield* putItems([
         item("user", 1, "Check **the build**", "user_message"),
         item("assistant", 2, "check the build twice: check the build"),
         item("plan-item", 3, "# Check the build\nShip it", "proposed_plan"),
         item("url", 4, "[documentation](https://hidden.example/needle)"),
+        {
+          ...issue,
+          context: {
+            version: 1,
+            records: [],
+            issueAutomation: {
+              mode: "diagnose",
+              scopeName: "Example Product",
+              moduleName: "iOS",
+              platform: "zentao",
+              issueKey: "#20774",
+              issueUrl: "https://zentao.example.com/bug-view-20774.html",
+            },
+          },
+        },
       ]);
       const matches = [];
       for (let index = 0; index < 4; index++) {
@@ -406,6 +423,16 @@ describe("V2 thread find", () => {
       assert.equal(
         (yield* projection.searchThread({ threadId, query: "hidden.example" })).totalMatches,
         0,
+      );
+      assert.equal(
+        (yield* projection.searchThread({ threadId, query: "Private reproduction steps" }))
+          .totalMatches,
+        0,
+      );
+      assert.equal(
+        (yield* projection.searchThread({ threadId, query: "Example Product / iOS" })).match
+          ?.entryId,
+        "issue",
       );
       assert.equal(
         (yield* projection.searchThread({ threadId, query: "check", index: 99 })).activeIndex,

@@ -16,6 +16,7 @@ import {
   dedupeTurnItemBodies,
 } from "@t3tools/shared/orchestrationV2DedupedBodies";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
+import { readLegacyIssueAutomationSummary } from "@t3tools/shared/legacyIssueAutomationSummary";
 import {
   commandIndicatesFailure,
   compactDynamicToolOutput,
@@ -157,6 +158,13 @@ function capCheckpointItemFiles(item: OrchestrationV2TurnItem): OrchestrationV2T
 
 export function projectTurnItemForWire(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
+    case "user_message": {
+      if (item.context !== undefined) return item;
+      const summary = readLegacyIssueAutomationSummary(item);
+      return summary
+        ? { ...item, context: { version: 1, records: [], issueAutomation: summary } }
+        : item;
+    }
     case "checkpoint":
       return capCheckpointFiles(item);
     case "handoff": {
@@ -254,6 +262,8 @@ function boundToolOutput(output: unknown): unknown {
 
 export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
+    case "user_message":
+      return projectTurnItemForWire(item);
     case "command_execution":
       return {
         ...item,

@@ -67,6 +67,18 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("separates confirming a repair in T3 from writing it to ZenTao", () => {
+    for (const method of [
+      WS_METHODS.issueAutomationAnalyzeIssues,
+      WS_METHODS.issueAutomationConfirmRepair,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueAutomationWriteBack)).toBe(
+      AuthSourceControlWriteScope,
+    );
+  });
+
   it("separates passive terminal observation from operations that can change a shell", () => {
     for (const method of [WS_METHODS.terminalObserve, WS_METHODS.subscribeTerminalMetadata]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalReadScope);
@@ -99,6 +111,15 @@ describe("RPC authorization scopes", () => {
 
   it("still lets readers load settings the way installed Swift clients ask", () => {
     expect(requiredScopeForRpcMethod("server.getSettings")).toBe(AuthOrchestrationReadScope);
+  });
+
+  it("requires settings access for both steps of tracker authorization", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueAutomationStartConnectorAuth)).toBe(
+      AuthSettingsWriteScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueAutomationFinishConnectorAuth)).toBe(
+      AuthSettingsWriteScope,
+    );
   });
 
   it("rejects unknown RPC method names", () => {

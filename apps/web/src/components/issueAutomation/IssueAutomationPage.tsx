@@ -1,19 +1,23 @@
+import { useAtomValue } from "@effect/atom-react";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   IssueAutomationActionMode,
   IssueAutomationBrowseFilter,
   IssueAutomationConnector,
+  IssueAutomationListRemoteIssuesResult,
   IssueAutomationProfile,
+  IssueAutomationScanProfileIssuesResult,
   IssueAutomationTask,
   ModelSelection,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import { issueAutomationWorkbenchTitleZh } from "@t3tools/shared/issueAutomationTitle";
 import { useNavigate } from "@tanstack/react-router";
-import { T, useGT } from "gt-react";
+import { T, useGT, useLocale } from "gt-react";
 import {
   ActivityIcon,
   BarChart3Icon,
@@ -73,16 +77,18 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useProjects } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
 import { issueAutomationEnvironment, useIssueAutomationLiveState } from "~/state/issueAutomation";
-import { useEnvironmentQuery } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   Empty,
   EmptyContent,
@@ -110,6 +116,7 @@ import {
   computeIssueAutomationAnalytics,
   DEFAULT_WORKBENCH_PREFS,
   formatCompactDuration,
+  groupIssueAutomationTasks,
   isStageRunning,
   IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
@@ -191,11 +198,31 @@ function TaskDurationBadge({
 
 export function IssueAutomationPage() {
   const gt = useGT();
+  const locale = useLocale();
+  const pageTitle =
+    locale === "zh" ? issueAutomationWorkbenchTitleZh : gt("ZenTao Issue Auto-Analysis");
   const navigate = useNavigate();
   const actionModeLabel = useActionModeLabel();
   const isWideDesktop = useMediaQuery("(min-width: 1024px)");
   const environmentId = usePrimaryEnvironmentId();
+  const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
+  const supportsRuleScan = capabilities?.issueAutomationRuleScan === true;
+  const supportsRetry = capabilities?.issueAutomationRetry === true;
+  const supportsRepair = capabilities?.issueAutomationRepair === true;
+  const canStartRepair = useAtomValue(
+    issueAutomationEnvironment.analyzeIssues.permissionAtom(environmentId),
+  );
+  const canConfirmRepair = useAtomValue(
+    issueAutomationEnvironment.confirmRepair.permissionAtom(environmentId),
+  );
+  const canConfigureConnector = useAtomValue(
+    issueAutomationEnvironment.startConnectorAuth.permissionAtom(environmentId),
+  );
+  const canWriteBack = useAtomValue(
+    issueAutomationEnvironment.writeBack.permissionAtom(environmentId),
+  );
   const { snapshot } = useIssueAutomationLiveState(environmentId);
+  const taskGroups = groupIssueAutomationTasks(snapshot.tasks);
 
   const storageKey = `t3code:issue-automation:prefs:v1:${environmentId ?? "default"}`;
   const [prefs, setPrefs] = useLocalStorage(
@@ -214,7 +241,6 @@ export function IssueAutomationPage() {
     }));
 
   const projectTitleById = new Map(envProjects.map((p) => [p.id as string, p.title]));
-  const catalog = useOfficialModelCatalog(environmentId);
 
   const activeTab = prefs.activeTab;
   const setActiveTab = (next: WorkbenchTab) => {
@@ -225,8 +251,7 @@ export function IssueAutomationPage() {
     snapshot.connectors.find((c) => c.id === prefs.selectedConnectorId) ??
     snapshot.connectors[0] ??
     null;
-  const activeConnectorHealthy =
-    activeConnector !== null && activeConnector.status === "connected" && activeConnector.hasSecret;
+  const activeConnectorHealthy = activeConnector !== null && activeConnector.status === "connected";
 
   const sortedConnectorScopes = activeConnector ? sortScopesByIdDesc(activeConnector.scopes) : [];
 
@@ -253,6 +278,13 @@ export function IssueAutomationPage() {
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const [runQuery, setRunQuery] = useState("");
+  const [scanningProfileId, setScanningProfileId] = useState<IssueAutomationProfile["id"] | null>(
+    null,
+  );
+  const [scanSelection, setScanSelection] = useState<{
+    environmentId: EnvironmentId;
+    profileId: IssueAutomationProfile["id"];
+  } | null>(null);
 
   const [selectedIssueKey, setSelectedIssueKey] = useState<string | null>(null);
   const [checkedIssueKeys, setCheckedIssueKeys] = useState<ReadonlyArray<string>>([]);
@@ -268,12 +300,22 @@ export function IssueAutomationPage() {
 
   const scopePrefKey = makeScopePrefKey(activeConnector?.id, effectiveScopeId);
 
+  const scannedProfile =
+    scanSelection && scanSelection.environmentId === environmentId
+      ? (snapshot.profiles.find(
+          (profile) =>
+            profile.id === scanSelection.profileId &&
+            profile.connectorId === activeConnector?.id &&
+            profile.scopeId === effectiveScopeId,
+        ) ?? null)
+      : null;
   const matchedScopeProfile =
-    activeConnector && effectiveScopeId
+    scannedProfile ??
+    (activeConnector && effectiveScopeId
       ? (snapshot.profiles.find(
           (p) => p.connectorId === activeConnector.id && p.scopeId === effectiveScopeId,
         ) ?? null)
-      : null;
+      : null);
 
   const validProjectIds = envProjects.map((p) => p.id);
 
@@ -287,26 +329,37 @@ export function IssueAutomationPage() {
     validModelKeys: [],
   });
 
+  const driverKind = resolvedTargets.actionMode === "diagnose_only" ? "claudeAgent" : undefined;
+  const catalog = useOfficialModelCatalog(environmentId, driverKind);
   const resolvedProjectId = resolvedTargets.projectId;
   const resolvedModelSelection = resolvePersistedModelSelection({
     prefs,
     scopeKey: scopePrefKey,
     profilePrimaryModel: matchedScopeProfile?.models.primaryModel,
-    ...(catalog.pickableEntries.length > 0
+    ...(driverKind || catalog.pickableEntries.length > 0
       ? { isSelectionAvailable: catalog.isSelectionAvailable }
       : {}),
     fallbackSelection: catalog.firstAvailableSelection,
   });
   const resolvedActionMode = resolvedTargets.actionMode;
 
+  const clearIssueSelection = () => {
+    setSelectedIssueKey(null);
+    setCheckedIssueKeys([]);
+    setPage(1);
+  };
+
+  const clearScan = () => {
+    setScanSelection(null);
+    clearIssueSelection();
+  };
+
   const handleSelectConnector = (nextConnectorId: string) => {
     setPrefs((prev) => ({
       ...prev,
       selectedConnectorId: nextConnectorId,
     }));
-    setSelectedIssueKey(null);
-    setCheckedIssueKeys([]);
-    setPage(1);
+    clearScan();
   };
 
   const handleSelectScope = (nextScopeId: string) => {
@@ -319,9 +372,7 @@ export function IssueAutomationPage() {
         [activeConnector.id]: nextScopeId,
       },
     }));
-    setSelectedIssueKey(null);
-    setCheckedIssueKeys([]);
-    setPage(1);
+    clearScan();
   };
 
   const handleSelectBrowseType = (nextBrowseType: IssueAutomationBrowseFilter) => {
@@ -392,33 +443,58 @@ export function IssueAutomationPage() {
     setPrefs((prev) => ({ ...prev, analyticsScopeMode: nextMode }));
   };
 
-  const remoteIssuesQuery = useEnvironmentQuery(
-    environmentId !== null && activeConnector !== null && effectiveScopeId.length > 0
-      ? issueAutomationEnvironment.remoteIssues({
-          environmentId,
-          input: {
-            connectorId: activeConnector.id,
-            scopeId: effectiveScopeId,
-            browseType,
-            ...(keyword.trim() ? { keyword: keyword.trim() } : {}),
+  const remoteIssuesQuery = useEnvironmentQuery<
+    IssueAutomationListRemoteIssuesResult | IssueAutomationScanProfileIssuesResult,
+    unknown
+  >(
+    environmentId !== null &&
+      activeConnector !== null &&
+      activeConnector.status !== "disconnected" &&
+      effectiveScopeId.length > 0
+      ? scannedProfile
+        ? issueAutomationEnvironment.scanProfileIssues({
+            environmentId,
+            profile: scannedProfile,
             page,
-            pageSize: 25,
-          },
-        })
+            supportsRuleScan,
+          })
+        : issueAutomationEnvironment.remoteIssues({
+            environmentId,
+            input: {
+              connectorId: activeConnector.id,
+              scopeId: effectiveScopeId,
+              browseType,
+              ...(keyword.trim() ? { keyword: keyword.trim() } : {}),
+              page,
+              pageSize: 25,
+            },
+          })
       : null,
   );
 
+  const activeTask: IssueAutomationTask | null =
+    selectedTaskId !== null
+      ? (snapshot.tasks.find((t) => t.id === selectedTaskId) ?? null)
+      : selectedIssueKey !== null
+        ? (taskGroups.find(
+            ({ latest }) =>
+              latest.issueKey === selectedIssueKey && latest.connectorId === activeConnector?.id,
+          )?.latest ?? null)
+        : null;
+  const inspectingRun = inspectorTab === "trace" && activeTask !== null;
+  const detailConnectorId = inspectingRun ? activeTask.connectorId : activeConnector?.id;
+  const detailScopeId = inspectingRun ? activeTask.scopeId : effectiveScopeId;
   const remoteDetailQuery = useEnvironmentQuery(
     environmentId !== null &&
-      activeConnector !== null &&
-      effectiveScopeId.length > 0 &&
+      detailConnectorId !== undefined &&
+      detailScopeId.length > 0 &&
       selectedIssueKey !== null &&
       inspectorOpen
       ? issueAutomationEnvironment.remoteIssueDetail({
           environmentId,
           input: {
-            connectorId: activeConnector.id,
-            scopeId: effectiveScopeId,
+            connectorId: detailConnectorId,
+            scopeId: detailScopeId,
             issueKey: selectedIssueKey,
           },
         })
@@ -429,6 +505,9 @@ export function IssueAutomationPage() {
     reportFailure: false,
   });
   const cancelTaskCmd = useAtomCommand(issueAutomationEnvironment.cancelTask, {
+    reportFailure: false,
+  });
+  const confirmRepairCmd = useAtomCommand(issueAutomationEnvironment.confirmRepair, {
     reportFailure: false,
   });
   const writeBackCmd = useAtomCommand(issueAutomationEnvironment.writeBack, {
@@ -446,28 +525,47 @@ export function IssueAutomationPage() {
   const deleteProfileCmd = useAtomCommand(issueAutomationEnvironment.deleteProfile, {
     reportFailure: false,
   });
-  const triggerPollCmd = useAtomCommand(issueAutomationEnvironment.triggerPoll, {
-    reportFailure: false,
-  });
-
   const [dispatching, setDispatching] = useState(false);
   const [writingBack, setWritingBack] = useState(false);
 
   const issues = remoteIssuesQuery.data?.issues ?? [];
+  const issuePage = remoteIssuesQuery.data;
+  const hasNextIssuesPage =
+    issuePage && ("hasNextPage" in issuePage ? issuePage.hasNextPage : issues.length >= 25);
+  const changeIssuePage = (next: number) => {
+    if (scannedProfile !== null && environmentId !== null) {
+      const query = issueAutomationEnvironment.scanProfileIssues({
+        environmentId,
+        profile: scannedProfile,
+        page: next,
+        supportsRuleScan,
+      });
+      const cached = query.initialValueTarget ?? query;
+      if (appAtomRegistry.getNodes().has(cached) && !appAtomRegistry.get(cached).waiting) {
+        appAtomRegistry.refresh(query);
+      }
+    }
+    setPage(next);
+  };
   const selectedIssueSummary =
     selectedIssueKey !== null ? (issues.find((i) => i.key === selectedIssueKey) ?? null) : null;
   const selectedDetail = remoteDetailQuery.data;
 
-  const activeTask: IssueAutomationTask | null =
-    selectedTaskId !== null
-      ? (snapshot.tasks.find((t) => t.id === selectedTaskId) ?? null)
-      : selectedIssueKey !== null
-        ? (snapshot.tasks.find(
-            (t) =>
-              t.issueKey === selectedIssueKey &&
-              (activeConnector === null || t.connectorId === activeConnector.id),
-          ) ?? null)
-        : null;
+  const latestTask =
+    activeTask &&
+    taskGroups.find(
+      ({ latest }) =>
+        latest.connectorId === activeTask.connectorId && latest.issueKey === activeTask.issueKey,
+    )?.latest;
+  const canRetryRepair =
+    activeTask?.repairOfTaskId !== undefined &&
+    (activeTask.stage === "cancelled" || activeTask.stage === "failed");
+  const repairSource =
+    activeTask?.id === latestTask?.id
+      ? canRetryRepair
+        ? snapshot.tasks.find((task) => task.id === activeTask?.repairOfTaskId)
+        : activeTask
+      : null;
 
   const hasSelection = selectedIssueKey !== null || activeTask !== null;
   const inspectorActive =
@@ -539,6 +637,41 @@ export function IssueAutomationPage() {
     window.addEventListener("pointerup", onUp);
   };
 
+  const handleScanProfile = async (profile: IssueAutomationProfile) => {
+    if (!environmentId || scanningProfileId !== null) return;
+    setScanningProfileId(profile.id);
+    const query = issueAutomationEnvironment.scanProfileIssues({
+      environmentId,
+      profile,
+      page: 1,
+      supportsRuleScan,
+    });
+    const result = await executeAtomQuery(appAtomRegistry, query, {
+      refresh: appAtomRegistry.getNodes().has(query.initialValueTarget ?? query),
+      reportFailure: false,
+    });
+    setScanningProfileId(null);
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: gt("Could not scan issues"),
+        description: formatEnvironmentQueryError(result.cause),
+      });
+      return;
+    }
+
+    clearIssueSelection();
+    setSelectedTaskId(null);
+    setInspectorOpen(false);
+    setScanSelection({ environmentId, profileId: profile.id });
+    setPrefs((prev) => ({
+      ...prev,
+      activeTab: "issues",
+      selectedConnectorId: profile.connectorId,
+      scopeByConnector: { ...prev.scopeByConnector, [profile.connectorId]: profile.scopeId },
+    }));
+  };
+
   const handleInspectorSplitterKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
@@ -554,7 +687,7 @@ export function IssueAutomationPage() {
     const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
       resolvedModelSelection ??
-      matchedScopeProfile?.models.primaryModel ??
+      (driverKind ? null : matchedScopeProfile?.models.primaryModel) ??
       catalog.firstAvailableSelection ??
       null;
 
@@ -624,13 +757,74 @@ export function IssueAutomationPage() {
     }
   };
 
+  const handleRunFromTask = async (task: IssueAutomationTask, kind: "retry" | "repair") => {
+    if (
+      !environmentId ||
+      dispatching ||
+      (kind === "repair" ? !supportsRepair || !canStartRepair : !supportsRetry)
+    )
+      return;
+    setDispatching(true);
+    const result = await analyzeIssuesCmd({
+      environmentId,
+      input: {
+        connectorId: task.connectorId,
+        scopeId: task.scopeId,
+        scopeName: task.scopeName,
+        issueKeys: [task.issueKey],
+        ...(task.profileId ? { profileId: task.profileId } : {}),
+        ...(kind === "repair" ? { repairFromTaskId: task.id } : { retryTaskId: task.id }),
+      },
+    });
+    setDispatching(false);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: kind === "repair" ? gt("Failed to start repair") : gt("Failed to start analysis"),
+        description: error instanceof Error ? error.message : gt("Dispatch failed."),
+      });
+      return;
+    }
+    const attempt = result.value.tasks[0];
+    if (attempt) selectRun(attempt);
+  };
+
+  const handleConfirmRepair = async (taskId: IssueAutomationTask["id"]) => {
+    if (!environmentId || dispatching || !canConfirmRepair) return;
+    setDispatching(true);
+    const result = await confirmRepairCmd({ environmentId, input: { taskId } });
+    setDispatching(false);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: gt("Could not confirm repair"),
+        ...(error instanceof Error ? { description: error.message } : {}),
+      });
+    }
+  };
+
+  const handleCancelTask = async (taskId: IssueAutomationTask["id"]) => {
+    if (!environmentId) return;
+    const result = await cancelTaskCmd({ environmentId, input: { taskId } });
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: gt("Could not cancel diagnosis"),
+        ...(error instanceof Error ? { description: error.message } : {}),
+      });
+    }
+  };
+
   const handleManualWriteBack = async (action: ManualWriteBackPayload): Promise<boolean> => {
-    if (!environmentId || !activeConnector) return false;
+    if (!environmentId || !detailConnectorId || writingBack) return false;
     setWritingBack(true);
     const res = await writeBackCmd({
       environmentId,
       input: {
-        connectorId: activeConnector.id,
+        connectorId: detailConnectorId,
         action,
       },
     });
@@ -668,19 +862,32 @@ export function IssueAutomationPage() {
     }
   };
 
-  const filteredTasks = snapshot.tasks.filter((task) => {
-    if (runFilter === "active" && !isStageActive(task.stage)) return false;
-    if (runFilter === "needs_human" && task.stage !== "needs_human") return false;
-    if (runFilter === "completed" && task.stage !== "completed") return false;
-    if (runFilter === "failed" && task.stage !== "failed" && task.stage !== "cancelled") {
-      return false;
-    }
-    const q = runQuery.trim().toLowerCase();
-    if (!q) return true;
+  const groupCounts = {
+    all: taskGroups.length,
+    active: 0,
+    needs_human: 0,
+    completed: 0,
+    failed: 0,
+  };
+  const query = runQuery.trim().toLowerCase();
+  const filteredGroups = taskGroups.filter(({ latest, attempts }) => {
+    const stage = latest.stage;
+    const filter =
+      stage === "needs_human" || stage === "completed"
+        ? stage
+        : isStageActive(stage)
+          ? "active"
+          : "failed";
+    groupCounts[filter] += 1;
     return (
-      task.displayKey.toLowerCase().includes(q) ||
-      task.issueTitle.toLowerCase().includes(q) ||
-      task.assignedModelLabel.toLowerCase().includes(q)
+      (runFilter === "all" || runFilter === filter) &&
+      (!query ||
+        attempts.some(
+          (task) =>
+            task.displayKey.toLowerCase().includes(query) ||
+            task.issueTitle.toLowerCase().includes(query) ||
+            task.assignedModelLabel.toLowerCase().includes(query),
+        ))
     );
   });
 
@@ -710,12 +917,21 @@ export function IssueAutomationPage() {
         onAdhocModeChange={handleSelectActionMode}
         dispatching={dispatching}
         onDispatchIssue={(key) => void handleDispatchIssues([key])}
+        onStartRepair={
+          supportsRepair &&
+          canStartRepair &&
+          repairSource?.actionMode === "diagnose_only" &&
+          repairSource.stage === "completed" &&
+          repairSource.diagnosisReport &&
+          repairSource.targetProjectId
+            ? () => void handleRunFromTask(repairSource, "repair")
+            : undefined
+        }
+        onConfirmRepair={canConfirmRepair ? (id) => void handleConfirmRepair(id) : undefined}
+        canWriteBack={canWriteBack}
         writingBack={writingBack}
         onManualWriteBack={handleManualWriteBack}
-        onCancelTask={(taskId) => {
-          if (!environmentId) return;
-          void cancelTaskCmd({ environmentId, input: { taskId } });
-        }}
+        onCancelTask={(taskId) => void handleCancelTask(taskId)}
         onOpenThread={openThread}
         onEditConnector={
           activeConnector
@@ -739,9 +955,7 @@ export function IssueAutomationPage() {
             reserveNativeControls={!desktopInspectorVisible}
             className="relative bg-background"
           >
-            <WorkspacePageTitle ariaLabel={gt("ZenTao")}>
-              <T>ZenTao</T>
-            </WorkspacePageTitle>
+            <WorkspacePageTitle ariaLabel={pageTitle}>{pageTitle}</WorkspacePageTitle>
             <div className="min-w-0 flex-1" />
 
             <div
@@ -774,7 +988,7 @@ export function IssueAutomationPage() {
                       {activeConnector.name}
                       <span className="hidden text-muted-foreground xl:inline">
                         {" "}
-                        · {activeConnector.viewerName ?? activeConnector.account}
+                        · {activeConnector.viewerName ?? activeConnector.name}
                       </span>
                     </span>
                     <PencilIcon className="size-3 shrink-0 opacity-70" />
@@ -785,6 +999,7 @@ export function IssueAutomationPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={!canConfigureConnector}
                   onClick={() => {
                     setEditingConnector(null);
                     setConnectorModalOpen(true);
@@ -795,7 +1010,20 @@ export function IssueAutomationPage() {
                 </Button>
               )}
 
-              {activeConnector ? (
+              {activeConnector?.status === "disconnected" ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!canConfigureConnector}
+                  onClick={() => {
+                    setEditingConnector(activeConnector);
+                    setConnectorModalOpen(true);
+                  }}
+                >
+                  <Plug2Icon className="size-3.5" />
+                  <T>Authorize MCP</T>
+                </Button>
+              ) : activeConnector ? (
                 <Button
                   size="sm"
                   variant="outline"
@@ -852,7 +1080,7 @@ export function IssueAutomationPage() {
                   ) : (
                     <WorkflowIcon className="size-3.5" />
                   )}
-                  <T>Runs</T>
+                  <T>Runs</T> ({taskGroups.length})
                 </Toggle>
                 <Toggle value="analytics">
                   <BarChart3Icon className="size-3.5" />
@@ -878,7 +1106,7 @@ export function IssueAutomationPage() {
                   </EmptyTitle>
                   <EmptyDescription>
                     <T>
-                      Connect your internal ZenTao server, bind products to multiple local code
+                      Connect your ZenTao MCP service, bind products to multiple local code
                       repositories, and dispatch local AI models for unattended root-cause
                       diagnosis, isolated Worktree fixes, and automatic comment write-back.
                     </T>
@@ -886,6 +1114,7 @@ export function IssueAutomationPage() {
                 </EmptyHeader>
                 <EmptyContent>
                   <Button
+                    disabled={!canConfigureConnector}
                     onClick={() => {
                       setEditingConnector(null);
                       setConnectorModalOpen(true);
@@ -905,22 +1134,32 @@ export function IssueAutomationPage() {
               {/* Fixed Non-Scrolling Issues Toolbar */}
               <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-2.5 sm:px-7">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="min-w-32 max-w-64 flex-1">
-                    <PullRequestSearchInput
-                      value={keyword}
-                      busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
-                      label={gt("Search issues")}
-                      placeholder={gt("Search bug ID, title, or module…")}
-                      onChange={(next) => {
-                        setKeyword(next);
-                        setPage(1);
-                      }}
-                      onSubmit={(next) => {
-                        setKeyword(next);
-                        setPage(1);
-                      }}
-                    />
-                  </div>
+                  {scannedProfile ? (
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="min-w-0 wrap-anywhere text-sm">{scannedProfile.name}</span>
+                      <Button size="xs" variant="ghost" onClick={clearScan}>
+                        <XIcon className="size-3" />
+                        <T>Clear rule filter</T>
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="min-w-32 max-w-64 flex-1">
+                      <PullRequestSearchInput
+                        value={keyword}
+                        busy={remoteIssuesQuery.isPending && keyword.trim().length > 0}
+                        label={gt("Search issues")}
+                        placeholder={gt("Search bug ID, title, or module…")}
+                        onChange={(next) => {
+                          setKeyword(next);
+                          setPage(1);
+                        }}
+                        onSubmit={(next) => {
+                          setKeyword(next);
+                          setPage(1);
+                        }}
+                      />
+                    </div>
+                  )}
 
                   {snapshot.connectors.length > 1 ? (
                     <Menu>
@@ -965,41 +1204,43 @@ export function IssueAutomationPage() {
                     className="max-w-60"
                   />
 
-                  <Menu>
-                    <MenuTrigger
-                      aria-label={gt("Filter issues")}
-                      render={<Button variant="outline" />}
-                    >
-                      {browseType === "assigntome" || browseType === "openedbyme" ? (
-                        <UserRoundIcon className="size-3.5 text-muted-foreground" />
-                      ) : browseType === "all" ? (
-                        <LayersIcon className="size-3.5 text-muted-foreground" />
-                      ) : (
-                        <CircleDotIcon className="size-3.5 text-muted-foreground" />
-                      )}
-                      <span>{browseFilterLabel(browseType)}</span>
-                      <ChevronDownIcon className="size-3.5 opacity-70" />
-                    </MenuTrigger>
-                    <MenuPopup align="start">
-                      <MenuRadioGroup
-                        value={browseType}
-                        onValueChange={(next) => {
-                          if (next) handleSelectBrowseType(next as IssueAutomationBrowseFilter);
-                        }}
+                  {scannedProfile === null && (
+                    <Menu>
+                      <MenuTrigger
+                        aria-label={gt("Filter issues")}
+                        render={<Button variant="outline" />}
                       >
-                        {(
-                          ["unresolved", "unclosed", "assigntome", "openedbyme", "all"] as const
-                        ).map((opt) => (
-                          <MenuRadioItem key={opt} value={opt}>
-                            <span className="flex items-center gap-2">
-                              <span className="flex-1">{browseFilterLabel(opt)}</span>
-                              <MenuRadioItemIndicator />
-                            </span>
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
-                    </MenuPopup>
-                  </Menu>
+                        {browseType === "assigntome" || browseType === "openedbyme" ? (
+                          <UserRoundIcon className="size-3.5 text-muted-foreground" />
+                        ) : browseType === "all" ? (
+                          <LayersIcon className="size-3.5 text-muted-foreground" />
+                        ) : (
+                          <CircleDotIcon className="size-3.5 text-muted-foreground" />
+                        )}
+                        <span>{browseFilterLabel(browseType)}</span>
+                        <ChevronDownIcon className="size-3.5 opacity-70" />
+                      </MenuTrigger>
+                      <MenuPopup align="start">
+                        <MenuRadioGroup
+                          value={browseType}
+                          onValueChange={(next) => {
+                            if (next) handleSelectBrowseType(next as IssueAutomationBrowseFilter);
+                          }}
+                        >
+                          {(
+                            ["unresolved", "unclosed", "assigntome", "openedbyme", "all"] as const
+                          ).map((opt) => (
+                            <MenuRadioItem key={opt} value={opt} closeOnClick>
+                              <span className="flex items-center gap-2">
+                                <span className="flex-1">{browseFilterLabel(opt)}</span>
+                                <MenuRadioItemIndicator />
+                              </span>
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuPopup>
+                    </Menu>
+                  )}
 
                   {envProjects.length > 0 ? (
                     <SearchableProjectMenu
@@ -1023,6 +1264,7 @@ export function IssueAutomationPage() {
 
                   {environmentId && catalog.pickableEntries.length > 0 ? (
                     <OfficialModelPicker
+                      driverKind={driverKind}
                       environmentId={environmentId}
                       value={resolvedModelSelection}
                       onChange={(next) => {
@@ -1067,7 +1309,17 @@ export function IssueAutomationPage() {
                     />
                     <span>
                       <strong className="font-medium text-foreground">{effectiveScopeName}</strong>{" "}
-                      · <T>Total</T> {remoteIssuesQuery.data?.total ?? 0}
+                      {scannedProfile ? (
+                        <>
+                          {" "}
+                          · {gt("Matches on this page")} {issues.length}
+                        </>
+                      ) : (
+                        <>
+                          {" "}
+                          · <T>Total</T> {issuePage && "total" in issuePage ? issuePage.total : 0}
+                        </>
+                      )}
                     </span>
                     {matchedScopeProfile ? (
                       <Badge variant="secondary" size="sm">
@@ -1086,7 +1338,7 @@ export function IssueAutomationPage() {
                       variant="ghost"
                       aria-label={gt("Previous page")}
                       disabled={page <= 1 || remoteIssuesQuery.isPending}
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      onClick={() => changeIssuePage(page - 1)}
                     >
                       <ChevronLeftIcon className="size-3.5" />
                     </Button>
@@ -1097,8 +1349,8 @@ export function IssueAutomationPage() {
                       size="icon-xs"
                       variant="ghost"
                       aria-label={gt("Next page")}
-                      disabled={issues.length < 25 || remoteIssuesQuery.isPending}
-                      onClick={() => setPage((p) => p + 1)}
+                      disabled={!hasNextIssuesPage || remoteIssuesQuery.isPending}
+                      onClick={() => changeIssuePage(page + 1)}
                     >
                       <ChevronRightIcon className="size-3.5" />
                     </Button>
@@ -1142,7 +1394,13 @@ export function IssueAutomationPage() {
                         <T>No matching issues</T>
                       </EmptyTitle>
                       <EmptyDescription>
-                        <T>Try switching the product or status filter above.</T>
+                        {scannedProfile ? (
+                          <T>
+                            Check the rule filters or clear the rule filter to see other issues.
+                          </T>
+                        ) : (
+                          <T>Try switching the product or status filter above.</T>
+                        )}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -1265,7 +1523,7 @@ export function IssueAutomationPage() {
                         <LayersIcon />
                         <T>All</T>
                         <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                          {allRunsQuickSummary.totalRunsCount}
+                          {groupCounts.all}
                         </span>
                       </span>
                     </Toggle>
@@ -1273,9 +1531,9 @@ export function IssueAutomationPage() {
                       <span className="inline-flex items-center gap-1.5">
                         <ActivityIcon />
                         <T>Running</T>
-                        {allRunsQuickSummary.activeCount > 0 ? (
+                        {groupCounts.active > 0 ? (
                           <span className="font-mono text-2xs text-info tabular-nums">
-                            {allRunsQuickSummary.activeCount}
+                            {groupCounts.active}
                           </span>
                         ) : null}
                       </span>
@@ -1284,9 +1542,9 @@ export function IssueAutomationPage() {
                       <span className="inline-flex items-center gap-1.5">
                         <CircleAlertIcon />
                         <T>Needs review</T>
-                        {allRunsQuickSummary.needsHumanCount > 0 ? (
+                        {groupCounts.needs_human > 0 ? (
                           <span className="font-mono text-2xs text-warning tabular-nums">
-                            {allRunsQuickSummary.needsHumanCount}
+                            {groupCounts.needs_human}
                           </span>
                         ) : null}
                       </span>
@@ -1296,7 +1554,7 @@ export function IssueAutomationPage() {
                         <CheckCircle2Icon />
                         <T>Completed</T>
                         <span className="font-mono text-2xs text-muted-foreground tabular-nums">
-                          {allRunsQuickSummary.completedCount}
+                          {groupCounts.completed}
                         </span>
                       </span>
                     </Toggle>
@@ -1304,9 +1562,9 @@ export function IssueAutomationPage() {
                       <span className="inline-flex items-center gap-1.5">
                         <XCircleIcon />
                         <T>Failed</T>
-                        {allRunsQuickSummary.failedCount > 0 ? (
+                        {groupCounts.failed > 0 ? (
                           <span className="font-mono text-2xs text-destructive tabular-nums">
-                            {allRunsQuickSummary.failedCount}
+                            {groupCounts.failed}
                           </span>
                         ) : null}
                       </span>
@@ -1373,7 +1631,7 @@ export function IssueAutomationPage() {
 
               {/* Independent Scrollable Run Rows */}
               <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
-                {filteredTasks.length === 0 ? (
+                {filteredGroups.length === 0 ? (
                   <Empty size="compact" className="my-12">
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
@@ -1392,103 +1650,183 @@ export function IssueAutomationPage() {
                   </Empty>
                 ) : (
                   <div className="flex flex-col gap-0.5">
-                    {filteredTasks.map((task) => {
+                    {filteredGroups.map(({ key, latest: task, attempts }) => {
                       const selected = inspectorActive && activeTask?.id === task.id;
                       const repoTitle =
                         envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
+                      const hasHistory = attempts.length > 1;
+                      const canCancel =
+                        isStageActive(task.stage) &&
+                        (task.stage !== "cancelling" || task.lastError !== null);
                       return (
-                        <div
-                          key={task.id}
-                          className={cn(
-                            "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
-                            selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-                          )}
-                        >
-                          <button
-                            type="button"
-                            aria-current={selected ? "true" : undefined}
-                            onClick={() => selectRun(task)}
-                            className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                        <Collapsible key={key}>
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
+                              selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                            )}
                           >
-                            <TaskStageGlyph stage={task.stage} />
-                            <PullRequestRowLines
-                              number={
-                                <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
-                                  {formatIssueNumber(task.displayKey, task.issueKey)}
-                                </span>
-                              }
-                              title={cleanIssueText(task.issueTitle)}
-                              signals={
-                                <>
-                                  <SeverityIndicator severity={task.severity} />
-                                  <StageBadge stage={task.stage} />
-                                  {task.commentSyncedAt ? (
-                                    <Badge variant="outline" size="sm">
-                                      <T>Synced</T>
-                                    </Badge>
-                                  ) : null}
-                                </>
-                              }
-                              meta={
-                                <PullRequestMetaLine className="min-w-0 truncate">
-                                  <span className="truncate">{task.scopeName}</span>
-                                  {repoTitle ? (
-                                    <span className="inline-flex shrink-0 items-center gap-1">
-                                      <FolderGit2Icon className="size-3" />
-                                      {repoTitle}
-                                    </span>
-                                  ) : null}
-                                  <span className="truncate font-mono">
-                                    {task.assignedModelLabel}
+                            <button
+                              type="button"
+                              aria-current={selected ? "true" : undefined}
+                              onClick={() => selectRun(task)}
+                              className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                            >
+                              <TaskStageGlyph stage={task.stage} />
+                              <PullRequestRowLines
+                                number={
+                                  <span className={PULL_REQUEST_ROW_NUMBER_CLASS}>
+                                    {formatIssueNumber(task.displayKey, task.issueKey)}
                                   </span>
-                                  {task.worktreeBranch ? (
-                                    <span className="inline-flex shrink-0 items-center gap-1 font-mono">
-                                      <GitBranchIcon className="size-3" />
-                                      {task.worktreeBranch}
+                                }
+                                title={cleanIssueText(task.issueTitle)}
+                                signals={
+                                  <>
+                                    <SeverityIndicator severity={task.severity} />
+                                    <StageBadge stage={task.stage} task={task} />
+                                    {task.commentSyncedAt ? (
+                                      <Badge variant="outline" size="sm">
+                                        <T>Synced</T>
+                                      </Badge>
+                                    ) : null}
+                                  </>
+                                }
+                                meta={
+                                  <PullRequestMetaLine className="min-w-0 truncate">
+                                    <span className="truncate">{task.scopeName}</span>
+                                    {repoTitle ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1">
+                                        <FolderGit2Icon className="size-3" />
+                                        {repoTitle}
+                                      </span>
+                                    ) : null}
+                                    <span className="truncate font-mono">
+                                      {task.assignedModelLabel}
                                     </span>
-                                  ) : null}
-                                </PullRequestMetaLine>
-                              }
-                            />
-                          </button>
+                                    {task.worktreeBranch ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1 font-mono">
+                                        <GitBranchIcon className="size-3" />
+                                        {task.worktreeBranch}
+                                      </span>
+                                    ) : null}
+                                  </PullRequestMetaLine>
+                                }
+                              />
+                            </button>
 
-                          <div className="flex shrink-0 items-center gap-3 pl-2">
-                            <div className="flex min-w-16 items-center justify-end">
-                              <TaskDurationBadge task={task} environmentId={environmentId} />
-                            </div>
-                            <span className="hidden w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums sm:inline-block">
-                              <RelativeTime timestamp={task.updatedAt} />
-                            </span>
-                            <div className="flex w-22 shrink-0 items-center justify-end">
-                              {task.primaryThreadId ? (
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  className="shrink-0"
-                                  onClick={() => openThread(task.primaryThreadId!)}
+                            <div className="flex shrink-0 items-center gap-3 pl-2">
+                              {hasHistory ? (
+                                <CollapsibleTrigger
+                                  render={<Button variant="ghost-muted" size="xs" />}
                                 >
-                                  <MessageSquareIcon className="size-3.5" />
-                                  <T>Open Thread</T>
-                                </Button>
-                              ) : isStageActive(task.stage) && environmentId ? (
-                                <Button
-                                  size="xs"
-                                  variant="ghost-destructive"
-                                  className="shrink-0"
-                                  onClick={() =>
-                                    void cancelTaskCmd({
-                                      environmentId,
-                                      input: { taskId: task.id },
-                                    })
-                                  }
-                                >
-                                  <XIcon className="size-3.5" />
-                                  <T>Cancel</T>
-                                </Button>
+                                  <ChevronDownIcon className="size-3.5" />
+                                  {gt("Execution history · {count} runs", {
+                                    count: attempts.length,
+                                  })}
+                                </CollapsibleTrigger>
                               ) : null}
+                              <div className="flex min-w-16 items-center justify-end">
+                                <TaskDurationBadge task={task} environmentId={environmentId} />
+                              </div>
+                              <span className="hidden w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums sm:inline-block">
+                                <RelativeTime timestamp={task.updatedAt} />
+                              </span>
+                              <div className="flex w-22 shrink-0 items-center justify-end">
+                                {task.repairOfTaskId !== undefined ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => selectRun(task)}
+                                  >
+                                    {task.stage === "needs_human" ? (
+                                      <T>Review repair</T>
+                                    ) : isStageActive(task.stage) ? (
+                                      <T>View progress</T>
+                                    ) : (
+                                      <T>View repair</T>
+                                    )}
+                                  </Button>
+                                ) : canCancel && environmentId ? (
+                                  <Button
+                                    size="xs"
+                                    variant="ghost-destructive"
+                                    className="shrink-0"
+                                    onClick={() => void handleCancelTask(task.id)}
+                                  >
+                                    <XIcon className="size-3.5" />
+                                    {task.stage === "cancelling" ? (
+                                      <T>Retry cancellation</T>
+                                    ) : (
+                                      <T>Cancel</T>
+                                    )}
+                                  </Button>
+                                ) : supportsRetry &&
+                                  task.stage === "cancelled" &&
+                                  task.actionMode === "diagnose_only" ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    className="shrink-0"
+                                    disabled={dispatching}
+                                    onClick={() => void handleRunFromTask(task, "retry")}
+                                  >
+                                    <PlayIcon className="size-3.5" />
+                                    <T>Run diagnosis again</T>
+                                  </Button>
+                                ) : task.stage === "completed" &&
+                                  task.actionMode === "diagnose_only" &&
+                                  task.diagnosisReport ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => selectRun(task)}
+                                  >
+                                    <T>View diagnosis</T>
+                                  </Button>
+                                ) : task.primaryThreadId ? (
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    className="shrink-0"
+                                    onClick={() => openThread(task.primaryThreadId!)}
+                                  >
+                                    <MessageSquareIcon className="size-3.5" />
+                                    <T>Open Thread</T>
+                                  </Button>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
-                        </div>
+                          {hasHistory ? (
+                            <CollapsiblePanel animate={false}>
+                              <div className="my-1 ms-5 flex flex-col gap-1 border-s border-border/60 ps-3">
+                                {attempts.map((attempt, index) => (
+                                  <div
+                                    key={attempt.id}
+                                    className="flex flex-wrap items-center gap-2 py-1 pe-3 text-xs"
+                                  >
+                                    <span className="text-muted-foreground">
+                                      {gt("Run {number}", { number: attempts.length - index })}
+                                    </span>
+                                    <StageBadge stage={attempt.stage} task={attempt} />
+                                    <RelativeTime timestamp={attempt.createdAt} />
+                                    <Button
+                                      size="xs"
+                                      variant="ghost-muted"
+                                      onClick={() => selectRun(attempt)}
+                                    >
+                                      {attempt.diagnosisReport !== null ? (
+                                        <T>View result</T>
+                                      ) : (
+                                        <T>View logs</T>
+                                      )}
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            </CollapsiblePanel>
+                          ) : null}
+                        </Collapsible>
                       );
                     })}
                   </div>
@@ -1584,6 +1922,7 @@ export function IssueAutomationPage() {
             >
               <IssueAutomationRulesView
                 environmentId={environmentId}
+                canConfigureConnector={canConfigureConnector}
                 platforms={snapshot.platforms}
                 connectors={snapshot.connectors}
                 profiles={snapshot.profiles}
@@ -1619,18 +1958,8 @@ export function IssueAutomationPage() {
                     input: { profileId, enabled },
                   });
                 }}
-                onTriggerPoll={(profileId) => {
-                  if (!environmentId) return;
-                  void triggerPollCmd({ environmentId, input: { profileId } }).then((r) => {
-                    if (r._tag === "Success") {
-                      toastManager.add({
-                        type: "success",
-                        title: gt("Poll completed"),
-                        description: `${String(r.value.enqueuedCount)} enqueued`,
-                      });
-                    }
-                  });
-                }}
+                onScanProfile={(profile) => void handleScanProfile(profile)}
+                scanningProfileId={scanningProfileId}
                 onDeleteProfile={(profileId) => {
                   if (!environmentId) return;
                   void deleteProfileCmd({ environmentId, input: { profileId } });
@@ -1671,6 +2000,7 @@ export function IssueAutomationPage() {
 
                       {environmentId ? (
                         <OfficialModelPicker
+                          driverKind={driverKind}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {

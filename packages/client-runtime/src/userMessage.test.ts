@@ -156,6 +156,31 @@ describe("resolveUserMessageFileCards", () => {
 describe("resolveUserMessagePresentation", () => {
   const legacyText = "[Triggered by schedule task: Daily audit]\n\nCheck for crashes.\n";
 
+  it.each([
+    ["diagnose", "Diagnose only · No code changes"],
+    ["repair", "Diagnose and repair"],
+    ["review", "Review the fix"],
+  ] as const)("shows the issue summary for %s", (mode, label) => {
+    const presentation = resolveUserMessagePresentation({
+      role: "user",
+      text: "Full diagnosis prompt with reproduction steps and repository paths",
+      context: {
+        issueAutomation: {
+          mode,
+          scopeName: "Product [A]",
+          moduleName: mode === "diagnose" ? "iOS" : null,
+          platform: "zentao",
+          issueKey: "#20774",
+          issueUrl: "https://zentao.example.com/bug-view-20774.html",
+        },
+      },
+    });
+    const scope = mode === "diagnose" ? "Product \\[A\\] / iOS" : "Product \\[A\\]";
+    expect(presentation.text).toBe(
+      `**${label}**\n\n${scope}\n\n[View ZenTao \\#20774](<https://zentao.example.com/bug-view-20774.html>)`,
+    );
+  });
+
   it("preserves user-written and assistant-quoted schedule headers", () => {
     for (const message of [
       { role: "user", createdBy: "user" as const },

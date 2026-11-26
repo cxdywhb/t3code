@@ -7,6 +7,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  RunId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -41,7 +42,7 @@ export const IssueAutomationAuthFieldKind = Schema.Literals(["url", "text", "pas
 export type IssueAutomationAuthFieldKind = typeof IssueAutomationAuthFieldKind.Type;
 
 export const IssueAutomationAuthFieldDescriptor = Schema.Struct({
-  key: Schema.Literals(["baseUrl", "account", "secret"]),
+  key: Schema.Literals(["mcpUrl", "baseUrl", "account", "secret"]),
   label: TrimmedNonEmptyString,
   placeholder: Schema.String,
   kind: IssueAutomationAuthFieldKind,
@@ -81,14 +82,24 @@ export const IssueAutomationConnectionStatus = Schema.Literals([
 ]);
 export type IssueAutomationConnectionStatus = typeof IssueAutomationConnectionStatus.Type;
 
-/** Persisted platform connector (credentials live encrypted in ServerSecretStore, never here). */
+export const IssueAutomationWriteKind = Schema.Literals([
+  "comment",
+  "confirm",
+  "resolve",
+  "close",
+  "activate",
+  "create",
+]);
+export type IssueAutomationWriteKind = typeof IssueAutomationWriteKind.Type;
+
+/** Persisted platform connection metadata. OAuth credentials are stored separately on the server. */
 export const IssueAutomationConnector = Schema.Struct({
   id: IssueAutomationConnectorId,
   platform: IssueAutomationPlatformKind,
   name: TrimmedNonEmptyString,
-  baseUrl: TrimmedNonEmptyString,
-  account: TrimmedNonEmptyString,
-  hasSecret: Schema.Boolean,
+  baseUrl: Schema.String,
+  mcpUrl: Schema.NullOr(Schema.String),
+  writeActions: Schema.Array(IssueAutomationWriteKind),
   status: IssueAutomationConnectionStatus,
   viewerName: Schema.NullOr(Schema.String),
   serverVersion: Schema.NullOr(Schema.String),
@@ -170,6 +181,9 @@ export const IssueAutomationProfile = Schema.Struct({
   models: IssueAutomationModelStrategy,
   filter: IssueAutomationIssueFilter,
   policy: IssueAutomationPolicy,
+  feishuNotification: Schema.optionalKey(
+    Schema.Struct({ enabled: Schema.Boolean, hasWebhook: Schema.Boolean }),
+  ),
   lastPolledAt: Schema.NullOr(IsoDateTime),
   lastPollError: Schema.NullOr(Schema.String),
   updatedAt: IsoDateTime,
@@ -183,6 +197,7 @@ export const IssueAutomationStage = Schema.Literals([
   "diagnosing",
   "reviewing",
   "writing_back",
+  "cancelling",
   "completed",
   "needs_human",
   "failed",
@@ -222,6 +237,10 @@ export const IssueAutomationTask = Schema.Struct({
   referenceProjectIds: Schema.Array(ProjectId),
   primaryThreadId: Schema.NullOr(ThreadId),
   reviewThreadId: Schema.NullOr(ThreadId),
+  primaryRunId: Schema.optionalKey(RunId),
+  reviewRunId: Schema.optionalKey(RunId),
+  repairOfTaskId: Schema.optionalKey(IssueAutomationTaskId),
+  repairConfirmedAt: Schema.optionalKey(IsoDateTime),
   assignedModelLabel: Schema.String,
   worktreeBranch: Schema.NullOr(Schema.String),
   diagnosisReport: Schema.NullOr(Schema.String),
@@ -295,16 +314,35 @@ export const IssueAutomationStateSnapshot = Schema.Struct({
 });
 export type IssueAutomationStateSnapshot = typeof IssueAutomationStateSnapshot.Type;
 
-export const IssueAutomationSaveConnectorInput = Schema.Struct({
+export const ISSUE_AUTOMATION_OAUTH_CALLBACK_PATH = "/oauth/issue-automation/callback";
+
+export const IssueAutomationStartConnectorAuthInput = Schema.Struct({
   id: Schema.optional(IssueAutomationConnectorId),
   platform: IssueAutomationPlatformKind,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
-  baseUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
-  account: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
-  /** Optional on update when keeping the already stored encrypted password/token. */
-  secret: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4096))),
+  mcpUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
+  baseUrl: Schema.String.check(Schema.isMaxLength(1024)),
+  callbackBaseUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))),
 });
-export type IssueAutomationSaveConnectorInput = typeof IssueAutomationSaveConnectorInput.Type;
+export type IssueAutomationStartConnectorAuthInput =
+  typeof IssueAutomationStartConnectorAuthInput.Type;
+
+export const IssueAutomationStartConnectorAuthResult = Schema.Struct({
+  authorizationUrl: TrimmedNonEmptyString,
+  attemptId: TrimmedNonEmptyString,
+  automatic: Schema.optionalKey(Schema.Boolean),
+});
+export type IssueAutomationStartConnectorAuthResult =
+  typeof IssueAutomationStartConnectorAuthResult.Type;
+
+export const IssueAutomationFinishConnectorAuthInput = Schema.Struct({
+  attemptId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  callbackUrl: Schema.optionalKey(
+    Schema.RedactedFromValue(TrimmedNonEmptyString.check(Schema.isMaxLength(16_384))),
+  ),
+});
+export type IssueAutomationFinishConnectorAuthInput =
+  typeof IssueAutomationFinishConnectorAuthInput.Type;
 
 export const IssueAutomationDeleteConnectorInput = Schema.Struct({
   connectorId: IssueAutomationConnectorId,
@@ -335,6 +373,20 @@ export const IssueAutomationListRemoteIssuesResult = Schema.Struct({
 export type IssueAutomationListRemoteIssuesResult =
   typeof IssueAutomationListRemoteIssuesResult.Type;
 
+export const IssueAutomationScanProfileIssuesInput = Schema.Struct({
+  profileId: IssueAutomationProfileId,
+  page: Schema.optional(PositiveInt),
+});
+export type IssueAutomationScanProfileIssuesInput =
+  typeof IssueAutomationScanProfileIssuesInput.Type;
+
+export const IssueAutomationScanProfileIssuesResult = Schema.Struct({
+  issues: Schema.Array(IssueAutomationRemoteIssue),
+  hasNextPage: Schema.Boolean,
+});
+export type IssueAutomationScanProfileIssuesResult =
+  typeof IssueAutomationScanProfileIssuesResult.Type;
+
 export const IssueAutomationGetRemoteIssueDetailInput = Schema.Struct({
   connectorId: IssueAutomationConnectorId,
   scopeId: TrimmedNonEmptyString,
@@ -354,8 +406,18 @@ export const IssueAutomationSaveProfileInput = Schema.Struct({
   models: IssueAutomationModelStrategy,
   filter: IssueAutomationIssueFilter,
   policy: IssueAutomationPolicy,
+  feishuNotification: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      webhook: Schema.optionalKey(Schema.RedactedFromValue(Schema.String)),
+    }),
+  ),
 });
 export type IssueAutomationSaveProfileInput = typeof IssueAutomationSaveProfileInput.Type;
+
+export const isIssueAutomationFeishuWebhook = (url: string): boolean =>
+  /^https:\/\/open\.feishu\.cn\/open-apis\/bot\/v2\/hook\/[a-zA-Z0-9_-]+$/.test(url) &&
+  url.length <= 512;
 
 export const IssueAutomationDeleteProfileInput = Schema.Struct({
   profileId: IssueAutomationProfileId,
@@ -392,6 +454,8 @@ export const IssueAutomationAnalyzeIssuesInput = Schema.Struct({
   overrideRepositories: Schema.optional(IssueAutomationRepoBinding),
   overrideModels: Schema.optional(IssueAutomationModelStrategy),
   overridePolicy: Schema.optional(IssueAutomationPolicy),
+  retryTaskId: Schema.optionalKey(IssueAutomationTaskId),
+  repairFromTaskId: Schema.optionalKey(IssueAutomationTaskId),
 });
 export type IssueAutomationAnalyzeIssuesInput = typeof IssueAutomationAnalyzeIssuesInput.Type;
 
@@ -404,6 +468,19 @@ export const IssueAutomationCancelTaskInput = Schema.Struct({
   taskId: IssueAutomationTaskId,
 });
 export type IssueAutomationCancelTaskInput = typeof IssueAutomationCancelTaskInput.Type;
+
+export const IssueAutomationConfirmRepairInput = Schema.Struct({
+  taskId: IssueAutomationTaskId,
+});
+export type IssueAutomationConfirmRepairInput = typeof IssueAutomationConfirmRepairInput.Type;
+
+export const IssueAutomationSyncRepairAction = Schema.Struct({
+  kind: Schema.Literal("sync_repair"),
+  taskId: IssueAutomationTaskId,
+  writeComment: Schema.Boolean,
+  resolvedBuild: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+});
+export type IssueAutomationSyncRepairAction = typeof IssueAutomationSyncRepairAction.Type;
 
 export const IssueAutomationWriteBackAction = Schema.Union([
   Schema.Struct({
@@ -465,7 +542,7 @@ export type IssueAutomationWriteBackAction = typeof IssueAutomationWriteBackActi
 
 export const IssueAutomationWriteBackInput = Schema.Struct({
   connectorId: IssueAutomationConnectorId,
-  action: IssueAutomationWriteBackAction,
+  action: Schema.Union([IssueAutomationWriteBackAction, IssueAutomationSyncRepairAction]),
 });
 export type IssueAutomationWriteBackInput = typeof IssueAutomationWriteBackInput.Type;
 

@@ -395,6 +395,11 @@
   "071ab90b0e0f5e76": "Compactage…",
   "2fb1845862c9a087": "Compacté automatiquement avant l’expiration du cache",
   "552d31d19f1df851": "Contexte compacté avant l’envoi",
+  "d2e270032ef37711": "Diagnostic uniquement · Aucun changement de code",
+  "1d1ffac1dfa1aeed": "Diagnostiquer et corriger",
+  "eaabadc64b84731c": "Examiner le correctif",
+  "36fac9a5376678ef": "Voir ZenTao {issueKey}",
+  "ef0b494565c4f4b2": "Voir le ticket {issueKey}",
   "476ca970255eaea4": "Associez cet environnement à T3 Connect pour obtenir une URL publique.",
   "6b80f5b38a8f9950": "Seul cet ordinateur peut appeler cette adresse. Associez T3 Connect pour obtenir une URL publique.",
   "c5a7b1d3891dd0b8": "Fonctionne partout où l’adresse de cet environnement est joignable, par exemple via Tailscale ou votre propre proxy. Associez T3 Connect pour obtenir une URL publique.",
@@ -5696,5 +5701,6 @@
   "ad208e3e32c85029": "Tout masquer",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Appels d’outils dans la discussion",
-  "8d545d54c0a9e950": "Masque les commandes, modifications et recherches lancées par les agents. Masquer les réussis garde les échecs. Zen n’affiche que les réponses finales. Les approbations, questions et erreurs s’affichent toujours."
+  "8d545d54c0a9e950": "Masque les commandes, modifications et recherches lancées par les agents. Masquer les réussis garde les échecs. Zen n’affiche que les réponses finales. Les approbations, questions et erreurs s’affichent toujours.",
+  "603661e55748ac0f": "Diagnostic relancé · Exécution {number}"
 }

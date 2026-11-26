@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import migration from "../persistence/Migrations/121_CollaborationTemplates.ts";
+import migration from "../persistence/Migrations/125_CollaborationTemplates.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CollaborationTemplates from "./CollaborationTemplates.ts";
 import * as Workflows from "./Workflows.ts";

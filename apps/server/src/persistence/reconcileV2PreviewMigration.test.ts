@@ -9,6 +9,7 @@ import { migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
+import CollaborationTemplates from "./Migrations/125_CollaborationTemplates.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -24,6 +25,35 @@ const seedPreview = Effect.gen(function* () {
   yield* sql`
     UPDATE effect_sql_migrations SET created_at = '2026-09-15 00:00:00' WHERE migration_id = 53
   `;
+});
+
+describe("Collaboration template migration upgrade", () => {
+  it.effect("upgrades databases with collaboration templates already at migration 121", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 120 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({ "121_CollaborationTemplates": CollaborationTemplates }),
+      });
+      yield* sql`INSERT INTO collaboration_templates VALUES ('template-1', '{}')`;
+      yield* sql`INSERT INTO collaboration_requirements VALUES ('requirement-1', '{}', '{}')`;
+
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [121, "IssueAutomationFeishu"],
+        [122, "IssueAutomationRunLinks"],
+        [123, "IssueAutomationRepair"],
+        [124, "IssueAutomationMcp"],
+        [125, "CollaborationTemplates"],
+      ]);
+      assert.deepStrictEqual(yield* sql`SELECT id FROM collaboration_templates`, [
+        { id: "template-1" },
+      ]);
+      assert.deepStrictEqual(yield* sql`SELECT key FROM collaboration_requirements`, [
+        { key: "requirement-1" },
+      ]);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });
 
 describe("V2 preview upgrade", () => {
@@ -100,6 +130,11 @@ describe("V2 preview upgrade", () => {
         [118, "WorkflowPools"],
         [119, "IssueAutomation"],
         [120, "PrReviewWorkstation"],
+        [121, "IssueAutomationFeishu"],
+        [122, "IssueAutomationRunLinks"],
+        [123, "IssueAutomationRepair"],
+        [124, "IssueAutomationMcp"],
+        [125, "CollaborationTemplates"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -243,6 +278,11 @@ describe("V2 preview upgrade", () => {
         [118, "WorkflowPools"],
         [119, "IssueAutomation"],
         [120, "PrReviewWorkstation"],
+        [121, "IssueAutomationFeishu"],
+        [122, "IssueAutomationRunLinks"],
+        [123, "IssueAutomationRepair"],
+        [124, "IssueAutomationMcp"],
+        [125, "CollaborationTemplates"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

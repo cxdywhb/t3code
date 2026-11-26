@@ -395,6 +395,11 @@
   "071ab90b0e0f5e76": "Komprimerar…",
   "2fb1845862c9a087": "Komprimerades automatiskt innan cachen gick ut",
   "552d31d19f1df851": "Kontexten komprimerades före sändning",
+  "d2e270032ef37711": "Endast diagnos · Inga kodändringar",
+  "1d1ffac1dfa1aeed": "Diagnostisera och åtgärda",
+  "eaabadc64b84731c": "Granska ändringen",
+  "36fac9a5376678ef": "Visa ZenTao {issueKey}",
+  "ef0b494565c4f4b2": "Visa ärende {issueKey}",
   "476ca970255eaea4": "Länka den här miljön till T3 Connect för en publik URL.",
   "6b80f5b38a8f9950": "Bara den här datorn kan anropa den här adressen. Länka T3 Connect för en publik URL.",
   "c5a7b1d3891dd0b8": "Fungerar där den här miljöns adress kan nås, till exempel via Tailscale eller din egen proxy. Länka T3 Connect för en publik URL.",
@@ -5702,5 +5707,6 @@
   "ad208e3e32c85029": "Dölj alla",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Verktygsanrop i chatten",
-  "8d545d54c0a9e950": "Dölj kommandon, redigeringar och sökningar som agenter kör. Dölj lyckade behåller misslyckanden. Zen visar bara slutliga svar. Godkännanden, frågor och fel visas alltid."
+  "8d545d54c0a9e950": "Dölj kommandon, redigeringar och sökningar som agenter kör. Dölj lyckade behåller misslyckanden. Zen visar bara slutliga svar. Godkännanden, frågor och fel visas alltid.",
+  "603661e55748ac0f": "Diagnos omstartad · Körning {number}"
 }
