@@ -10,6 +10,55 @@ import { expect } from "vite-plus/test";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "./Manager.ts";
 
+it.effect("restores browser tabs after restart and keeps explicitly closed tabs closed", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("restart-thread");
+    const first = yield* PreviewManager.make;
+    const tab = yield* first.open({
+      threadId,
+      url: "https://example.com/login",
+      profileId: "work",
+      runtime: "server",
+    });
+    yield* first.reportStatus({
+      threadId,
+      tabId: tab.tabId,
+      serverControlled: true,
+      navStatus: { _tag: "Success", url: "https://example.com/account", title: "Account" },
+      canGoBack: true,
+      canGoForward: false,
+    });
+    yield* first.open({ threadId, url: "https://example.com/private", profileId: "incognito" });
+    yield* first.open({
+      threadId,
+      url: "https://example.com/agent",
+      runtime: "server",
+      automationOwner: "agent",
+    });
+    const second = yield* PreviewManager.make;
+    const restored = yield* second.list({ threadId });
+    expect(restored.sessions).toHaveLength(1);
+    expect(restored.sessions[0]).toMatchObject({
+      tabId: tab.tabId,
+      profileId: "work",
+      runtime: "server",
+      navStatus: { _tag: "Loading", url: "https://example.com/account", title: "Account" },
+      canGoBack: false,
+      canGoForward: false,
+    });
+    expect(restored.serverEpoch).not.toBe((yield* first.list({ threadId })).serverEpoch);
+    yield* second.close({ threadId, tabId: tab.tabId });
+    const third = yield* PreviewManager.make;
+    expect((yield* third.list({ threadId })).sessions).toEqual([]);
+  }).pipe(
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-preview-restart-" }).pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, NodeServices.layer)),
+      ),
+    ),
+  ),
+);
+
 const DRAIN_LIMIT = 100;
 
 interface EventCollector {

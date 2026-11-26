@@ -564,6 +564,23 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     ))}
                   </SettingsSection>
                 ) : null}
+                <SettingsSection title={gt("Agent resources")}>
+                  <SettingsSwitchRow
+                    icon="square.grid.2x2"
+                    label={gt("Share Codex skills and MCP servers")}
+                    subtitle={managedSubtitle(
+                      "shareCodexResources",
+                      projectSelected
+                        ? gt("Environment-wide setting. Select All projects to change it.")
+                        : gt(
+                            "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied.",
+                          ),
+                    )}
+                    value={uniform("shareCodexResources")}
+                    disabled={disabledFor("shareCodexResources")}
+                    onValueChange={(value) => write({ shareCodexResources: value })}
+                  />
+                </SettingsSection>
                 <SettingsSection title={gt("Updates")}>
                   <SettingsSwitchRow
                     icon="arrow.clockwise"

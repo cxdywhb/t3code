@@ -5708,5 +5708,8 @@
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Verktygsanrop i chatten",
   "8d545d54c0a9e950": "Dölj kommandon, redigeringar och sökningar som agenter kör. Dölj lyckade behåller misslyckanden. Zen visar bara slutliga svar. Godkännanden, frågor och fel visas alltid.",
-  "603661e55748ac0f": "Diagnos omstartad · Körning {number}"
+  "603661e55748ac0f": "Diagnos omstartad · Körning {number}",
+  "7f2c29b2312bd297": "Agent resources",
+  "7246238530fb78c3": "Share Codex skills and MCP servers",
+  "d78d554a0b3b95b1": "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied."
 }

@@ -2404,6 +2404,26 @@ export function MaintenanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection id="agent-resources" title={gt("Agent resources")}>
+        <SettingsRow
+          serverScoped
+          settingKeys={["shareCodexResources"]}
+          {...setting("share-codex-resources")}
+          description={gt(
+            "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied.",
+          )}
+          control={
+            <ScopedSwitch
+              settingKeys={["shareCodexResources"]}
+              checked={settings.shareCodexResources}
+              onCheckedChange={(checked) =>
+                updateSettings({ shareCodexResources: Boolean(checked) })
+              }
+              aria-label={gt("Share Codex skills and MCP servers")}
+            />
+          }
+        />
+      </SettingsSection>
       <SettingsSection id="updates" title={gt("Updates")}>
         <SettingsRow
           serverScoped

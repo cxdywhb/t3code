@@ -285,6 +285,15 @@ export const BrowserSessionGetSessionError = Schema.Union([
 ]);
 export type BrowserSessionGetSessionError = typeof BrowserSessionGetSessionError.Type;
 
+export class BrowserSessionStorageFlushError extends Schema.TaggedError<BrowserSessionStorageFlushError>()(
+  "BrowserSessionStorageFlushError",
+  { partition: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Failed to save browser login storage before quitting.";
+  }
+}
+
 export const BrowserSessionError = Schema.Union([
   BrowserSessionPartitionDerivationError,
   BrowserSessionCreationError,
@@ -296,6 +305,7 @@ export type BrowserSessionError = typeof BrowserSessionError.Type;
 export class BrowserSession extends Context.Service<
   BrowserSession,
   {
+    readonly flushStorage: Effect.Effect<void, BrowserSessionStorageFlushError>;
     readonly getPartition: (
       scope?: string,
       persistent?: boolean,
@@ -960,6 +970,23 @@ export const make = Effect.gen(function* BrowserSessionMake() {
   });
 
   return BrowserSession.of({
+    flushStorage: Effect.gen(function* () {
+      const sessions = yield* SynchronizedRef.get(sessionsRef);
+      yield* Effect.forEach(
+        [...sessions],
+        ([partition, browserSession]) =>
+          partition.startsWith(PREVIEW_PARTITION_PREFIX)
+            ? Effect.tryPromise({
+                try: async () => {
+                  browserSession.flushStorageData();
+                  await browserSession.cookies.flushStore();
+                },
+                catch: (cause) => new BrowserSessionStorageFlushError({ partition, cause }),
+              })
+            : Effect.void,
+        { concurrency: "unbounded", discard: true },
+      );
+    }),
     getPartition,
     isPartition: (partition) =>
       partition.startsWith(PREVIEW_PARTITION_PREFIX) ||

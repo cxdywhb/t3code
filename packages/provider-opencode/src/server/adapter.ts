@@ -60,6 +60,7 @@ import { brokenVersionDetail } from "@t3tools/provider-core/server/compatibility
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { sharedSkillsContext } from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   structuralProtocolMethod,
@@ -1099,6 +1100,40 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           mcpSession?.capabilities?.has("device") === true,
         );
         if (hasT3Mcp) {
+          for (const [name, server] of Object.entries(
+            mcpSession.sharedResources?.mcpServers ?? {},
+          )) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", (signal) =>
+              client.mcp.add(
+                {
+                  name,
+                  config:
+                    server.type === "stdio"
+                      ? {
+                          type: "local",
+                          command: [server.command, ...server.args],
+                          environment: { ...server.env },
+                        }
+                      : {
+                          type: "remote",
+                          url: server.url,
+                          headers: { ...server.headers },
+                          oauth: false,
+                        },
+                },
+                { signal },
+              ),
+            ).pipe(
+              Effect.timeout("5 seconds"),
+              // 共享工具不可用不能阻断会话；错误响应可能含凭据，只记录名称和错误类型。
+              Effect.catch((error) =>
+                Effect.logWarning("Could not add shared MCP server to OpenCode.", {
+                  server: name,
+                  reason: error._tag,
+                }),
+              ),
+            );
+          }
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "t3-code",
@@ -3514,6 +3549,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ...(variant === undefined ? {} : { variant }),
             system: [
               orchestrationSystemPrompt,
+              hasT3Mcp ? sharedSkillsContext(mcpSession.sharedResources) : undefined,
               buildRuntimeInstructions({
                 harness: "OpenCode",
                 model: turn.modelSelection.model,

@@ -5702,5 +5702,8 @@
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
   "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran.",
-  "603661e55748ac0f": "Diagnóstico reiniciado · Ejecución {number}"
+  "603661e55748ac0f": "Diagnóstico reiniciado · Ejecución {number}",
+  "7f2c29b2312bd297": "Agent resources",
+  "7246238530fb78c3": "Share Codex skills and MCP servers",
+  "d78d554a0b3b95b1": "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied."
 }

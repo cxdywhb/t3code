@@ -220,6 +220,14 @@ export function cursorMcpServers(
     return undefined;
   }
   return {
+    ...Object.fromEntries(
+      Object.entries(session.sharedResources?.mcpServers ?? {}).map(([name, server]) => [
+        name,
+        server.type === "stdio"
+          ? { ...server, args: [...server.args], env: { ...server.env } }
+          : { ...server, headers: { ...server.headers } },
+      ]),
+    ),
     "t3-code": {
       type: "http",
       url: session.endpoint,
@@ -2940,12 +2948,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               detail: "Cursor turn requires non-empty text or attachments.",
             });
           }
-          const runtimeInstructions = buildRuntimeInstructions({
-            agentFeedback: mcpServers === undefined ? "off" : (turnInput.agentFeedback ?? "off"),
-            harness: "Cursor",
-            model: turnInput.modelSelection.model,
-            runtimePolicy: turnInput.runtimePolicy,
-          });
+          const runtimeInstructions = [
+            buildRuntimeInstructions({
+              agentFeedback: mcpServers === undefined ? "off" : (turnInput.agentFeedback ?? "off"),
+              harness: "Cursor",
+              model: turnInput.modelSelection.model,
+              runtimePolicy: turnInput.runtimePolicy,
+            }),
+            ...(turnInput.appContext ?? []).map((entry) => entry.text),
+          ].join("\n\n");
           // Resend only on a new/compacted/rewound conversation or when the instructions change.
           const sendRuntimeInstructions = delivered.runtime !== runtimeInstructions;
           const text = sendRuntimeInstructions

@@ -1113,9 +1113,21 @@ function acpMcpContext(
   if (session === undefined) {
     return { servers: [], acpServers: [], httpServers: [] };
   }
+  const sharedServers = Object.entries(session.sharedResources?.mcpServers ?? {}).map(
+    ([name, source]) => {
+      const server = McpProviderSession.sharedMcpStdio(source, self);
+      return {
+        name,
+        command: server.command,
+        args: [...server.args],
+        env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
+      };
+    },
+  );
   // codex-acp 1.2.0 and pi-acp drop injected HTTP servers, so HTTP is opt-in per flavor.
   return {
     servers: [
+      ...sharedServers,
       {
         name: "t3-code",
         command: self.command,
@@ -1127,10 +1139,11 @@ function acpMcpContext(
         ],
       },
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    acpServers: [...sharedServers, { type: "acp", name: "t3-code", serverId: "t3-code" }],
     httpServers:
       mcpOverHttp === true
         ? [
+            ...sharedServers,
             {
               type: "http",
               name: "t3-code",

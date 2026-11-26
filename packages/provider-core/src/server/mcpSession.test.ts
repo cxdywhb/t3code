@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vite-plus/test";
-import { withAgentDeviceEnvironment } from "./mcpSession.ts";
+import { sharedMcpStdio, sharedSkillsContext, withAgentDeviceEnvironment } from "./mcpSession.ts";
+
+it("bridges working directories and HTTP without placing credentials in arguments or skill context", () => {
+  const self = { command: "/t3", entrypoint: undefined };
+  const launch = sharedMcpStdio(
+    {
+      type: "stdio",
+      command: "node",
+      args: ["file with spaces.js"],
+      cwd: "/plugin with spaces",
+      env: { KEY: "fixture-secret" },
+    },
+    self,
+  );
+  expect(launch.args).toEqual(["shared-mcp-launch"]);
+  expect(JSON.parse(launch.env.T3_SHARED_MCP_LAUNCH!)).toEqual({
+    command: "node",
+    args: ["file with spaces.js"],
+    cwd: "/plugin with spaces",
+  });
+  const server = {
+    type: "http" as const,
+    url: "https://example.com/mcp",
+    headers: { Authorization: "Bearer fixture-secret" },
+  };
+  const bridge = sharedMcpStdio(server, self);
+  expect(bridge.args).toEqual(["acp-mcp-bridge"]);
+  expect(JSON.parse(bridge.env.T3_ACP_MCP_HEADERS!)).toEqual(server.headers);
+  const context = sharedSkillsContext({
+    skills: [{ name: "demo", path: "/plugin/SKILL.md", enabled: true }],
+    mcpServers: { demo: server },
+    warnings: [],
+  });
+  expect(context).toContain("/plugin/SKILL.md");
+  expect(context).not.toContain("fixture-secret");
+});
 
 describe("device CLI environment", () => {
   it("preserves provider credentials and commands while routing devices to the owned daemon", () => {

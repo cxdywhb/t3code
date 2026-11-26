@@ -57,7 +57,7 @@ it.effect.each([
             Layer.provide(NodeServices.layer),
           ),
           NodeCrypto.layer,
-        ),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
       ),
     );
     const tab = yield* manager.open({ threadId, url: "http://localhost:3000" });

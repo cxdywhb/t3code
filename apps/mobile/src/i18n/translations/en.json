@@ -5710,5 +5710,8 @@
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Tool calls in chat",
   "8d545d54c0a9e950": "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show.",
-  "603661e55748ac0f": "Diagnosis restarted · Run {number}"
+  "603661e55748ac0f": "Diagnosis restarted · Run {number}",
+  "7f2c29b2312bd297": "Agent resources",
+  "7246238530fb78c3": "Share Codex skills and MCP servers",
+  "d78d554a0b3b95b1": "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied."
 }

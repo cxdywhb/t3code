@@ -1099,6 +1099,9 @@ describe("CursorAdapterV2", () => {
           attemptId: RunAttemptId.make(`cursor-device-attempt-${runOrdinal}`),
           rootNodeId: NodeId.make(`cursor-device-root-${runOrdinal}`),
           appThread,
+          appContext: [
+            { key: "shared-codex-skills", text: "Shared skill: /skills/release/SKILL.md" },
+          ],
           message: {
             messageId: MessageId.make(`cursor-device-message-${runOrdinal}`),
             createdBy: "user" as const,
@@ -1130,7 +1133,9 @@ describe("CursorAdapterV2", () => {
 
       yield* setDeviceAccess(true);
       assert.deepEqual(yield* send(), told(false, true, true));
+      assert.include(sentMessages.at(-1)!, "/skills/release/SKILL.md");
       assert.deepEqual(yield* send(), told(false, false, false));
+      assert.notInclude(sentMessages.at(-1)!, "/skills/release/SKILL.md");
       yield* send(true);
       assert.deepEqual(
         yield* send(),

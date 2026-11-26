@@ -47,6 +47,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as SharedAgentResources from "../provider/SharedAgentResources.ts";
 import {
   CodexProviderCapabilitiesV2,
   normalizeCodexThreadLoadModelSelection,
@@ -687,6 +688,7 @@ function layerTest(input: {
   readonly eventStreamsEnded?: Queue.Queue<ProviderSessionId>;
   readonly releaseRecorded?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
+  readonly sharedResources?: McpProviderSession.SharedAgentResources;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
   readonly installationGateLayer?: Layer.Layer<ProviderInstallationGate.ProviderInstallationGate>;
 }) {
@@ -787,6 +789,13 @@ function layerTest(input: {
           layerTestStores,
           input.installationGateLayer ?? ProviderInstallationGate.layer,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
+          ...(input.sharedResources === undefined
+            ? []
+            : [
+                Layer.succeed(SharedAgentResources.SharedAgentResources, {
+                  read: Effect.succeed(input.sharedResources),
+                }),
+              ]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
         ),
       ),
@@ -2727,6 +2736,7 @@ it.effect(
         assert.equal(captured?.threadId, threadId);
         assert.equal(captured?.providerInstanceId, modelSelection.instanceId);
         assert.equal(captured?.endpoint, "http://127.0.0.1:43123/mcp");
+        assert.equal(captured?.sharedResources?.skills[0]?.path, "/shared/release/SKILL.md");
         const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(token);
         const resolved = yield* registry.resolve(token!);
@@ -2749,6 +2759,11 @@ it.effect(
             state,
             idleTimeoutMs: 1_000,
             mcpConfigs,
+            sharedResources: {
+              skills: [{ name: "release", path: "/shared/release/SKILL.md", enabled: true }],
+              mcpServers: {},
+              warnings: [],
+            },
           }),
         ),
       );
