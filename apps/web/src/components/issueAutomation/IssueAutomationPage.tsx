@@ -241,7 +241,6 @@ export function IssueAutomationPage() {
     }));
 
   const projectTitleById = new Map(envProjects.map((p) => [p.id as string, p.title]));
-  const catalog = useOfficialModelCatalog(environmentId);
 
   const activeTab = prefs.activeTab;
   const setActiveTab = (next: WorkbenchTab) => {
@@ -330,12 +329,14 @@ export function IssueAutomationPage() {
     validModelKeys: [],
   });
 
+  const driverKind = resolvedTargets.actionMode === "diagnose_only" ? "claudeAgent" : undefined;
+  const catalog = useOfficialModelCatalog(environmentId, driverKind);
   const resolvedProjectId = resolvedTargets.projectId;
   const resolvedModelSelection = resolvePersistedModelSelection({
     prefs,
     scopeKey: scopePrefKey,
     profilePrimaryModel: matchedScopeProfile?.models.primaryModel,
-    ...(catalog.pickableEntries.length > 0
+    ...(driverKind || catalog.pickableEntries.length > 0
       ? { isSelectionAvailable: catalog.isSelectionAvailable }
       : {}),
     fallbackSelection: catalog.firstAvailableSelection,
@@ -686,7 +687,7 @@ export function IssueAutomationPage() {
     const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
       resolvedModelSelection ??
-      matchedScopeProfile?.models.primaryModel ??
+      (driverKind ? null : matchedScopeProfile?.models.primaryModel) ??
       catalog.firstAvailableSelection ??
       null;
 
@@ -1263,6 +1264,7 @@ export function IssueAutomationPage() {
 
                   {environmentId && catalog.pickableEntries.length > 0 ? (
                     <OfficialModelPicker
+                      driverKind={driverKind}
                       environmentId={environmentId}
                       value={resolvedModelSelection}
                       onChange={(next) => {
@@ -1998,6 +2000,7 @@ export function IssueAutomationPage() {
 
                       {environmentId ? (
                         <OfficialModelPicker
+                          driverKind={driverKind}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {

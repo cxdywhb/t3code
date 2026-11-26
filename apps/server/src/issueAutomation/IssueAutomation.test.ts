@@ -278,8 +278,12 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       createdAt: at,
       updatedAt: at,
     });
+    let oldPermissions = false;
     const projection = () => ({
       ...baseProjection,
+      thread: oldPermissions
+        ? { ...baseProjection.thread, runtimeMode: "full-access" as const }
+        : baseProjection.thread,
       runs: [...runs],
       messages: [
         ...(runs.length > 1 ? [reply(newRunId, "New diagnosis")] : []),
@@ -738,6 +742,9 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       expect((yield* Effect.result(retry))._tag).toBe("Failure");
       yield* Deferred.succeed(confirmStop, undefined);
       yield* Fiber.join(stop);
+      oldPermissions = true;
+      expect((yield* Effect.result(retry))._tag).toBe("Failure");
+      oldPermissions = false;
       const restarted = (yield* retry).tasks[0]!;
       const final = yield* whenSettled(restarted.id);
       expect(final.tasks.find((task) => task.id === running)).toMatchObject({

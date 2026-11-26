@@ -954,7 +954,11 @@ export function ProfileModal({
     serverConfig?.environment.capabilities.issueAutomationFeishuNotifications === true ||
     initial?.feishuNotification !== undefined;
   const folderPicker = useEnvironmentFolderPicker(environmentId);
-  const catalog = useOfficialModelCatalog(environmentId);
+  const [actionMode, setActionMode] = useState<IssueAutomationActionMode>(
+    initial?.policy.actionMode ?? "fix_worktree_review",
+  );
+  const driverKind = actionMode === "diagnose_only" ? "claudeAgent" : undefined;
+  const catalog = useOfficialModelCatalog(environmentId, driverKind);
 
   const firstConnector =
     connectors.find((c) => c.id === (initial?.connectorId ?? defaultConnectorId)) ?? connectors[0];
@@ -988,7 +992,10 @@ export function ProfileModal({
   const [primaryModel, setPrimaryModel] = useState<ModelSelection | null>(
     initial?.models.primaryModel ?? catalog.firstAvailableSelection,
   );
-  if (primaryModel === null && catalog.firstAvailableSelection) {
+  if (
+    (!primaryModel || (driverKind && !catalog.isSelectionAvailable(primaryModel))) &&
+    catalog.firstAvailableSelection
+  ) {
     setPrimaryModel(catalog.firstAvailableSelection);
   }
   const [highSeverityModel, setHighSeverityModel] = useState<ModelSelection | null>(
@@ -1016,9 +1023,6 @@ export function ProfileModal({
   );
   const [maxConcurrency, setMaxConcurrency] = useState<number>(initial?.filter.maxConcurrency ?? 2);
 
-  const [actionMode, setActionMode] = useState<IssueAutomationActionMode>(
-    initial?.policy.actionMode ?? "fix_worktree_review",
-  );
   const [autoWriteComment, setAutoWriteComment] = useState<boolean>(
     initial?.policy.autoWriteComment ?? true,
   );
@@ -1155,7 +1159,10 @@ export function ProfileModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedPrimaryModel = primaryModel ?? catalog.firstAvailableSelection;
+    const resolvedPrimaryModel =
+      driverKind && !catalog.isSelectionAvailable(primaryModel)
+        ? catalog.firstAvailableSelection
+        : (primaryModel ?? catalog.firstAvailableSelection);
     if (!activeConnector || !scopeId || !primaryProject || !resolvedPrimaryModel) {
       if (!primaryProject) focusRuleField(repoField.current);
       else if (!resolvedPrimaryModel) focusRuleField(modelField.current);
@@ -1163,7 +1170,10 @@ export function ProfileModal({
       return;
     }
 
-    if (retryWithBackup && !fallbackModel) {
+    if (
+      retryWithBackup &&
+      (!fallbackModel || (driverKind && !catalog.isSelectionAvailable(fallbackModel)))
+    ) {
       focusRuleField(backupField.current);
       setErrorText(gt("Choose a backup model to retry the task."));
       return;
@@ -1203,7 +1213,10 @@ export function ProfileModal({
         },
         models: {
           primaryModel: resolvedPrimaryModel,
-          highSeverityModel,
+          highSeverityModel:
+            driverKind && !catalog.isSelectionAvailable(highSeverityModel)
+              ? null
+              : highSeverityModel,
           triageModel: initial?.models.triageModel ?? null,
           reviewModel,
           fallbackModel: retryWithBackup ? fallbackModel : null,
@@ -1526,6 +1539,7 @@ export function ProfileModal({
                     <OfficialModelPicker
                       environmentId={environmentId}
                       value={primaryModel}
+                      driverKind={driverKind}
                       onChange={setPrimaryModel}
                       ariaLabel={gt("Primary model")}
                     />
@@ -1535,6 +1549,7 @@ export function ProfileModal({
                   <OfficialModelPicker
                     environmentId={environmentId}
                     value={highSeverityModel}
+                    driverKind={driverKind}
                     onChange={setHighSeverityModel}
                     ariaLabel={gt("High-severity model")}
                     emptyOptionLabel={gt("Same as primary")}
@@ -1581,6 +1596,7 @@ export function ProfileModal({
                       <OfficialModelPicker
                         environmentId={environmentId}
                         value={fallbackModel}
+                        driverKind={driverKind}
                         onChange={setFallbackModel}
                         ariaLabel={gt("Backup model")}
                         emptyOptionLabel={fallbackModel ? undefined : gt("Select a model…")}
