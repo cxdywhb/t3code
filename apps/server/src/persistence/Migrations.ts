@@ -135,6 +135,7 @@ import Migration0121 from "./Migrations/121_IssueAutomationFeishu.ts";
 import Migration0122 from "./Migrations/122_IssueAutomationRunLinks.ts";
 import Migration0123 from "./Migrations/123_IssueAutomationRepair.ts";
 import Migration0124 from "./Migrations/124_IssueAutomationMcp.ts";
+import Migration0125 from "./Migrations/125_WorkflowRunSubject.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -262,6 +263,7 @@ const migrationEntries = [
   [122, "IssueAutomationRunLinks", Migration0122],
   [123, "IssueAutomationRepair", Migration0123],
   [124, "IssueAutomationMcp", Migration0124],
+  [125, "WorkflowRunSubject", Migration0125],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -380,6 +382,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
            OR (migration_id = 111 AND name = 'IssueAutomationRunLinks')
            OR (migration_id = 112 AND name = 'IssueAutomationRepair')
            OR (migration_id = 113 AND name = 'IssueAutomationMcp')
+           OR (migration_id = 119 AND name = 'WorkflowRunSubject')
       `;
     }
   }

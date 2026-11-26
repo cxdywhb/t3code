@@ -23,7 +23,6 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Switch } from "../ui/switch";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerControlSize } from "./ComposerControl";
 import { ComposerEffortSlider } from "./ComposerEffortSlider";
 import { ComposerPermissionsSection, type RuntimeModeOption } from "./ComposerFooterControls";
@@ -35,6 +34,7 @@ import {
   ULTRATHINK_IN_BODY_NOTE,
   useTraitsSelection,
 } from "./TraitsPicker";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
 type BooleanDescriptor = Extract<ProviderOptionDescriptor, { type: "boolean" }>;
@@ -240,12 +240,14 @@ function ColumnRow(props: {
   );
   if (!props.description) return <button {...rowProps}>{content}</button>;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<button {...rowProps} />}>{content}</TooltipTrigger>
-      <TooltipPopup side="right" className="max-w-56">
-        {props.description}
-      </TooltipPopup>
-    </Tooltip>
+    <SharedTooltipTrigger
+      render={<button {...rowProps} />}
+      label={props.description}
+      side="right"
+      className="max-w-56"
+    >
+      {content}
+    </SharedTooltipTrigger>
   );
 }
 
@@ -648,10 +650,9 @@ function SpeedSegment(props: {
   );
   if (!props.description) return <button {...buttonProps}>{content}</button>;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<button {...buttonProps} />}>{content}</TooltipTrigger>
-      <TooltipPopup side="top">{props.description}</TooltipPopup>
-    </Tooltip>
+    <SharedTooltipTrigger render={<button {...buttonProps} />} label={props.description}>
+      {content}
+    </SharedTooltipTrigger>
   );
 }
 
