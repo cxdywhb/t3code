@@ -11,8 +11,10 @@ import {
   type PreviewAdjustInput,
   FILL_PREVIEW_VIEWPORT,
   PreviewSessionLookupError,
-  type PreviewSessionSnapshot,
+  PreviewSessionSnapshot,
+  INCOGNITO_BROWSER_PROFILE_ID,
 } from "@t3tools/contracts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import {
   isPreviewUrlNormalizationError,
   newPreviewTabId,
@@ -22,12 +24,17 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { PreviewControlRequiredError } from "@t3tools/contracts";
+import * as ServerConfig from "../config.ts";
 
 export class PreviewManager extends Context.Service<
   PreviewManager,
@@ -81,7 +88,37 @@ interface ManagerState {
   readonly revision: number;
 }
 
-const initialState: ManagerState = { sessions: new Map(), revision: 0 };
+const SavedSessions = Schema.fromJsonString(Schema.Array(PreviewSessionSnapshot));
+const decodeSavedSessions = Schema.decodeEffect(SavedSessions);
+const encodeSavedSessions = Schema.encodeEffect(SavedSessions);
+
+function restorableSession(snapshot: PreviewSessionSnapshot): PreviewSessionSnapshot | undefined {
+  if (
+    snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID ||
+    snapshot.reveal === false ||
+    (snapshot.automationOwner !== undefined && snapshot.profileId === undefined)
+  )
+    return undefined;
+  const {
+    automationOwner: _owner,
+    headless: _headless,
+    revealRequest: _request,
+    ...saved
+  } = snapshot;
+  return {
+    ...saved,
+    navStatus:
+      snapshot.navStatus._tag === "Idle"
+        ? snapshot.navStatus
+        : {
+            _tag: "Loading",
+            url: snapshot.navStatus.url,
+            title: snapshot.navStatus.title,
+          },
+    canGoBack: false,
+    canGoForward: false,
+  };
+}
 
 type PreviewEventDraft = PreviewEvent extends infer Event
   ? Event extends { readonly revision: number }
@@ -127,9 +164,63 @@ const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
 /** @public */
 export const make = Effect.gen(function* PreviewManagerMake() {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const config = yield* ServerConfig.ServerConfig;
+  const sessionsPath = path.join(config.stateDir, "browser-sessions.json");
+  const saved = yield* fs.readFileString(sessionsPath).pipe(
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound",
+      () => Effect.succeed("[]"),
+    ),
+    Effect.flatMap(decodeSavedSessions),
+    Effect.catch(() => Effect.logWarning("Could not restore browser tabs").pipe(Effect.as([]))),
+  );
   const random = yield* SecureRandom.SecureRandom;
   const serverEpoch = yield* random.uuidV4();
-  const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
+  const sessions = new Map<string, PreviewSessionState>();
+  for (const entry of saved) {
+    const snapshot = restorableSession(entry);
+    if (snapshot)
+      sessions.set(compositeKey(snapshot.threadId, snapshot.tabId), {
+        threadId: snapshot.threadId,
+        tabId: snapshot.tabId,
+        snapshot,
+      });
+  }
+  const stateRef = yield* SynchronizedRef.make<ManagerState>({ sessions, revision: 0 });
+  const persistenceLock = yield* Semaphore.make(1);
+  let disposed = false;
+  let lastSaved: string | undefined;
+  // 写盘单独串行，导航状态先提交；每次持锁后读取最新状态，避免旧保存覆盖关闭操作。
+  const saveSessions = Effect.gen(function* () {
+    if (disposed) return;
+    const { sessions } = yield* SynchronizedRef.get(stateRef);
+    const snapshots = [...sessions.values()].flatMap(({ snapshot }) => {
+      const saved = restorableSession(snapshot);
+      return saved === undefined ? [] : [saved];
+    });
+    const contents = yield* encodeSavedSessions(snapshots);
+    if (contents === lastSaved) return;
+    yield* writeFileStringAtomically({ filePath: sessionsPath, contents });
+    lastSaved = contents;
+  }).pipe(
+    persistenceLock.withPermit,
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+    Effect.catch(() => Effect.logError("Could not save browser tabs")),
+  );
+  yield* Effect.addFinalizer(() =>
+    saveSessions.pipe(
+      Effect.andThen(
+        persistenceLock.withPermit(
+          Effect.sync(() => {
+            disposed = true;
+          }),
+        ),
+      ),
+    ),
+  );
   const eventsPubSub = yield* PubSub.unbounded<PreviewEvent>();
   const events: Stream.Stream<PreviewEvent> = Stream.fromPubSub(eventsPubSub);
   const beforeClose = new Set<
@@ -183,7 +274,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
       );
     }).pipe(
       Effect.flatMap((modify) =>
-        modify.kind === "fail" ? Effect.fail(modify.error) : Effect.succeed(modify.result),
+        modify.kind === "fail"
+          ? Effect.fail(modify.error)
+          : saveSessions.pipe(Effect.as(modify.result)),
       ),
     );
   };
@@ -235,6 +328,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           return [snapshot, { sessions, revision }] as const;
         }),
       );
+      yield* saveSessions;
       return snapshot;
     },
   );
@@ -446,6 +540,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           [undefined, { sessions, revision }] as const,
         );
       });
+      yield* saveSessions;
     },
   );
 

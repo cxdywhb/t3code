@@ -2892,6 +2892,14 @@ export function claudeMcpQueryOverrides(input: {
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
+      ...Object.fromEntries(
+        Object.entries(session.sharedResources?.mcpServers ?? {}).map(([name, server]) => [
+          name,
+          server.type === "stdio"
+            ? { ...server, args: [...server.args], env: { ...server.env } }
+            : { ...server, headers: { ...server.headers } },
+        ]),
+      ),
       "t3-code": {
         type: "http",
         url: session.endpoint,

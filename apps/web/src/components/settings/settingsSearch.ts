@@ -858,6 +858,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "share-codex-resources",
+    title: msg("Share Codex skills and MCP servers"),
+    to: "/settings/maintenance",
+    searchTerms: [msg("plugins skills mcp codex claude antigravity share sync")],
+    scope: "environment-defaults",
+  },
+  {
     id: "provider-update-checks",
     title: msg("Provider update checks"),
     to: "/settings/maintenance",

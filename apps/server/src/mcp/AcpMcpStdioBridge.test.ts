@@ -442,9 +442,13 @@ describe("AcpMcpStdioBridge", () => {
       const sent: Array<{ id?: unknown; method?: string; result?: unknown }> = [];
       const result = yield* mcpToolSession({
         endpoint: "http://127.0.0.1:1/mcp",
-        authorization: "Bearer bridge-test",
+        authorization: "",
+        headers: { Authorization: "Bearer shared-test", "X-Api-Key": "custom-test" },
         clientName: "t3-code-acp-cli",
         fetchImplementation: async (_url, init) => {
+          const headers = new Headers(init?.headers);
+          expect(headers.get("authorization")).toBe("Bearer shared-test");
+          expect(headers.get("x-api-key")).toBe("custom-test");
           if (init?.method === "DELETE") return new Response(null, { status: 204 });
           const message = JSON.parse(String(init?.body)) as (typeof sent)[number];
           sent.push(message);

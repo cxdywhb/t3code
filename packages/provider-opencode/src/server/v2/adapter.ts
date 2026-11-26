@@ -67,6 +67,7 @@ import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { sharedSkillsContext } from "@t3tools/provider-core/server/mcpSession";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
@@ -395,7 +396,12 @@ interface ThreadState {
   /** Prompts other clients queued while no T3 turn ran, shown once delivered; `leads` the next wake if no report preceded it. */
   readonly externalPrompts: Map<string, { readonly text: string; leads: boolean }>;
   mcp:
-    | { readonly name: string; readonly directory: string; readonly credential: string }
+    | {
+        readonly name: string;
+        readonly directory: string;
+        readonly credential: string;
+        readonly sharedNames?: ReadonlyArray<string>;
+      }
     | undefined;
   instructions: string | undefined;
 }
@@ -4427,10 +4433,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return files;
     });
 
-    const removeMcp = (mcp: { readonly name: string; readonly directory: string }) =>
-      Effect.suspend(() =>
-        client.mcp.remove({ server: mcp.name, location: { directory: mcp.directory } }),
-      ).pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: true }));
+    const removeMcp = (mcp: {
+      readonly name: string;
+      readonly directory: string;
+      readonly sharedNames?: ReadonlyArray<string>;
+    }) =>
+      Effect.forEach(
+        [mcp.name, ...(mcp.sharedNames ?? [])],
+        (server) =>
+          client.mcp
+            .remove({ server, location: { directory: mcp.directory } })
+            .pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: true })),
+        { discard: true },
+      );
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(
@@ -4487,13 +4502,43 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               ),
             ),
           );
-        if (mcpAvailable) state.mcp = wanted;
+        if (mcpAvailable) {
+          const sharedNames: string[] = [];
+          state.mcp = { ...wanted, sharedNames };
+          for (const [sharedName, server] of Object.entries(
+            mcpSession?.sharedResources?.mcpServers ?? {},
+          )) {
+            const name = `${wanted.name}_${sharedName}`;
+            // 每个线程独立注册，关闭一个线程不能撤销另一个线程的工具。
+            yield* client.mcp
+              .add({
+                server: name,
+                location: { directory },
+                config:
+                  server.type === "stdio"
+                    ? new Mcp.LocalConfig({
+                        type: "local",
+                        command: [server.command, ...server.args],
+                        environment: { ...server.env },
+                      })
+                    : new Mcp.RemoteConfig({
+                        type: "remote",
+                        url: server.url,
+                        headers: { ...server.headers },
+                        oauth: false,
+                      }),
+              })
+              .pipe(Effect.timeout(INVENTORY_TIMEOUT));
+            sharedNames.push(name);
+          }
+        }
         // Before 2.2.6, OpenCode loads a new server's tools 100 ms after it connects, and a prompt sent sooner lacks them.
         if (mcpAvailable && fresh && compareSemverVersions(connection.version, "2.2.6") < 0) {
           yield* Effect.sleep(MCP_TOOL_RELOAD_SETTLE);
         }
       }
       const instructions = [
+        connection.external ? undefined : sharedSkillsContext(mcpSession?.sharedResources),
         buildRuntimeInstructions({
           agentFeedback: mcpAvailable ? (turnInput.agentFeedback ?? "off") : "off",
           harness: "OpenCode",

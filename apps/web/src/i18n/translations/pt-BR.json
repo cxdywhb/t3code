@@ -13931,5 +13931,9 @@
   "7b7d3c2b4fe3f967": "Correção confirmada",
   "7fe9f06d783ab755": "Diagnóstico concluído",
   "f2060068ce6c25bb": "Correção aguardando revisão",
-  "6ec2484c4fc196b1": "Sincronizar correção com o ZenTao"
+  "6ec2484c4fc196b1": "Sincronizar correção com o ZenTao",
+  "7f2c29b2312bd297": "Agent resources",
+  "d78d554a0b3b95b1": "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied.",
+  "7246238530fb78c3": "Share Codex skills and MCP servers",
+  "dd6f4e7545812a7e": "plugins skills mcp codex claude antigravity share sync"
 }

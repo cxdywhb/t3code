@@ -60,6 +60,7 @@ import { brokenVersionDetail } from "@t3tools/provider-core/server/compatibility
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { sharedSkillsContext } from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   structuralProtocolMethod,
@@ -1099,6 +1100,28 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           mcpSession?.capabilities?.has("device") === true,
         );
         if (hasT3Mcp) {
+          for (const [name, server] of Object.entries(
+            mcpSession.sharedResources?.mcpServers ?? {},
+          )) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+              client.mcp.add({
+                name,
+                config:
+                  server.type === "stdio"
+                    ? {
+                        type: "local",
+                        command: [server.command, ...server.args],
+                        environment: { ...server.env },
+                      }
+                    : {
+                        type: "remote",
+                        url: server.url,
+                        headers: { ...server.headers },
+                        oauth: false,
+                      },
+              }),
+            );
+          }
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "t3-code",
@@ -3514,6 +3537,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ...(variant === undefined ? {} : { variant }),
             system: [
               orchestrationSystemPrompt,
+              hasT3Mcp ? sharedSkillsContext(mcpSession.sharedResources) : undefined,
               buildRuntimeInstructions({
                 harness: "OpenCode",
                 model: turn.modelSelection.model,

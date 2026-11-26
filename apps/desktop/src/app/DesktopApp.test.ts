@@ -52,6 +52,7 @@ import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
+import * as BrowserSession from "../preview/BrowserSession.ts";
 import * as BrowserImport from "../preview/BrowserImport/BrowserImport.ts";
 import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfiguration.ts";
 import * as DesktopCliCommand from "./DesktopCliCommand.ts";
@@ -99,6 +100,9 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           resolveUserDataPath: Effect.succeed("/isolated/userdata"),
           configure: stub.record("identity"),
         } as DesktopAppIdentity.DesktopAppIdentity["Service"]),
+        Effect.provideService(BrowserSession.BrowserSession, {
+          flushStorage: stub.record("flush-browser"),
+        } as unknown as BrowserSession.BrowserSession["Service"]),
         Effect.provideService(ElectronApp.ElectronApp, {
           setPath: () => Effect.void,
           whenReady: stub.record("ready"),
@@ -321,6 +325,7 @@ it.effect.each([false, true])(
       assert.isFalse(yield* shutdown.isComplete);
       yield* Deferred.succeed(releaseStops, undefined);
       yield* Deferred.await(historyStarted);
+      assert.include(events, "flush-browser");
       assert.isFalse(yield* shutdown.isComplete);
       yield* Deferred.succeed(releaseHistory, undefined);
       const result = yield* Fiber.await(app);

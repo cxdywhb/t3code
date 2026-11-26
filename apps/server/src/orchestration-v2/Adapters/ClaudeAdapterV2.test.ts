@@ -783,6 +783,28 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
   });
 
+  it("injects shared MCP servers without granting them T3's automatic approval", () => {
+    const servers = {
+      shared_codex_demo: {
+        type: "stdio" as const,
+        command: "node",
+        args: ["/plugin/server.js"],
+        env: { KEY: "fixture" },
+      },
+    };
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: {
+        ...mcpSessionFor(ThreadId.make("shared-mcp")),
+        sharedResources: { skills: [], mcpServers: servers, warnings: [] },
+      },
+      readOnlySandbox: true,
+    });
+    assert.deepEqual(overrides.mcpServers, { ...servers, ...T3_MCP_SERVERS });
+    assert.isFalse(
+      overrides.allowedTools?.some((tool) => tool.includes("shared_codex_demo")) ?? false,
+    );
+  });
+
   it("invalidates live-query reuse when MCP credentials rotate or tracked folders change", () => {
     const threadId = ThreadId.make("thread-claude-mcp-credential-rotation");
     const mcpSession = mcpSessionFor(threadId);

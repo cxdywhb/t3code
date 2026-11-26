@@ -5782,5 +5782,8 @@
   "3328503592789bed": "Дзен",
   "856812e7e1fc445e": "Вызовы инструментов в чате",
   "8d545d54c0a9e950": "Скрывать команды, правки и поиски, которые выполняют агенты. «Скрывать успешные» оставляет ошибки. «Дзен» показывает только итоговые ответы. Запросы подтверждения, вопросы и ошибки показываются всегда.",
-  "603661e55748ac0f": "Диагностика перезапущена · Запуск {number}"
+  "603661e55748ac0f": "Диагностика перезапущена · Запуск {number}",
+  "7f2c29b2312bd297": "Agent resources",
+  "7246238530fb78c3": "Share Codex skills and MCP servers",
+  "d78d554a0b3b95b1": "Share enabled Codex skills and MCP servers with other agents on this environment. Applies to new sessions. Native plugins, account authorization, and host-specific tools are not copied."
 }

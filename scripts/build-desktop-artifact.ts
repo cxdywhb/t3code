@@ -2844,7 +2844,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const updateChannel = resolveDesktopUpdateChannel(version);
   // Missing publish config infers a GitHub feed from tokens; staging has no repository, so manifest generation would crash.
   buildConfig.publish = null;
-  if (!isDesktopPreviewVersion(version)) {
+  // macOS 自动更新必须校验发布方签名；无证书的 fork 仅提供手动安装包。
+  if (!isDesktopPreviewVersion(version) && (platform !== "mac" || signed || mockUpdates)) {
     const publishConfig = yield* resolveGitHubPublishConfig(
       updateChannel,
       platform === "mac" && !mockUpdates ? "cxdywhb/t3code" : undefined,

@@ -33,6 +33,22 @@ const mcpSession = {
 };
 
 describe("pi T3 MCP injection", () => {
+  it("loads shared skills through Pi's native skill option", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: {},
+      extensionPath: undefined,
+      mcpSession: {
+        ...mcpSession,
+        sharedResources: {
+          skills: [{ name: "demo", path: "/plugin with spaces/SKILL.md", enabled: true }],
+          mcpServers: {},
+          warnings: [],
+        },
+      },
+    });
+    assert.deepEqual(launch.args, ["--mode", "rpc", "--skill", "/plugin with spaces/SKILL.md"]);
+  });
   it("always adds the permission bridge and configures MCP when available", () => {
     const resolvedArgs = resolvePiLaunchArgs(
       "--extension=/home/user/.pi/agent/extensions/demo.ts --session-dir=/tmp/pi-sessions --provider=anthropic --model=claude-sonnet --tools='' --name=-review --extension-flag=kept",
