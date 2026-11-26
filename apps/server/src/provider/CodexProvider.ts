@@ -606,10 +606,37 @@ const requestCodexChatGptModels = Effect.fn("requestCodexChatGptModels")(functio
 /** Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models. */
 export const codexAppServerEnvironment = (
   environment: NodeJS.ProcessEnv | undefined,
-): NodeJS.ProcessEnv => ({
-  CODEX_INTERNAL_ORIGINATOR_OVERRIDE: CODEX_CLIENT_NAME,
-  ...environment,
-});
+): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = {
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE: CODEX_CLIENT_NAME,
+    ...environment,
+  };
+  if (
+    env.HTTP_PROXY ||
+    env.HTTPS_PROXY ||
+    env.ALL_PROXY ||
+    env.http_proxy ||
+    env.https_proxy ||
+    env.all_proxy
+  ) {
+    // T3 的本地 MCP 地址只在当前主机可达，不能交给远端代理。
+    const noProxy = env.NO_PROXY ?? env.no_proxy;
+    const lowerNoProxy = env.no_proxy ?? env.NO_PROXY;
+    for (const [key, value] of [
+      ["NO_PROXY", noProxy],
+      ["no_proxy", lowerNoProxy],
+    ] as const) {
+      const entries = (value ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      env[key] = entries.includes("*")
+        ? "*"
+        : [...new Set([...entries, "localhost", "127.0.0.1", "::1"])].join(",");
+    }
+  }
+  return env;
+};
 
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {

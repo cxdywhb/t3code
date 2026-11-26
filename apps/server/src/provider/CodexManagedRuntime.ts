@@ -35,7 +35,7 @@ const managedCodexLaunchArgs = (command: string, args: ReadonlyArray<string>) =>
 export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(function* (options: {
   readonly instanceId: ProviderInstanceId;
   readonly enabled: boolean;
-  readonly environment: NodeJS.ProcessEnv;
+  readonly environment: Effect.Effect<NodeJS.ProcessEnv>;
   readonly config: CodexSettings;
 }) {
   const installation = yield* CodexInstallation.CodexInstallation;
@@ -116,7 +116,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
     );
     // Ambient CLI overrides cannot redirect a T3-owned token to a different provider.
     const environment: NodeJS.ProcessEnv = {
-      ...options.environment,
+      ...(yield* options.environment),
       CODEX_HOME: homePath,
     };
     delete environment.ACCESS_TOKEN;

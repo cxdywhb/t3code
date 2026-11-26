@@ -110,10 +110,12 @@ it.live.each(
           instanceId,
           enabled: true,
           config: decodeSettings({ setupMode: "managed", homePath: sharedHome }),
-          environment: ambient,
+          environment: Effect.sync(() => ({ ...ambient })),
         });
+        Object.assign(ambient, { HTTPS_PROXY: "http://proxy.test:8080" });
         yield* Effect.gen(function* () {
           const effective = yield* runtime.resolve;
+          assert.equal(effective.environment.HTTPS_PROXY, "http://proxy.test:8080");
           assert.strictEqual(leases, 1);
           assert.strictEqual(effective.config.binaryPath, executable.executablePath);
           assert.notStrictEqual(effective.config.homePath, ambient.CODEX_HOME);

@@ -1019,7 +1019,7 @@ describe("CodexAdapterV2 process exit", () => {
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
-        environment: {},
+        environment: Effect.succeed({}),
         clientFactory: { open: () => Effect.succeed(client) },
         digest: yield* Digest.Digest,
         fileSystem: yield* FileSystem.FileSystem,
@@ -1187,7 +1187,7 @@ describe("CodexAdapterV2 session initialize", () => {
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
-        environment: {},
+        environment: Effect.succeed({}),
         ...(compatibility === undefined ? {} : { compatibility }),
         clientFactory: {
           open: (openInput) =>
@@ -1795,7 +1795,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
-        environment: {},
+        environment: Effect.succeed({}),
         clientFactory,
         ...(onUsageLimits ? { onUsageLimits } : {}),
         ...(models ? { models } : {}),
