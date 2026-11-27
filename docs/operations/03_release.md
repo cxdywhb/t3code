@@ -1,5 +1,19 @@
 # Release Runbook
 
+## X Code macOS 稳定版
+
+在 Apple Silicon Mac 上从已推送到 `cxdy-dev` 的提交发布。先设置 `XCODE_RELEASE_TEAM_ID` 为项目获授权的 Apple Team ID，并通过 `CSC_NAME` 选择本机 Developer ID Application 证书，或通过 `CSC_LINK` 和 `CSC_KEY_PASSWORD` 提供证书。将 `APPLE_API_KEY` 指向本机的公证密钥文件，并设置 `APPLE_API_KEY_ID` 和 `APPLE_API_ISSUER`。同一更新通道持续使用同一 Apple 团队的签名。
+
+```sh
+vp exec node scripts/release-xcode-mac.ts 0.1.25 --publish --notes /path/to/release-notes.md
+```
+
+命令从同一次构建生成 DMG、ZIP、两份差分索引和 `latest-mac.yml`，检查应用签名、公证票据、版本、架构、内置更新源及清单校验值，再生成 `SHA256SUMS.txt`。GitHub 草稿中的提交和全部附件校验一致后，才标记为最新稳定版。省略 `--publish` 可先构建和校验。用 `--verify <产物目录>` 可重新校验已有构建。
+
+第一次切换签名时，通过 DMG 手动替换现有临时签名版或缺少更新源的版本。发布后用上一个同团队签名的版本实际走一遍「检查更新 → 下载 → 安装 → 重启」，确认进入新版本。手动安装用的临时签名包可单独验证和分发，稳定更新通道由带更新源的签名包维护。
+
+## 上游发布流程
+
 Unified release workflow: `.github/workflows/release.yml`. Beta is a product label, not a release channel—channels remain `stable` and `nightly` (plus `preview` for maintainer test builds).
 
 ## Channels and triggers
@@ -50,6 +64,8 @@ Windows packages the bundled server and its unpacked native modules in `resource
 Configure `t3` on npm with GitHub Actions Trusted Publishing for `.github/workflows/release.yml` (the workflow publishes only the `t3` launcher tarball via `npm publish --provenance`). Set the publisher's environment to `production`, which `publish_cli` declares.
 
 ### Apple signing and notarization (macOS)
+
+macOS builds without signing credentials provide installers for manual installation and omit the automatic update feed. Automatic updates require a stable Developer ID Application identity; moving from an unsigned build to a signed build may require one manual installation.
 
 - **Secrets:** `CSC_LINK` (base64 `.p12`), `CSC_KEY_PASSWORD`, `APPLE_API_KEY` (raw `.p8`), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `MACOS_PROVISIONING_PROFILE` (base64 profile for `com.t3tools.t3code` with Associated Domains).
 - **Variables:** `APPLE_TEAM_ID`, optional `CLERK_PASSKEY_RP_DOMAINS`.

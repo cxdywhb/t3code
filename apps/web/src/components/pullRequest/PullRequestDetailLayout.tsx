@@ -1,5 +1,5 @@
 import { useGT } from "gt-react";
-import { ArrowLeftIcon, FileDiffIcon, LockIcon } from "lucide-react";
+import { ArrowRightIcon, FileDiffIcon, LockIcon } from "lucide-react";
 import { useEffect, useRef, type ComponentProps, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -32,6 +32,20 @@ export function PullRequestPrivateBadge() {
   );
 }
 
+export function PullRequestBranchArrow({ className }: { className: string }) {
+  const gt = useGT();
+  return (
+    <ArrowRightIcon
+      role="img"
+      aria-label={gt("sends changes to", {
+        $context:
+          "screen reader label for an arrow from a pull request's head branch to its base branch",
+      })}
+      className={cn("shrink-0 opacity-60", className)}
+    />
+  );
+}
+
 export function PullRequestDetailHeaderBody({
   title,
   author,
@@ -51,7 +65,6 @@ export function PullRequestDetailHeaderBody({
   files: ReactNode;
   diffStat: ReactNode;
 }) {
-  const gt = useGT();
   return (
     <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
       {title}
@@ -64,15 +77,9 @@ export function PullRequestDetailHeaderBody({
       </div>
       <div className="mt-4 flex min-h-5 min-w-0 items-center gap-2 text-xs text-muted-foreground">
         <span className="flex min-w-0 flex-1 items-center gap-1.5 font-mono text-xs text-muted-foreground/70">
-          {base}
-          <ArrowLeftIcon
-            aria-label={gt("receives changes from", {
-              $context:
-                "screen reader label for an arrow between the base branch, read before it, and the head branch, read after it",
-            })}
-            className="size-3.5 shrink-0 opacity-60"
-          />
           {head}
+          <PullRequestBranchArrow className="size-3.5" />
+          {base}
         </span>
         <span className="ml-auto inline-flex shrink-0 items-baseline justify-end gap-2">
           <span className="inline-flex min-w-16 items-baseline justify-end gap-1.5 tabular-nums">

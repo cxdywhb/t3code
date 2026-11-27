@@ -2817,6 +2817,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     artifactName:
       platform === "mac" ? "X-Code-${version}-${arch}.${ext}" : "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
+    // runAsNode stays on: the app starts its server, helpers and the `t3` shim by running this
+    // binary as Node, and that mode still accepts inspector flags.
+    electronFuses: {
+      enableNodeCliInspectArguments: false,
+      // Nothing signs an unsigned macOS build after the flip, which voids its ad hoc signature.
+      resetAdHocDarwinSignature: platform === "mac" && !signed,
+    },
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
       ...(platform === "mac"
@@ -2844,7 +2851,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const updateChannel = resolveDesktopUpdateChannel(version);
   // Missing publish config infers a GitHub feed from tokens; staging has no repository, so manifest generation would crash.
   buildConfig.publish = null;
-  if (!isDesktopPreviewVersion(version)) {
+  // macOS 自动更新必须校验发布方签名；无证书的 fork 仅提供手动安装包。
+  if (!isDesktopPreviewVersion(version) && (platform !== "mac" || signed || mockUpdates)) {
     const publishConfig = yield* resolveGitHubPublishConfig(
       updateChannel,
       platform === "mac" && !mockUpdates ? "cxdywhb/t3code" : undefined,

@@ -493,6 +493,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
+@utility pt-empty-composer {
+  padding-top: min(14dvh, --spacing(28));
+}
+
 @utility topbar-scroll-fade {
   -webkit-mask-image:
     linear-gradient(
@@ -2263,9 +2267,10 @@ code {
 
 /* Paragraphs and code blocks arrive in chunks while a response streams. Fade
    each new block in so the chunk does not pop. @starting-style only applies
-   when an element is first inserted, and the rule is gated on data-streaming,
-   so opening a finished thread never replays the fade. Opacity only, one
-   shot, no layout change. */
+   when an element is first inserted, and ChatMarkdown leaves data-streaming off
+   a reply it already showed until new text arrives, so remounting it (thread
+   switch, virtualized scroll) never replays the fade. Opacity only, one shot,
+   no layout change. */
 @media (prefers-reduced-motion: no-preference) {
   .chat-markdown[data-streaming] > *,
   .chat-markdown[data-streaming] .chat-markdown-shiki,

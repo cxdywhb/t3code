@@ -85,6 +85,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
+import * as SharedAgentResources from "./provider/SharedAgentResources.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -809,7 +810,10 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer)),
   Layer.provideMerge(ProviderRegistry.layer),
   Layer.provideMerge(
-    ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(SqlitePersistence.layerConfig)),
+    ProviderInstanceRegistryHydration.layer.pipe(
+      Layer.provide(SqlitePersistence.layerConfig),
+      Layer.provide(layerNativeTelemetry),
+    ),
   ),
   // One gate for the server, below hydration so the Claude adapter sees it: layers memoize by
   // reference, so the runtime layer shares it.
@@ -1449,6 +1453,7 @@ const layerMakeServer = Layer.unwrap(
           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
         ),
       ),
+      Layer.provide(SharedAgentResources.layer.pipe(Layer.provide(layerServerSettings))),
       Layer.provide(layerActivation),
       Layer.provideMerge(
         RelayTracing.layerServerRelayBroker.pipe(Layer.provide(ManagedPolicy.layer)),

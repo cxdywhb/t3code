@@ -220,6 +220,14 @@ export function cursorMcpServers(
     return undefined;
   }
   return {
+    ...Object.fromEntries(
+      Object.entries(session.sharedResources?.mcpServers ?? {}).map(([name, server]) => [
+        name,
+        server.type === "stdio"
+          ? { ...server, args: [...server.args], env: { ...server.env } }
+          : { ...server, headers: { ...server.headers } },
+      ]),
+    ),
     "t3-code": {
       type: "http",
       url: session.endpoint,
@@ -2940,12 +2948,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               detail: "Cursor turn requires non-empty text or attachments.",
             });
           }
-          const runtimeInstructions = buildRuntimeInstructions({
-            agentFeedback: mcpServers === undefined ? "off" : (turnInput.agentFeedback ?? "off"),
-            harness: "Cursor",
-            model: turnInput.modelSelection.model,
-            runtimePolicy: turnInput.runtimePolicy,
-          });
+          const runtimeInstructions = [
+            buildRuntimeInstructions({
+              agentFeedback: mcpServers === undefined ? "off" : (turnInput.agentFeedback ?? "off"),
+              harness: "Cursor",
+              model: turnInput.modelSelection.model,
+              runtimePolicy: turnInput.runtimePolicy,
+            }),
+            ...(turnInput.appContext ?? []).map((entry) => entry.text),
+          ].join("\n\n");
           // Resend only on a new/compacted/rewound conversation or when the instructions change.
           const sendRuntimeInstructions = delivered.runtime !== runtimeInstructions;
           const text = sendRuntimeInstructions
@@ -3367,6 +3378,41 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                       driver: CursorAgentSdk.CURSOR_PROVIDER,
                       providerSessionId: input.providerSessionId,
                       providerThreadId: threadInput.providerThread.id,
+                      cause,
+                    }),
+                ),
+              ),
+          ),
+          nativeTurnKept: Effect.fn("CursorAdapterV2.nativeTurnKept")(
+            function* (keptInput: {
+              readonly providerThread: OrchestrationV2ProviderThread;
+              readonly nativeTurnId: string;
+            }) {
+              // This session still holds the stopped request and replays it on the next turn itself.
+              const interrupted = yield* Ref.get(interruptedPrompt);
+              if (
+                interrupted?.runId === keptInput.nativeTurnId &&
+                interrupted.agent === nativeThreadId(keptInput.providerThread)
+              )
+                return true;
+              const agent = yield* openAgent({
+                operation: "resume",
+                agentId: nativeThreadId(keptInput.providerThread),
+                storeCwd: keptInput.providerThread.nativeMetadata?.cursorStoreCwd,
+                threadId: keptInput.providerThread.appThreadId ?? input.threadId,
+                modelSelection: input.modelSelection,
+                runtimePolicy: input.runtimePolicy,
+              });
+              if (agent.session.runCheckpointed === undefined) return true;
+              return yield* agent.session.runCheckpointed(keptInput.nativeTurnId);
+            },
+            (effect, keptInput) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
+                      driver: CursorAgentSdk.CURSOR_PROVIDER,
+                      providerThreadId: keptInput.providerThread.id,
                       cause,
                     }),
                 ),

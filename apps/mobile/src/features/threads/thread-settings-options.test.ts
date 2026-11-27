@@ -13,7 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyProviderOptionSelection,
   resolveProviderOptionDescriptors,
-  withImplicitFastModeSelection,
+  withImplicitModelOptionSelection,
 } from "../../lib/providerOptions";
 import {
   RUNTIME_MODE_CHOICES,
@@ -84,7 +84,7 @@ describe("fast mode switch", () => {
 
     expect({
       shown,
-      saved: withImplicitFastModeSelection(selection, [
+      saved: withImplicitModelOptionSelection(selection, [
         { instanceId: selection.instanceId, models: [{ slug: selection.model, capabilities }] },
       ]).options,
       afterToggle: applyProviderOptionSelection(descriptors, { id: "fastMode", value: !shown }),

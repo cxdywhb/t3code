@@ -544,6 +544,31 @@ const dependencies = Layer.mergeAll(
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layer = ServerBrowser.layer.pipe(Layer.provideMerge(dependencies));
+it.effect("keeps saved user tabs when the browser host shuts down", () =>
+  Effect.gen(function* () {
+    const manager = yield* Manager.PreviewManager;
+    const close = vi.fn(manager.close);
+    const browserScope = yield* Scope.make();
+    const context = yield* Layer.buildWithScope(ServerBrowser.layer, browserScope).pipe(
+      Effect.provideService(Manager.PreviewManager, { ...manager, close }),
+    );
+    const tab = yield* manager.open({
+      threadId: scope.thread.threadId,
+      runtime: "server",
+      profileId: "work",
+      url: "https://example.com",
+    });
+    const browser = yield* ServerBrowser.ServerBrowser.pipe(Effect.provide(context));
+    yield* browser.attachViewer(viewerInput(tab.tabId, true));
+    yield* Scope.close(browserScope, Exit.void);
+    expect(close).not.toHaveBeenCalled();
+    expect(
+      (yield* manager.list({ threadId: scope.thread.threadId })).sessions.map(
+        (entry) => entry.tabId,
+      ),
+    ).toContain(tab.tabId);
+  }).pipe(Effect.provide(dependencies)),
+);
 const ready = Effect.gen(function* () {
   const browser = yield* ServerBrowser.ServerBrowser;
   const broker = yield* Broker.PreviewAutomationBroker;

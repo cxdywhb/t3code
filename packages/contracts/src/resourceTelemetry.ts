@@ -66,6 +66,7 @@ export const ResourceMonitorCapabilities = Schema.Struct({
   ioBytes: Schema.Boolean,
   processStartTime: Schema.Boolean,
   processTree: Schema.Boolean,
+  processIdentities: Schema.optionalKey(Schema.Boolean),
 });
 export type ResourceMonitorCapabilities = typeof ResourceMonitorCapabilities.Type;
 
@@ -114,6 +115,7 @@ export type ResourceMonitorSampleNowCommand = typeof ResourceMonitorSampleNowCom
 export const ResourceMonitorProcessTableCommand = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("processTable"),
+  identities: Schema.optionalKey(Schema.Boolean),
   requestId: TrimmedNonEmptyString,
 });
 export type ResourceMonitorProcessTableCommand = typeof ResourceMonitorProcessTableCommand.Type;
@@ -186,6 +188,8 @@ export const ResourceMonitorSnapshotEvent = Schema.Struct({
 export type ResourceMonitorSnapshotEvent = typeof ResourceMonitorSnapshotEvent.Type;
 
 export const ResourceMonitorProcessTableEntry = Schema.Struct({
+  pgid: Schema.optionalKey(NonNegativeInt),
+  startTimeMicros: Schema.optionalKey(NonNegativeInt),
   pid: PositiveInt,
   ppid: NonNegativeInt,
   name: Schema.String,
@@ -319,6 +323,14 @@ export const ShellEnvironmentPatch = Schema.Struct({
   SSL_CERT_FILE: Schema.optionalKey(Schema.NullOr(Schema.String)),
   SSL_CERT_DIR: Schema.optionalKey(Schema.NullOr(Schema.String)),
   NODE_EXTRA_CA_CERTS: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  HTTP_PROXY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  HTTPS_PROXY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  ALL_PROXY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  NO_PROXY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  http_proxy: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  https_proxy: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  all_proxy: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  no_proxy: Schema.optionalKey(Schema.NullOr(Schema.String)),
   T3CODE_TELEMETRY_ENABLED: Schema.optionalKey(Schema.NullOr(Schema.String)),
   DO_NOT_TRACK: Schema.optionalKey(Schema.NullOr(Schema.String)),
   T3CODE_FEATURE_FLAGS: Schema.optionalKey(Schema.NullOr(Schema.String)),

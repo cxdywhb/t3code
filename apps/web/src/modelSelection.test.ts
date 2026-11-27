@@ -815,7 +815,11 @@ describe("instance-scoped model selection", () => {
 
     it("does not inherit settings options for an optionless existing thread", () => {
       const threadSelection = createModelSelection(instanceId, "claude-opus-5-5");
-      expect(dispatchedSelection(threadSelection)).toEqual(threadSelection);
+      expect(dispatchedSelection(threadSelection)).toEqual(
+        createModelSelection(instanceId, threadSelection.model, [
+          { id: "effort", value: "medium" },
+        ]),
+      );
     });
 
     it("keeps the options it was saved with", () => {
@@ -1333,7 +1337,7 @@ describe("composer fallback to another instance of the same driver", () => {
 
     expect(state.selectedModel).toBe("claude-opus-5-5");
     expect(traits.promptEffort).toBe("medium");
-    expect(traits.modelOptionsForDispatch).toBeUndefined();
+    expect(traits.modelOptionsForDispatch).toEqual([{ id: "effort", value: "medium" }]);
   });
 
   describe("with model aliases", () => {
@@ -1418,7 +1422,9 @@ describe("composer fallback to another instance of the same driver", () => {
         });
 
         expect(state.selectedModel).toBe("gpt-5.4");
-        expect(traits.modelOptionsForDispatch).toBeUndefined();
+        expect(traits.modelOptionsForDispatch).toEqual([
+          { id: "reasoningEffort", value: "medium" },
+        ]);
       },
     );
 
@@ -1438,7 +1444,7 @@ describe("composer fallback to another instance of the same driver", () => {
       });
 
       expect(state.selectedModel).toBe("5.4");
-      expect(traits.modelOptionsForDispatch).toBeUndefined();
+      expect(traits.modelOptionsForDispatch).toEqual([{ id: "reasoningEffort", value: "medium" }]);
     });
 
     it("does not carry options through an alias that names another model per instance", () => {
@@ -1464,7 +1470,7 @@ describe("composer fallback to another instance of the same driver", () => {
       });
 
       expect(state.selectedModel).toBe("claude-sonnet-4-6");
-      expect(traits.modelOptionsForDispatch).toBeUndefined();
+      expect(traits.modelOptionsForDispatch).toEqual([{ id: "thinking", value: "medium" }]);
     });
   });
 

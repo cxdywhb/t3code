@@ -77,6 +77,27 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it.each([
+    [undefined, "medium"],
+    [selections(["effort", "low"]), "low"],
+    [selections(["effort", "ultra"]), "medium"],
+  ] as const)("dispatches a supported effort for saved options %j", (modelOptions, value) => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([
+        selectDescriptor("effort", [
+          { id: "low", label: "Low", isDefault: true },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ]),
+      ]),
+      modelOptions,
+    });
+    expect(state.promptEffort).toBe(value);
+    expect(state.modelOptionsForDispatch).toEqual(selections(["effort", value]));
+  });
+
   it("preserves selections that match defaults so deepMerge can overwrite prior state", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,
@@ -356,14 +377,14 @@ describe("getComposerReasoningStep", () => {
     ).toStrictEqual(selections(["reasoning_effort", "high"], ["fastMode", true]));
   });
 
-  it("steps from the provider-reported level for the same instance and model", () => {
+  it("steps from the app default or an explicit saved selection", () => {
     const reported = {
       instanceId: INSTANCE,
       model: MODEL,
       options: selections(["reasoningEffort", "high"]),
     };
     for (const { label, modelOptions, reportedModelSelection, to } of [
-      { label: "reported", modelOptions: undefined, reportedModelSelection: reported, to: "low" },
+      { label: "reported", modelOptions: undefined, reportedModelSelection: reported, to: "high" },
       {
         label: "other instance",
         modelOptions: undefined,

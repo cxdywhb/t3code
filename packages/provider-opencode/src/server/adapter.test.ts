@@ -9,6 +9,7 @@ import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
 import {
   CheckpointId,
+  EnvironmentId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -32,6 +33,7 @@ import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -3716,6 +3718,97 @@ describe("OpenCodeAdapterV2", () => {
     }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer))),
   );
 
+  it.effect.each(["error", "timeout"] as const)(
+    "continues past a shared MCP registration %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const suffix = `shared-mcp-${failure}`;
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const threadId = ThreadId.make(`thread-opencode-${suffix}`);
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode-test"),
+          threadId,
+          providerSessionId: "mcp:opencode-test",
+          providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+          endpoint: "http://test.invalid/mcp",
+          authorizationHeader: "Bearer test-credential",
+          browserToolsAvailable: false,
+          sharedResources: {
+            skills: [],
+            warnings: [],
+            mcpServers: {
+              broken: { type: "stdio", command: "broken", args: [], env: {} },
+              healthy: { type: "stdio", command: "healthy", args: [], env: {} },
+            },
+          },
+        });
+        const registered: string[] = [];
+        const warnings: unknown[] = [];
+        const logger = Logger.make(({ logLevel, message }) => {
+          if (logLevel === "Warn") warnings.push(message);
+        });
+        const attempted = promiseGate<void>();
+        const prompted = promiseGate<void>();
+        let aborted = false;
+        const nativeEvents = asyncEventStream();
+        const opening = yield* makeOpenCodeRuntimeHarness(
+          suffix,
+          "root",
+          {
+            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+            mcp: {
+              add: async (input: { name: string }, options?: { signal?: AbortSignal }) => {
+                if (input.name === "broken") {
+                  attempted.resolve();
+                  if (failure === "error") throw new Error("private-upstream-response");
+                  return new Promise((_, reject) => {
+                    options?.signal?.addEventListener(
+                      "abort",
+                      () => {
+                        aborted = true;
+                        reject(new Error("aborted"));
+                      },
+                      { once: true },
+                    );
+                  });
+                }
+                registered.push(input.name);
+                return { data: true };
+              },
+            },
+            session: {
+              create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+              get: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+              messages: async () => ({ data: [] }),
+              children: async () => ({ data: [] }),
+              promptAsync: async () => {
+                prompted.resolve();
+                return { data: true };
+              },
+              abort: async () => ({ data: true }),
+            },
+          },
+          {},
+          { exitCode: Effect.never },
+        ).pipe(
+          Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+          Effect.forkScoped,
+        );
+        yield* Effect.promise(() => attempted.promise);
+        if (failure === "timeout") yield* TestClock.adjust("5 seconds");
+        const harness = yield* Fiber.join(opening);
+        yield* harness.startTurn();
+        yield* Effect.promise(() => prompted.promise);
+        assert.deepEqual(registered, ["healthy", "t3-code"]);
+        assert.equal(aborted, failure === "timeout");
+        assert.lengthOf(warnings, 1);
+        const diagnostic = encodeUnknownJson(warnings);
+        assert.include(diagnostic, "broken");
+        assert.notInclude(diagnostic, "private-upstream-response");
+        assert.notInclude(diagnostic, "test-credential");
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer))),
+  );
+
   it.effect("steers with the turn's agent, reasoning variant and system instructions", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -4420,13 +4513,25 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 
-  it.effect("interrupts an initial prompt while its SDK request is pending", () =>
+  it.effect.each(["preparing", "submitted"])("stops a pending prompt (%s)", (stage) =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
       const promptStarted = promiseGate<void>();
       const abortCalled = promiseGate<void>();
       let abortCalls = 0;
+      let promptCalls = 0;
       const client = {
+        command: {
+          list: async (_input: unknown, options?: { readonly signal?: AbortSignal }) => {
+            promptStarted.resolve();
+            await new Promise<void>((resolve) => {
+              const signal = options?.signal;
+              if (signal?.aborted) resolve();
+              else signal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+            return { data: [] };
+          },
+        },
         event: {
           subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
             options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
@@ -4441,6 +4546,7 @@ describe("OpenCodeAdapterV2", () => {
             data: { id: "native-opencode-initial-stop", time: { created: 1, updated: 1 } },
           }),
           promptAsync: async (_input: unknown, options?: { readonly signal?: AbortSignal }) => {
+            promptCalls += 1;
             promptStarted.resolve();
             await new Promise<void>((_resolve, reject) => {
               const signal = options?.signal;
@@ -4455,7 +4561,10 @@ describe("OpenCodeAdapterV2", () => {
           status: async () => ({
             data: { "native-opencode-initial-stop": { type: "idle" as const } },
           }),
-          messages: async () => ({ data: [] }),
+          message: async () => ({
+            response: { status: 404 },
+            error: { name: "NotFoundError" },
+          }),
           children: async () => ({ data: [] }),
           abort: async () => {
             abortCalls += 1;
@@ -4543,7 +4652,7 @@ describe("OpenCodeAdapterV2", () => {
             createdBy: "user",
             creationSource: "web",
             messageId: MessageId.make("message-opencode-initial-stop"),
-            text: "hello",
+            text: stage === "preparing" ? "/hello" : "hello",
             attachments: [],
           },
           modelSelection,
@@ -4573,8 +4682,14 @@ describe("OpenCodeAdapterV2", () => {
       const events = Array.from(yield* Fiber.join(terminalEvents));
       const terminals = events.filter((event) => event.type === "turn.terminal");
       assert.equal(abortCalls, 1);
+      assert.equal(promptCalls, stage === "preparing" ? 0 : 1);
       assert.lengthOf(terminals, 1);
       assert.equal(terminals[0]?.status, "interrupted");
+      assert.equal(terminals[0]?.promptDropped, stage === "preparing" ? true : undefined);
+      const finalTurn = events
+        .filter((event) => event.type === "provider_turn.updated")
+        .findLast((event) => event.providerTurn.status === "interrupted");
+      assert.equal(finalTurn?.providerTurn.promptDropped, stage === "preparing" ? true : undefined);
       assert.isNull(terminals[0]?.failure ?? null);
       assert.isFalse(
         events.some(

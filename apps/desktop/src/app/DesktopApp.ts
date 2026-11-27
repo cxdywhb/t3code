@@ -32,6 +32,7 @@ import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
+import * as BrowserSession from "../preview/BrowserSession.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -453,10 +454,13 @@ const scopedProgram = Effect.scoped(
 
     const shutdown = yield* DesktopShutdown.DesktopShutdown;
     const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
+    const browserSessions = yield* BrowserSession.BrowserSession;
 
     yield* Effect.addFinalizer(() =>
       // Quit can outrun layer finalizers; stop pooled backends here so they receive SIGTERM before OS teardown.
       stopAllPoolInstances().pipe(
+        // 先停止服务端页面活动，再等 cookie 写入完成，避免退出早于 Chromium 的延迟刷盘。
+        Effect.ensuring(browserSessions.flushStorage.pipe(Effect.ignore({ log: true }))),
         Effect.ensuring(rendererHistory.shutdown),
         Effect.ensuring(shutdown.markComplete),
         Effect.withSpan("desktop.app.shutdown"),

@@ -1,0 +1,134 @@
+@property --effort-hue {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 207;
+}
+
+[data-effort-slider] {
+  --effort-accent: hsl(var(--effort-hue) 94% 68%);
+  background-color: color-mix(
+    in srgb,
+    var(--effort-accent) calc(2% + 4% * var(--effort-progress)),
+    transparent
+  );
+}
+
+[data-effort-value] {
+  color: color-mix(in srgb, var(--effort-accent) 55%, var(--foreground));
+}
+
+[data-effort-track] {
+  box-shadow: 0 0 12px -3px
+    color-mix(in srgb, var(--effort-accent) calc(10% + 32% * var(--effort-progress)), transparent);
+  --effort-position: var(--effort-drag-progress, var(--effort-progress));
+}
+
+[data-effort-fill] {
+  width: calc(1.75rem + (100% - 1.75rem) * var(--effort-position));
+  background-image: linear-gradient(
+    90deg,
+    hsl(calc(var(--effort-hue) - 10) 78% 44%),
+    hsl(var(--effort-hue) 90% 59%) 55%,
+    hsl(calc(var(--effort-hue) + 9) 96% 74%)
+  );
+}
+
+[data-effort-knob] {
+  outline-color: #7133cf;
+}
+
+[data-effort-stars] > span::after {
+  content: "";
+  position: absolute;
+  left: calc((1 - var(--star-phase)) * 100%);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  opacity: var(--star-brightness);
+  scale: var(--star-brightness);
+  background-color: #f5f3ff;
+  box-shadow: 0 0 4px #f3e8ff;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-effort-slider] {
+    transition:
+      --effort-hue 280ms ease-out,
+      background-color 280ms ease-out,
+      box-shadow 280ms ease-out;
+  }
+
+  [data-effort-track] {
+    transition: box-shadow 280ms ease-out;
+  }
+
+  [data-effort-value] {
+    transition: color 280ms ease-out;
+  }
+
+  [data-effort-fill] {
+    transition: width 150ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  [data-effort-track][data-effort-tracking] [data-effort-fill] {
+    transition: none;
+  }
+
+  [data-effort-stars] > span {
+    --period: calc(1.5s * var(--star-period));
+    animation: composer-effort-star-drift var(--period) linear infinite;
+    animation-delay: calc(-1 * var(--star-phase) * var(--period));
+  }
+
+  [data-effort-stars] > span::after {
+    left: 100%;
+  }
+
+  [data-effort-sweep] {
+    opacity: calc(0.4 + 0.6 * var(--effort-progress));
+    animation: composer-effort-light-sweep 2.4s linear infinite;
+  }
+
+  /* At the minimum the knob covers the entire fill. */
+  [data-effort-knob]::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: inherit;
+    background: radial-gradient(circle at 28% 72%, #c4a5ff80, transparent 62%);
+    animation: composer-effort-knob-light 2.8s ease-in-out infinite alternate;
+  }
+
+  @keyframes composer-effort-knob-light {
+    from {
+      opacity: 0.15;
+    }
+    to {
+      opacity: 0.95;
+    }
+  }
+
+  @keyframes composer-effort-star-drift {
+    from {
+      opacity: 0;
+      transform: translateX(0);
+    }
+    6%,
+    94% {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+      transform: translateX(-100%);
+    }
+  }
+
+  @keyframes composer-effort-light-sweep {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(-100%);
+    }
+  }
+}

@@ -78,10 +78,10 @@ type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
 
 const UpdateInfo = Schema.Struct({
   version: Schema.String,
-  // Malformed notes must not block update-state decoding; normalizeDesktopUpdateReleaseNotes validates separately.
+  // 发布说明和日期只用于展示，交给 normalizeDesktopUpdateReleaseNotes 单独处理。
   releaseNotes: Schema.optional(Schema.Unknown),
   releaseName: Schema.optional(Schema.NullOr(Schema.String)),
-  releaseDate: Schema.optional(Schema.String),
+  releaseDate: Schema.optional(Schema.Unknown),
   downloadedFile: Schema.optional(Schema.String),
 });
 
@@ -217,7 +217,7 @@ export class DesktopUpdates extends Context.Service<
     /** `allowDowngrade` is for a guarded track switch, which checked that older release. */
     readonly check: (
       reason: string,
-      options?: { readonly allowDowngrade?: boolean },
+      options?: { readonly allowDowngrade?: boolean; readonly downloadInBackground?: boolean },
     ) => Effect.Effect<DesktopUpdateCheckResult>;
     readonly download: Effect.Effect<DesktopUpdateActionResult>;
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
@@ -246,7 +246,8 @@ function redactMessage(message: string): string {
       /\b[\w-]*(?:token|password|secret|credential|api[_-]?key)[\w-]*\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
       "[redacted credential]",
     )
-    .slice(0, 512);
+    .slice(0, 512)
+    .replace(/\p{Surrogate}$/u, "");
 }
 
 function summarizeCause(cause: unknown, depth: number): string {
@@ -283,7 +284,9 @@ function summarizeCause(cause: unknown, depth: number): string {
 
 export function describeUpdateErrorCause(cause: unknown): string {
   try {
-    return summarizeCause(cause, 0).slice(0, 1024);
+    return summarizeCause(cause, 0)
+      .slice(0, 1024)
+      .replace(/\p{Surrogate}$/u, "");
   } catch {
     return "UnknownError";
   }
@@ -385,6 +388,7 @@ function isArm64HostRunningIntelBuild(runtimeInfo: DesktopRuntimeInfo): boolean 
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const scope = yield* Effect.scope;
   const config = yield* DesktopConfig.DesktopConfig;
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
@@ -1097,9 +1101,20 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const checkAndDownload = Effect.fn("desktop.updates.checkAndDownload")(function* (
+    reason: string,
+    allowDowngrade = false,
+  ) {
+    const checked = yield* checkForUpdates(reason, "acquire", allowDowngrade);
+    if (checked && (yield* Ref.get(updateStateRef)).status === "available") {
+      yield* downloadAvailableUpdate(false).pipe(Effect.forkIn(scope, { startImmediately: true }));
+    }
+    return checked;
+  });
+
   const startUpdatePollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     yield* Effect.sleep(AUTO_UPDATE_STARTUP_DELAY).pipe(
-      Effect.andThen(checkForUpdates("startup")),
+      Effect.andThen(checkAndDownload("startup")),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.void;
@@ -1114,7 +1129,7 @@ export const make = Effect.gen(function* () {
       Effect.forkScoped,
     );
     yield* Effect.sleep(AUTO_UPDATE_POLL_INTERVAL).pipe(
-      Effect.andThen(checkForUpdates("poll")),
+      Effect.andThen(checkAndDownload("poll")),
       Effect.forever,
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1148,6 +1163,12 @@ export const make = Effect.gen(function* () {
             yield* Ref.set(lastLoggedDownloadMilestoneRef, -1);
             return;
           }
+          if (
+            state.downloadedVersion !== null &&
+            compareSemverVersions(info.version, state.downloadedVersion) <= 0
+          ) {
+            return;
+          }
           if (isOffered(state) && state.availableVersion === info.version) return;
 
           const checkedAt = yield* currentIsoTimestamp;
@@ -1179,10 +1200,18 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         const error = new DesktopUpdateEventHandlingError({ event: "update-available", cause });
-        return logUpdaterWarning(error.message, {
-          errorTag: error._tag,
-          cause: describeUpdateErrorCause(error.cause),
-          event: error.event,
+        return Effect.gen(function* () {
+          const failedAt = yield* currentIsoTimestamp;
+          yield* updateState((current) =>
+            current.status === "checking"
+              ? reduceDesktopUpdateStateOnCheckFailure(current, error.message, failedAt)
+              : current,
+          );
+          yield* logUpdaterWarning(error.message, {
+            errorTag: error._tag,
+            cause: describeUpdateErrorCause(error.cause),
+            event: error.event,
+          });
         });
       }),
     );
@@ -1375,6 +1404,7 @@ export const make = Effect.gen(function* () {
       }
       yield* Ref.set(updaterConfiguredRef, true);
 
+      // Only download offers that passed the app's track and release-floor checks.
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
       yield* applyAutoUpdaterChannel(settings.updateChannel);
@@ -1482,7 +1512,7 @@ export const make = Effect.gen(function* () {
     }),
     check: Effect.fn("desktop.updates.check")(function* (
       reason: string,
-      options?: { readonly allowDowngrade?: boolean },
+      options?: { readonly allowDowngrade?: boolean; readonly downloadInBackground?: boolean },
     ) {
       yield* Effect.annotateCurrentSpan({ reason });
       if (!(yield* Ref.get(updaterConfiguredRef))) {
@@ -1491,7 +1521,9 @@ export const make = Effect.gen(function* () {
           state: yield* Ref.get(updateStateRef),
         };
       }
-      const checked = yield* checkForUpdates(reason, "acquire", options?.allowDowngrade === true);
+      const checked = yield* options?.downloadInBackground
+        ? checkAndDownload(reason, options.allowDowngrade)
+        : checkForUpdates(reason, "acquire", options?.allowDowngrade === true);
       return {
         checked,
         state: yield* Ref.get(updateStateRef),

@@ -77,7 +77,7 @@ const trackLabel = (channel: DesktopUpdateChannel) =>
 const checkForUpdatesFromMenu = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
-  const result = yield* updates.check("menu");
+  const result = yield* updates.check("menu", { downloadInBackground: true });
   const updateState = result.state;
 
   if (updateState.status === "up-to-date") {

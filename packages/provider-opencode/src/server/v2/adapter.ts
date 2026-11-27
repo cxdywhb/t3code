@@ -67,6 +67,7 @@ import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { sharedSkillsContext } from "@t3tools/provider-core/server/mcpSession";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
@@ -395,7 +396,12 @@ interface ThreadState {
   /** Prompts other clients queued while no T3 turn ran, shown once delivered; `leads` the next wake if no report preceded it. */
   readonly externalPrompts: Map<string, { readonly text: string; leads: boolean }>;
   mcp:
-    | { readonly name: string; readonly directory: string; readonly credential: string }
+    | {
+        readonly name: string;
+        readonly directory: string;
+        readonly credential: string;
+        readonly sharedNames?: ReadonlyArray<string>;
+      }
     | undefined;
   instructions: string | undefined;
 }
@@ -2406,6 +2412,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ) {
       const turn = state.active;
       if (turn === undefined) return;
+      const promptDropped = terminal.status === "interrupted" && turn.unsent;
       state.active = undefined;
       for (const inboxID of turn.steers) state.strandedSteers.add(inboxID);
       for (const entry of pending.values()) {
@@ -2472,6 +2479,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         ...turn.providerTurn,
         status: terminal.status,
         completedAt,
+        ...(promptDropped ? { promptDropped: true } : {}),
         turnTokenUsage: turnTokenUsage(turn, terminal.status),
         ...(lastStep === undefined
           ? {}
@@ -2525,6 +2533,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         providerTurnId: turn.providerTurn.id,
         runOrdinal: turn.input.runOrdinal,
         threadDisposition,
+        ...(promptDropped ? { promptDropped: true as const } : {}),
         ...retainedRequestsOf(turn),
       };
       yield* emit(
@@ -4427,10 +4436,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return files;
     });
 
-    const removeMcp = (mcp: { readonly name: string; readonly directory: string }) =>
-      Effect.suspend(() =>
-        client.mcp.remove({ server: mcp.name, location: { directory: mcp.directory } }),
-      ).pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: true }));
+    const removeMcp = (mcp: {
+      readonly name: string;
+      readonly directory: string;
+      readonly sharedNames?: ReadonlyArray<string>;
+    }) =>
+      Effect.forEach(
+        [mcp.name, ...(mcp.sharedNames ?? [])],
+        (server) =>
+          client.mcp
+            .remove({ server, location: { directory: mcp.directory } })
+            .pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: true })),
+        { discard: true },
+      );
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(
@@ -4467,6 +4485,20 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       let mcpAvailable = false;
       if (wanted !== undefined) {
         const fresh = state.mcp === undefined;
+        const sharedServers = new Map(
+          Object.entries(mcpSession?.sharedResources?.mcpServers ?? {}).map(
+            ([sharedName, server]) => [`${wanted.name}_${sharedName}`, server],
+          ),
+        );
+        const sharedNames = [...(state.mcp?.sharedNames ?? [])];
+        if (state.mcp !== undefined) state.mcp = { ...state.mcp, sharedNames };
+        // 撤销成功后才移出清理名单；移除失败时停止本轮，避免继续使用已撤销的工具。
+        for (const registered of sharedNames.filter((name) => !sharedServers.has(name))) {
+          yield* client.mcp
+            .remove({ server: registered, location: { directory } })
+            .pipe(Effect.timeout(INVENTORY_TIMEOUT));
+          sharedNames.splice(sharedNames.indexOf(registered), 1);
+        }
         mcpAvailable = yield* client.mcp
           .add({
             server: name,
@@ -4487,13 +4519,49 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               ),
             ),
           );
-        if (mcpAvailable) state.mcp = wanted;
+        if (mcpAvailable) {
+          state.mcp = { ...wanted, sharedNames };
+          for (const [name, server] of sharedServers) {
+            // 每个线程独立注册，关闭一个线程不能撤销另一个线程的工具。
+            const added = yield* client.mcp
+              .add({
+                server: name,
+                location: { directory },
+                config:
+                  server.type === "stdio"
+                    ? new Mcp.LocalConfig({
+                        type: "local",
+                        command: [server.command, ...server.args],
+                        environment: { ...server.env },
+                      })
+                    : new Mcp.RemoteConfig({
+                        type: "remote",
+                        url: server.url,
+                        headers: { ...server.headers },
+                        oauth: false,
+                      }),
+              })
+              .pipe(
+                Effect.timeout(INVENTORY_TIMEOUT),
+                Effect.as(true),
+                // SDK 错误包含请求配置，不能把凭据或上游响应写入日志。
+                Effect.catch((error) =>
+                  Effect.logWarning("Could not add shared MCP server to OpenCode.", {
+                    server: name,
+                    reason: error._tag,
+                  }).pipe(Effect.as(false)),
+                ),
+              );
+            if (added && !sharedNames.includes(name)) sharedNames.push(name);
+          }
+        }
         // Before 2.2.6, OpenCode loads a new server's tools 100 ms after it connects, and a prompt sent sooner lacks them.
         if (mcpAvailable && fresh && compareSemverVersions(connection.version, "2.2.6") < 0) {
           yield* Effect.sleep(MCP_TOOL_RELOAD_SETTLE);
         }
       }
       const instructions = [
+        connection.external ? undefined : sharedSkillsContext(mcpSession?.sharedResources),
         buildRuntimeInstructions({
           agentFeedback: mcpAvailable ? (turnInput.agentFeedback ?? "off") : "off",
           harness: "OpenCode",

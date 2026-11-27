@@ -10,6 +10,8 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
   withImplicitFastModeDefault,
+  withImplicitReasoningEffortDefault,
+  withMediumReasoningDefault,
 } from "@t3tools/shared/model";
 
 export function resolveProviderOptionDescriptors(input: {
@@ -19,14 +21,22 @@ export function resolveProviderOptionDescriptors(input: {
   if (!input.capabilities) {
     return [];
   }
+  const caps = withMediumReasoningDefault(input.capabilities);
   return getProviderOptionDescriptors({
-    caps: input.capabilities,
-    selections: withImplicitFastModeDefault(input.capabilities, input.selections),
+    caps,
+    selections: withImplicitModelOptions(caps, input.selections),
   });
 }
 
-/** Spells out the Fast off the picker shows, or a provider such as Cursor applies its own default. */
-export function withImplicitFastModeSelection(
+function withImplicitModelOptions(
+  caps: ModelCapabilities,
+  selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+) {
+  return withImplicitReasoningEffortDefault(caps, withImplicitFastModeDefault(caps, selections));
+}
+
+/** Sends the same implicit defaults shown in the model picker. */
+export function withImplicitModelOptionSelection(
   selection: ModelSelection,
   providers: ReadonlyArray<{
     readonly instanceId: ProviderInstanceId;
@@ -37,7 +47,7 @@ export function withImplicitFastModeSelection(
     .find((provider) => provider.instanceId === selection.instanceId)
     ?.models.find((model) => model.slug === selection.model)?.capabilities;
   const options = capabilities
-    ? withImplicitFastModeDefault(capabilities, selection.options)
+    ? withImplicitModelOptions(capabilities, selection.options)
     : selection.options;
   return options === selection.options ? selection : { ...selection, options };
 }

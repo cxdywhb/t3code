@@ -9,6 +9,7 @@ import { migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
+import WorkflowRunSubject from "./Migrations/125_WorkflowRunSubject.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -27,6 +28,34 @@ const seedPreview = Effect.gen(function* () {
 });
 
 describe("V2 preview upgrade", () => {
+  it.effect.each([false, true])(
+    "upgrades workflow subjects (upstream migration applied: %s)",
+    (upstream) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: upstream ? 118 : 124 });
+        if (upstream) {
+          yield* Migrator.make({})({
+            loader: Migrator.fromRecord({ "119_WorkflowRunSubject": WorkflowRunSubject }),
+          });
+        }
+        const applied = yield* runMigrations();
+        assert.deepStrictEqual(
+          applied,
+          migrationManifest.filter(([id]) => id > (upstream ? 118 : 124)),
+        );
+        const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(workflow_runs)`;
+        assert.deepStrictEqual(
+          columns
+            .map(({ name }) => name)
+            .filter((name) => name.startsWith("subject_"))
+            .sort(),
+          ["subject_json", "subject_key", "subject_kind", "subject_url"],
+        );
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("upgrades a published preview without replaying V2 or losing import progress", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -104,6 +133,7 @@ describe("V2 preview upgrade", () => {
         [122, "IssueAutomationRunLinks"],
         [123, "IssueAutomationRepair"],
         [124, "IssueAutomationMcp"],
+        [125, "WorkflowRunSubject"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -251,6 +281,7 @@ describe("V2 preview upgrade", () => {
         [122, "IssueAutomationRunLinks"],
         [123, "IssueAutomationRepair"],
         [124, "IssueAutomationMcp"],
+        [125, "WorkflowRunSubject"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

@@ -1,3 +1,5 @@
+import * as SharedAgentResources from "../provider/SharedAgentResources.ts";
+import { sharedSkillsContext } from "@t3tools/provider-core/server/mcpSession";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -475,6 +477,9 @@ export const layerWithOptions = (
       const fileSystem = yield* FileSystem.FileSystem;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const sharedResourceService = yield* Effect.serviceOption(
+        SharedAgentResources.SharedAgentResources,
+      );
       /** Unreadable settings must preserve explicit browser-access opt-outs. */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
       const projectService = yield* Effect.serviceOption(ProjectService.ProjectService);
@@ -643,6 +648,9 @@ export const layerWithOptions = (
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
                 );
+                const sharedResources = Option.isNone(sharedResourceService)
+                  ? undefined
+                  : yield* sharedResourceService.value.read;
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -670,6 +678,10 @@ export const layerWithOptions = (
                     // A credential issued while the lineage read failed is replaced once it works.
                     (resolved.thread.subagent === true) === subagent
                   ) {
+                    yield* mcpSessions.set({
+                      ...existing,
+                      ...(sharedResources === undefined ? {} : { sharedResources }),
+                    });
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -684,6 +696,7 @@ export const layerWithOptions = (
                 });
                 yield* mcpSessions.set({
                   ...credential.config,
+                  ...(sharedResources === undefined ? {} : { sharedResources }),
                   hasPendingWake: projectionStore
                     .getThreadRecords(threadId, ["runs", "subagents"])
                     .pipe(
@@ -2739,7 +2752,28 @@ export const layerWithOptions = (
           startTurn: (input) =>
             busyTurn(input, () =>
               agentFeedbackMode.pipe(
-                Effect.flatMap((agentFeedback) => runtime.startTurn({ ...input, agentFeedback })),
+                Effect.flatMap((agentFeedback) =>
+                  Effect.gen(function* () {
+                    const context =
+                      runtime.driver === "codex" ||
+                      runtime.driver === "pi" ||
+                      runtime.driver === "opencode"
+                        ? undefined
+                        : sharedSkillsContext(
+                            (yield* mcpSessions.read(input.threadId))?.sharedResources,
+                          );
+                    const turnInput = { ...input, agentFeedback };
+                    if (!context || input.message.text.startsWith("/"))
+                      return yield* runtime.startTurn(turnInput);
+                    return yield* runtime.startTurn({
+                      ...turnInput,
+                      appContext: [
+                        ...(input.appContext ?? []),
+                        { key: "shared-codex-skills", text: context },
+                      ],
+                    });
+                  }),
+                ),
                 turnMetrics("send", input.modelSelection.model),
               ),
             ),

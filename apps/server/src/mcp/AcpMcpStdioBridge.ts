@@ -49,6 +49,7 @@ const MCP_PROTOCOL_VERSION = "2025-06-18";
 export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
   readonly authorization: string;
+  readonly headers?: Readonly<Record<string, string>>;
   readonly input: NodeJS.ReadableStream;
   readonly output: { write(chunk: string): unknown };
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -76,6 +77,7 @@ function replyToServerRequest(envelope: JsonRpcEnvelope): unknown {
 export interface McpToolSessionOptions {
   readonly endpoint: string;
   readonly authorization: string;
+  readonly headers?: Readonly<Record<string, string>>;
   readonly clientName: string;
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
 }
@@ -102,7 +104,8 @@ export const mcpToolSession = (
 
   const headers = () => ({
     accept: "application/json, text/event-stream",
-    authorization: options.authorization,
+    ...(options.authorization ? { authorization: options.authorization } : {}),
+    ...options.headers,
     ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
     ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
   });
@@ -194,6 +197,7 @@ export const mcpToolSession = (
 function callAcpMcpTool(options: {
   readonly endpoint: string;
   readonly authorization: string;
+  readonly headers?: Readonly<Record<string, string>>;
   readonly tool: string;
   readonly arguments: Readonly<Record<string, unknown>>;
 }): Effect.Effect<unknown, AcpMcpBridgeError> {
@@ -246,7 +250,8 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
               headers: {
                 "content-type": "application/json",
                 accept: "application/json, text/event-stream",
-                authorization: options.authorization,
+                ...(options.authorization ? { authorization: options.authorization } : {}),
+                ...options.headers,
                 ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
               },
@@ -362,6 +367,10 @@ async function readStdin(): Promise<string> {
 }
 
 /** Avoid heavy imports on the ACP first-message path. */
+const decodeHeaders = Schema.decodeOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);
+
 export async function runAcpMcpCliFastPath(
   command: "acp-mcp-bridge" | "acp-mcp-call",
   args: ReadonlyArray<string>,
@@ -374,12 +383,19 @@ export async function runAcpMcpCliFastPath(
     return;
   }
   if (command === "acp-mcp-bridge") {
+    const headers = decodeHeaders(process.env.T3_ACP_MCP_HEADERS ?? "{}");
+    if (Option.isNone(headers)) {
+      process.stderr.write("Invalid MCP headers configuration.\n");
+      process.exitCode = 2;
+      return;
+    }
     await Effect.runPromise(
       runAcpMcpStdioBridge({
         endpoint,
         authorization,
         input: process.stdin,
         output: process.stdout,
+        headers: headers.value,
       }),
     );
     return;

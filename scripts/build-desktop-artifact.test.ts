@@ -104,16 +104,18 @@ const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(
     yield* fs.makeDirectory(path.dirname(memberPath), { recursive: true });
     yield* fs.writeFileString(memberPath, member);
   }
-  const archivePath = path.join(input.root, `${input.stem}.tar.gz`);
+  const archiveName = `${input.stem}.tar.gz`;
   const tar = yield* spawner.spawn(
-    ChildProcess.make("tar", ["-czf", archivePath, "-C", contentRoot, "."], {
+    // GNU tar reads a drive letter in an absolute archive path as a remote host.
+    ChildProcess.make("tar", ["-czf", archiveName, "-C", contentRoot, "."], {
+      cwd: input.root,
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
     }),
   );
   assert.equal(Number(yield* tar.exitCode), 0);
-  return archivePath;
+  return path.join(input.root, archiveName);
 });
 
 function mockProcess(exitCode: number, stdout = "") {
@@ -512,9 +514,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it.effect("uses the fork update feed for local macOS releases", () =>
+  it.effect("only enables macOS release updates for signed builds", () =>
     Effect.gen(function* () {
       const release = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.18",
+        true,
+        false,
+        undefined,
+        undefined,
+      );
+      const mock = yield* createBuildConfig("mac", "dmg", "0.1.18", false, true, 3000, undefined);
+      const unsigned = yield* createBuildConfig(
         "mac",
         "dmg",
         "0.1.18",
@@ -523,12 +535,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         undefined,
       );
-      const mock = yield* createBuildConfig("mac", "dmg", "0.1.18", false, true, 3000, undefined);
 
       assert.deepStrictEqual(release.publish, [
         { provider: "github", owner: "cxdywhb", repo: "t3code", releaseType: "release" },
       ]);
       assert.deepStrictEqual(mock.publish, [{ provider: "generic", url: "http://localhost:3000" }]);
+      assert.isNull(unsigned.publish);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
@@ -547,7 +559,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "mac",
         "dmg",
         "0.0.33",
-        false,
+        true,
         false,
         undefined,
         undefined,
@@ -595,6 +607,34 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       assert.nestedPropertyVal(linux, "linux.desktop.entry.StartupWMClass", "com.t3tools.T3Code");
+    }),
+  );
+
+  it.effect("packages every platform with Node inspector flags off and run-as-Node left on", () =>
+    Effect.gen(function* () {
+      const fuses = (platform: "mac" | "linux" | "win", target: string, signed: boolean) =>
+        createBuildConfig(platform, target, "0.0.33", signed, false, undefined, undefined).pipe(
+          Effect.map((config) => config.electronFuses),
+        );
+
+      // The desktop app starts its server and the `t3` shim by running its own binary as Node.
+      assert.deepEqual(yield* fuses("linux", "AppImage", false), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: false,
+      });
+      assert.deepEqual(yield* fuses("win", "nsis", false), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: false,
+      });
+      // Nothing signs an unsigned macOS build after the flip, so the flip re-signs it ad hoc.
+      assert.deepEqual(yield* fuses("mac", "dmg", false), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: true,
+      });
+      assert.deepEqual(yield* fuses("mac", "dmg", true), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: false,
+      });
     }),
   );
 

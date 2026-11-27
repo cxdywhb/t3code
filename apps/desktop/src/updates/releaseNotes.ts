@@ -70,7 +70,10 @@ function stripMarkup(input: string, keepBold = false): string {
 
 function truncateReleaseNoteItem(item: string): string {
   if (item.length <= MAX_RELEASE_NOTE_ITEM_LENGTH) return item;
-  return `${item.slice(0, MAX_RELEASE_NOTE_ITEM_LENGTH - 3).trimEnd()}...`;
+  return `${item
+    .slice(0, MAX_RELEASE_NOTE_ITEM_LENGTH - 3)
+    .replace(/\p{Surrogate}$/u, "")
+    .trimEnd()}...`;
 }
 
 function normalizeReleaseNoteLine(line: string): string {
@@ -160,8 +163,14 @@ function extractReleaseNoteItems(note: string | null | undefined): ExtractedRele
 // The update feed dates only the offered version; prerelease versions carry their UTC build day.
 const PRERELEASE_BUILD_DAY = /-(?:nightly|preview)\.(\d{4})(\d{2})(\d{2})\.\d+$/;
 
-function resolveReleasedAt(version: string, offeredVersion: string, releaseDate?: string) {
-  if (version === offeredVersion && releaseDate) return releaseDate;
+function resolveReleasedAt(version: string, offeredVersion: string, releaseDate: unknown) {
+  if (version === offeredVersion) {
+    if (typeof releaseDate === "string" && releaseDate) return releaseDate;
+    // Electron 的 YAML 解析器会把未加引号的时间戳读成 Date。
+    if (releaseDate instanceof Date && Number.isFinite(releaseDate.getTime())) {
+      return releaseDate.toISOString();
+    }
+  }
   const day = PRERELEASE_BUILD_DAY.exec(version);
   return day ? `${day[1]}-${day[2]}-${day[3]}` : undefined;
 }
@@ -192,7 +201,7 @@ export function normalizeDesktopUpdateReleaseNotes(
   releaseNotes: unknown,
   fallbackVersion: string,
   channel: DesktopUpdateChannel,
-  releaseDate?: string,
+  releaseDate?: unknown,
 ): NormalizedDesktopUpdateReleaseNotes {
   const rawNotes = (
     typeof releaseNotes === "string"

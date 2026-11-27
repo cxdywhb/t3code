@@ -3,6 +3,7 @@ import * as NodeModule from "node:module";
 import { assert, describe, it } from "@effect/vitest";
 import { DESKTOP_UPDATE_RESTART_MARKER_FILE, DesktopUpdateStateSchema } from "@t3tools/contracts";
 import { computeReleaseNotes } from "electron-updater/out/providers/GitHubProvider.js";
+import { parseUpdateInfo } from "electron-updater/out/providers/Provider.js";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -237,6 +238,54 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect("offers an update whose manifest contains an unquoted YAML release date", () => {
+    const harness = makeHarness();
+    const date = "2026-11-25T12:29:35.213Z";
+    const info = parseUpdateInfo(
+      `version: 1.2.4\nreleaseDate: ${date}\nreleaseNotes: |\n  - fix: update checking\n`,
+      "latest-mac.yml",
+      new URL("https://example.test/latest-mac.yml"),
+    );
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("poll");
+        harness.emit("update-available", info);
+        yield* flushCallbacks;
+
+        const state = yield* updates.getState;
+        assert.equal(state.status, "available");
+        assert.equal(state.availableVersion, "1.2.4");
+        assert.equal(state.releaseNotes[0]?.releasedAt, date);
+
+        harness.emit("update-downloaded", info);
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).status, "downloaded");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("leaves checking when the available update cannot be decoded", () => {
+    const harness = makeHarness();
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("poll");
+        harness.emit("update-available", { version: null });
+        yield* flushCallbacks;
+
+        const state = yield* updates.getState;
+        assert.equal(state.status, "error");
+        assert.equal(state.errorContext, "check");
+        assert.isTrue(state.canRetry);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("preserves a queued installer when the feed has no update", () => {
     const harness = makeHarness();
 
@@ -286,6 +335,43 @@ describe("DesktopUpdates", () => {
 
         yield* TestClock.adjust("1 hour");
         assert.equal(harness.checkCount(), 2);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("downloads updates found by desktop checks without installing them", () => {
+    let published = "1.2.5";
+    const harness = makeHarness({
+      checkForUpdates: Effect.sync(() => harness.emit("update-available", { version: published })),
+      downloadUpdate: Effect.sync(() => harness.emit("update-downloaded", { version: published })),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        yield* TestClock.adjust("15 seconds");
+
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.5");
+        assert.equal(harness.checkCount(), 1);
+        assert.equal(harness.downloadCount(), 1);
+        assert.equal(harness.quitAndInstalls(), 0);
+
+        published = "1.2.4";
+        yield* TestClock.adjust("4 hours");
+
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.5");
+        assert.equal(harness.checkCount(), 2);
+        assert.equal(harness.downloadCount(), 1);
+
+        published = "1.2.6";
+        const manualCheck = yield* updates.check("web-ui", { downloadInBackground: true });
+
+        assert.isTrue(manualCheck.checked);
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.6");
+        assert.equal(harness.downloadCount(), 2);
+        assert.equal(harness.quitAndInstalls(), 0);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -1390,6 +1476,15 @@ describe("describeUpdateErrorCause", () => {
     cyclic.cause = cyclic;
     assert.include(DesktopUpdates.describeUpdateErrorCause(cyclic), "[truncated cause]");
     assert.isAtMost(DesktopUpdates.describeUpdateErrorCause(cyclic).length, 1024);
+
+    const describeCause = (outer: string, inner: string) =>
+      DesktopUpdates.describeUpdateErrorCause(
+        Object.assign(new Error(outer), { cause: new Error(inner) }),
+      );
+    const a = "a".repeat(512);
+    const b = "b".repeat(485);
+    assert.equal(describeCause(`${a.slice(1)}🚀`, "b"), `Error: ${a.slice(1)}; caused by Error: b`);
+    assert.equal(describeCause(a, `${b}🚀`), `Error: ${a}; caused by Error: ${b}`);
   });
 
   it("does not serialize arbitrary payloads or let unreadable errors break logging", () => {

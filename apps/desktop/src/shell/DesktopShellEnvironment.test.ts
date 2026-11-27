@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The process fixture runs real shell commands with isolated config files.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { DesktopShellEnvironmentSnapshot } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -35,6 +36,7 @@ const cacheCodec = Schema.fromJsonString(
 );
 const encodeCache = Schema.encodeSync(cacheCodec);
 const decodeCache = Schema.decodeUnknownEffect(cacheCodec);
+const decodeShellSnapshot = Schema.decodeUnknownSync(DesktopShellEnvironmentSnapshot);
 
 function envOutput(values: Readonly<Record<string, string>>): string {
   return Object.entries(values)
@@ -644,6 +646,37 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.HOMEBREW_PREFIX, "/opt/homebrew");
       assert.equal(env.DO_NOT_TRACK, "1");
       assert.isTrue(prepared);
+    }),
+  );
+
+  it.effect("publishes login-shell proxies without overriding the launcher's proxy", () =>
+    Effect.gen(function* () {
+      const env = { SHELL: "/bin/zsh", PATH: "/usr/bin", HTTPS_PROXY: "http://launcher.test:8080" };
+      yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () =>
+          envOutput({
+            PATH: "/usr/bin",
+            HTTPS_PROXY: "http://shell.test:8080",
+            https_proxy: "http://shell.test:8080",
+            http_proxy: "http://shell.test:8080",
+            ALL_PROXY: "socks5h://shell.test:1080",
+            no_proxy: ".internal.test",
+          }),
+        use: (service) =>
+          Effect.gen(function* () {
+            const prepared = yield* service.awaitDiscovery;
+            const update = yield* Stream.runHead(service.updates);
+            const patch = decodeShellSnapshot(Option.getOrThrow(update)).environment;
+            assert.equal(patch.HTTPS_PROXY, "http://launcher.test:8080");
+            assert.isNull(patch.https_proxy);
+            assert.equal(patch.http_proxy, "http://shell.test:8080");
+            assert.equal(patch.ALL_PROXY, "socks5h://shell.test:1080");
+            assert.equal(patch.no_proxy, ".internal.test");
+            return prepared;
+          }),
+      });
     }),
   );
 

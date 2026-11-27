@@ -14,6 +14,7 @@ import "~/index.css";
 import { render } from "../../../test/render";
 import { __setClientSettingsForTests } from "../../hooks/useSettings";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
+import { ComposerEffortSlider } from "./ComposerEffortSlider";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 
 it("keeps each registry image when adding a model from another ACP agent", async () => {
@@ -123,15 +124,9 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
       ],
     ],
   ]);
-  // The last level is the selected one; "plain" has no effort to pick.
-  const levels: Record<string, ReadonlyArray<string>> = {
-    original: ["Low", "High"],
-    second: ["Medium"],
-    plain: [],
-  };
-
   function Picker() {
     const [model, setModel] = useState("original");
+    const [level, setLevel] = useState(1);
     return (
       <ProviderModelPicker
         environmentId={null}
@@ -142,18 +137,23 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
         modelOptionsByInstance={options}
         triggerAriaLabel="Choose model"
         onInstanceModelChange={(_, selected) => setModel(selected)}
-        effortColumn={(levels[model] ?? []).map((level, index, all) => (
-          <button
-            key={level}
-            type="button"
-            role="radio"
-            aria-checked={index === all.length - 1}
-            data-effort-row
-            data-effort-level
-          >
-            {level}
-          </button>
-        ))}
+        effortColumn={
+          model === "original" ? (
+            <ComposerEffortSlider
+              label="Thinking"
+              choices={[
+                { id: "0", label: "Low" },
+                { id: "1", label: "High" },
+              ]}
+              index={level}
+              onPick={(id) => setLevel(Number(id))}
+            />
+          ) : model === "second" ? (
+            <button type="button" role="radio" aria-checked data-effort-row data-effort-level>
+              Medium
+            </button>
+          ) : null
+        }
       />
     );
   }
@@ -163,9 +163,29 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
   const search = page.getByPlaceholder("Search models...");
   await expect.element(search).toHaveFocus();
   await userEvent.keyboard("{ArrowRight}");
-  await expect.element(page.getByRole("radio", { name: "High" })).toHaveFocus();
+  const slider = page.getByRole("slider", { name: "Thinking" });
+  await expect.element(slider).toHaveFocus();
+  const modelPane = search.element().closest("[data-model-picker-content]")!;
+  const effortPane = slider.element().closest("[data-model-picker-effort]")!;
+  expect(modelPane.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    effortPane.getBoundingClientRect().top,
+  );
   await userEvent.keyboard("{ArrowLeft}");
+  await expect.element(slider).toHaveFocus();
+  await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
   await expect.element(search).toHaveFocus();
+
+  const popup = modelPane.closest<HTMLElement>("[data-slot=popover-popup]")!;
+  const height = popup.offsetHeight;
+  await page.getByRole("button", { name: "Favorites", exact: true }).click();
+  await expect.element(page.getByText("No favorites yet")).toBeVisible();
+  expect(popup.offsetHeight).toBe(height);
+  await page
+    .elementLocator(modelPane.querySelector('[data-model-picker-provider="codex"] button')!)
+    .click();
+  await expect.element(page.getByRole("option", { name: /Original model/ })).toBeVisible();
+  expect(popup.offsetHeight).toBe(height);
 
   await page.getByRole("option", { name: /Second model/ }).click();
   await expect.element(page.getByRole("radio", { name: "Medium" })).toHaveFocus();

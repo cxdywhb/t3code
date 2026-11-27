@@ -64,7 +64,6 @@ import {
 import { announce } from "~/lib/announce";
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
-import { TooltipProvider } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
 import { Badge } from "../ui/badge";
 import {
@@ -275,11 +274,13 @@ function ModelPickerProviderNotices({
 }
 
 function ModelPickerList({
+  docked,
   listRef,
   itemKeys,
   extraData,
   renderItem,
 }: {
+  docked: boolean;
   listRef: RefObject<LegendListRef | null>;
   itemKeys: ReadonlyArray<string>;
   extraData: unknown;
@@ -299,7 +300,7 @@ function ModelPickerList({
     <div
       className={cn(
         "relative min-h-0 overflow-hidden pr-px",
-        itemKeys.length > 0 ? "flex-1" : "h-0",
+        itemKeys.length === 0 ? "h-0" : "flex-1",
       )}
     >
       <ComboboxListVirtualized>
@@ -323,6 +324,8 @@ function ModelPickerList({
               top: showTopScrollFade,
               bottom: showBottomScrollFade,
             }),
+            docked &&
+              "overscroll-y-auto [--fade-size:0.375rem] [--app-scrollbar-width:3px] [--app-scrollbar-thumb:color-mix(in_srgb,var(--foreground)_18%,transparent)] [--app-scrollbar-thumb-hover:color-mix(in_srgb,var(--foreground)_32%,transparent)]",
           )}
         />
       </ComboboxListVirtualized>
@@ -956,18 +959,25 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   };
 
   return (
-    <TooltipProvider delay={0}>
+    <>
       <WindowKeyDownListener onKeyDown={onWindowKeyDown} />
       <div
         ref={pickerContentRef}
         className={cn(
           "relative flex w-screen max-w-90 flex-row overflow-hidden",
-          props.docked ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none" : "max-h-86.5",
+          props.docked
+            ? cn(
+                "w-90 max-w-[calc(100dvw-1rem)]",
+                showSidebar &&
+                  "min-h-22 pl-11 [&>[data-model-picker-sidebar]]:absolute [&>[data-model-picker-sidebar]]:inset-y-0 [&>[data-model-picker-sidebar]]:left-0",
+              )
+            : "max-h-86.5",
         )}
-        // Docked, the popup sets the height; a minimum here would overflow short windows.
         style={
           props.docked
-            ? undefined
+            ? {
+                height: `min(calc(var(--spacing) * ${6 * ROW_UNITS + 5 * ROW_SEPARATOR_UNITS + LIST_CHROME_UNITS} + 1px), calc(45dvh + 2.6875rem))`,
+              }
             : isSearching
               ? { height: searchHeight }
               : {
@@ -1050,11 +1060,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             )}
           >
             <ComboboxSearchInput
+              tone="neutral"
               ref={searchInputRef}
               placeholder={gt("Search models...")}
               value={searchQuery}
               onChange={(e) => {
-                if (!isSearching) setSearchHeight(pickerContentRef.current?.offsetHeight ?? 0);
+                if (!props.docked && !isSearching) {
+                  setSearchHeight(pickerContentRef.current?.offsetHeight ?? 0);
+                }
                 setSearchQuery(e.target.value);
               }}
               onKeyDown={(e) => {
@@ -1142,6 +1155,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             />
 
             <ModelPickerList
+              docked={props.docked === true}
               listRef={modelListRef}
               itemKeys={filteredItemKeys}
               extraData={modelListExtraData}
@@ -1257,6 +1271,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           </div>
         </Combobox>
       </div>
-    </TooltipProvider>
+    </>
   );
 });

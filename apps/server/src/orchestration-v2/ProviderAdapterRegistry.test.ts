@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
@@ -53,8 +54,8 @@ const makeInstance = (
   displayName: String(instanceId),
   enabled: true,
   snapshot: {
-    getSnapshot: Effect.succeed({ version }),
-    refresh: Effect.succeed({ version: refreshedVersion }),
+    getSnapshot: Effect.succeed({ version, models: [] }),
+    refresh: Effect.succeed({ version: refreshedVersion, models: [] }),
   } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
   textGeneration: {} as ProviderInstance["textGeneration"],
@@ -110,6 +111,77 @@ const openOn = Effect.fn("openOn")(function* (instance: ProviderInstance) {
     })
     .pipe(Effect.exit);
 });
+
+it.effect("uses advertised effort on the first turn and preserves a saved choice", () =>
+  Effect.gen(function* () {
+    const openedWith: ModelSelection[] = [];
+    const sent: ModelSelection[] = [];
+    const adapter = {
+      ...personalAdapter,
+      openSession: (input) =>
+        Effect.sync(() => {
+          openedWith.push(input.modelSelection);
+          return {
+            startTurn: (turn: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+              Effect.sync(() => {
+                sent.push(turn.modelSelection);
+                return {} as never;
+              }),
+          } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
+        }),
+    } satisfies ProviderAdapter.ProviderAdapterV2["Service"];
+    const instance = makeInstance(personalId, adapter);
+    const capability = (levels: ReadonlyArray<string>) => ({
+      optionDescriptors: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning",
+          type: "select" as const,
+          currentValue: "low",
+          options: levels.map((id) => ({ id, label: id })),
+        },
+      ],
+    });
+    const result = yield* openOn({
+      ...instance,
+      snapshot: {
+        ...instance.snapshot,
+        getSnapshot: instance.snapshot.getSnapshot.pipe(
+          Effect.map((snapshot) => ({
+            ...snapshot,
+            models: [
+              {
+                slug: "test-model",
+                name: "Test model",
+                isCustom: false,
+                capabilities: capability(["low", "medium", "high"]),
+              },
+              {
+                slug: "second-model",
+                name: "Second model",
+                isCustom: false,
+                capabilities: capability(["low", "high"]),
+              },
+            ],
+          })),
+        ),
+      },
+    });
+    const runtime = yield* result;
+    const original = { instanceId: personalId, model: "test-model" };
+    const medium = { ...original, options: [{ id: "reasoningEffort", value: "medium" }] };
+    const low = { ...original, options: [{ id: "reasoningEffort", value: "low" }] };
+    const second = { instanceId: personalId, model: "second-model" };
+    for (const modelSelection of [original, low, second]) {
+      yield* runtime.startTurn({
+        modelSelection,
+        runtimePolicy: { cwd: "/workspace" },
+      } as ProviderAdapter.ProviderAdapterV2TurnInput);
+    }
+    assert.deepEqual(openedWith, [medium]);
+    assert.deepEqual(sent, [medium, low, second]);
+  }),
+);
 
 it.effect("refuses a session only when a fresh probe still rates the version broken", () =>
   Effect.gen(function* () {

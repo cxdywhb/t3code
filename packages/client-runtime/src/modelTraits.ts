@@ -4,29 +4,12 @@ import {
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
   isClaudeUltrathinkPrompt,
+  isReasoningSelect,
 } from "@t3tools/shared/model";
-import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
-const REASONING_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
-  ...REASONING_EFFORT_OPTION_IDS,
-  "thinking",
-]);
-
-/** The model's reasoning control: a known effort id, or a select its agent marked as reasoning. */
-export function isReasoningControl(descriptor: ProviderOptionDescriptor): boolean {
-  return (
-    (descriptor.type === "select" && descriptor.role === "reasoning") ||
-    REASONING_DESCRIPTOR_IDS.has(descriptor.id)
-  );
-}
-
-export function isReasoningSelect(
-  descriptor: ProviderOptionDescriptor,
-): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> {
-  return descriptor.type === "select" && isReasoningControl(descriptor);
-}
+export { isReasoningControl, isReasoningSelect } from "@t3tools/shared/model";
 
 export function replaceDescriptorCurrentValue(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
@@ -107,6 +90,17 @@ export function getTraitSelectChange(
   };
 }
 
+const speedMessages = new Map([
+  ["Standard", msg("Standard", { $context: "model speed tier" })],
+  ["Fast", msg("Fast", { $context: "model speed tier" })],
+  ["Ultrafast", msg("Ultrafast", { $context: "model speed tier" })],
+]);
+
+export function speedTierLabel(label: string, resolve: MFunctionType) {
+  const message = speedMessages.get(label);
+  return message ? resolve(message) : label;
+}
+
 export function buildTraitsTriggerDisplay(
   input: {
     descriptors: ReadonlyArray<ProviderOptionDescriptor>;
@@ -184,13 +178,14 @@ export function buildTraitsTriggerDisplay(
 
   const ultracode = ultracodeLabelIndex >= 0;
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
-    return { label: fastModeFallbackLabel, speedLabel, ultracode };
+    return { label: speedTierLabel(fastModeFallbackLabel, resolve), speedLabel, ultracode };
   }
   if (speedLabel) {
+    const label = speedTierLabel(speedLabel, resolve);
     if (reasoningLabelIndex >= 0) {
-      labels[reasoningLabelIndex] = `${labels[reasoningLabelIndex]} ${speedLabel}`;
+      labels[reasoningLabelIndex] = `${labels[reasoningLabelIndex]} ${label}`;
     } else {
-      labels.push(speedLabel);
+      labels.push(label);
     }
   }
   return { label: labels.join(" · "), speedLabel, ultracode };

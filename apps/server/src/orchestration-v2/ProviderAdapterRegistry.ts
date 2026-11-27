@@ -1,9 +1,11 @@
 import {
+  type ModelSelection,
   ProviderInstanceId,
   ProviderSetupError,
   type OrchestrationV2ProviderCapabilities,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { resolveSelectableModel, withImplicitReasoningEffortDefault } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -82,6 +84,23 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
               return new ProviderAdapterRegistryLookupError({ instanceId });
             const adapter = instance.orchestrationAdapter;
             const auth = instance.auth;
+            const modelWithDefaultEffort = Effect.fnUntraced(function* (
+              selection: ModelSelection,
+              cwd: string | null,
+            ) {
+              const snapshot = yield* instance.snapshot.getSnapshot;
+              const models =
+                snapshot.workspaceSnapshots?.find((workspace) => workspace.cwd === cwd)?.models ??
+                snapshot.models;
+              const slug = resolveSelectableModel(adapter.driver, selection.model, models);
+              const caps = models.find((model) => model.slug === slug)?.capabilities;
+              const options = caps
+                ? withImplicitReasoningEffortDefault(caps, selection.options)
+                : selection.options;
+              return options === undefined || options === selection.options
+                ? selection
+                : { ...selection, options };
+            });
             const refuseBroken = Effect.fnUntraced(function* (snapshot: ServerProvider) {
               return snapshot.version
                 ? brokenRuntimeError({
@@ -99,6 +118,33 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
             return Effect.succeed({
               ...adapter,
               openSession: (input) => {
+                const openWithEffort = Effect.gen(function* () {
+                  const modelSelection = yield* modelWithDefaultEffort(
+                    input.modelSelection,
+                    input.runtimePolicy.cwd,
+                  );
+                  const runtime = yield* adapter.openSession({ ...input, modelSelection });
+                  return {
+                    ...runtime,
+                    get providerSession() {
+                      return runtime.providerSession;
+                    },
+                    startTurn: (turn) =>
+                      modelWithDefaultEffort(turn.modelSelection, turn.runtimePolicy.cwd).pipe(
+                        Effect.flatMap((selection) =>
+                          runtime.startTurn({ ...turn, modelSelection: selection }),
+                        ),
+                      ),
+                    ...(runtime.resumeTurn && {
+                      resumeTurn: (turn: ProviderAdapter.ProviderAdapterV2ResumeTurnInput) =>
+                        modelWithDefaultEffort(turn.modelSelection, turn.runtimePolicy.cwd).pipe(
+                          Effect.flatMap((selection) =>
+                            runtime.resumeTurn!({ ...turn, modelSelection: selection }),
+                          ),
+                        ),
+                    }),
+                  } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
+                });
                 const open = Effect.gen(function* () {
                   if (!adapter.checksVersionAtHandshake) {
                     let refused = yield* refuseBroken(yield* instance.snapshot.getSnapshot);
@@ -106,7 +152,7 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
                     if (refused) refused = yield* refuseBroken(yield* instance.snapshot.refresh);
                     if (refused) return yield* refused;
                   }
-                  if (!auth) return yield* adapter.openSession(input);
+                  if (!auth) return yield* openWithEffort;
                   const binding = auth.credentialBinding;
                   const related = binding
                     ? (yield* instances.listInstances).filter(
@@ -130,7 +176,7 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
                     ProviderAdapter.ProviderAdapterV2SessionRuntime,
                     ProviderAdapter.ProviderAdapterV2Error | ProviderSetupError,
                     Scope.Scope
-                  > = adapter.openSession(input);
+                  > = openWithEffort;
                   // Shared credential changes must interrupt a peer's startup too.
                   for (const peer of related) {
                     if (peer.auth?.withAccess) admitted = peer.auth.withAccess(admitted);

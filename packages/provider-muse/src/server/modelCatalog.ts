@@ -31,9 +31,6 @@ const REASONING_EFFORT_LABELS = {
 const isMuseReasoningEffort = (tier: string): tier is MuseReasoningEffort =>
   Object.hasOwn(REASONING_EFFORT_LABELS, tier);
 
-const FALLBACK_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-const FALLBACK_DEFAULT_EFFORT = "high";
-
 const ModelCatalogEntry = Schema.Struct({
   modelId: Schema.NonEmptyString,
   displayLabel: Schema.String,
@@ -56,11 +53,15 @@ export function museModelCapabilities(
     typeof ModelCatalogEntry.Type,
     "variants" | "defaultReasoningEffort" | "reasoningEffortVariants"
   >,
-): ModelCapabilities {
-  const reported = model?.variants !== undefined && model.variants !== "unknown";
-  const efforts = (reported ? model.variants : FALLBACK_EFFORTS).filter(isMuseReasoningEffort);
-  const preferredDefault = reported ? model?.defaultReasoningEffort : FALLBACK_DEFAULT_EFFORT;
-  const defaultValue = efforts.find((tier) => tier === preferredDefault) ?? efforts[0];
+): ModelCapabilities | null {
+  const variants = model?.variants;
+  const advertised =
+    variants !== undefined && variants !== "unknown"
+      ? variants
+      : model?.reasoningEffortVariants?.map((variant) => variant.tier);
+  if (advertised === undefined) return null;
+  const efforts = advertised.filter(isMuseReasoningEffort);
+  const defaultValue = efforts.find((tier) => tier === model?.defaultReasoningEffort) ?? efforts[0];
   if (!defaultValue) return createModelCapabilities({ optionDescriptors: [] });
   return createModelCapabilities({
     optionDescriptors: [
@@ -89,7 +90,7 @@ export function resolveMuseReasoningEffort(
   capabilities: ModelCapabilities | null | undefined,
   effort: string | undefined,
 ): string | undefined {
-  if (!capabilities) return effort;
+  if (!capabilities) return effort && isMuseReasoningEffort(effort) ? effort : undefined;
   const descriptor = getProviderOptionDescriptors({
     caps: capabilities,
     selections: effort ? [{ id: "reasoningEffort", value: effort }] : undefined,

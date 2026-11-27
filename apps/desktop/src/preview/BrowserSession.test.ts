@@ -16,6 +16,8 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
     string,
     {
       readonly clearCache: ReturnType<typeof vi.fn>;
+      readonly flushStorageData: ReturnType<typeof vi.fn>;
+      readonly cookies: { readonly flushStore: ReturnType<typeof vi.fn> };
       readonly clearStorageData: ReturnType<typeof vi.fn>;
       readonly closeAllConnections: ReturnType<typeof vi.fn>;
       readonly storagePath: string | null;
@@ -158,6 +160,8 @@ describe("BrowserSession", () => {
     fromPartition.mockImplementation((partition: string) => {
       const browserSession = {
         clearCache: vi.fn(() => Promise.resolve()),
+        flushStorageData: vi.fn(),
+        cookies: { flushStore: vi.fn(() => Promise.resolve()) },
         clearStorageData: vi.fn(() => Promise.resolve()),
         closeAllConnections: vi.fn(() => Promise.resolve()),
         // Like Electron, only a `persist:` partition has storage on disk.
@@ -175,6 +179,18 @@ describe("BrowserSession", () => {
       return browserSession;
     });
   });
+
+  it.effect("flushes persistent login storage before shutdown without persisting incognito", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const persistent = yield* browserSessions.getSession("account");
+      const incognito = yield* browserSessions.getSession("private", false);
+      yield* browserSessions.flushStorage;
+      assert.equal(vi.mocked(persistent.cookies.flushStore).mock.calls.length, 1);
+      assert.equal(vi.mocked(persistent.flushStorageData).mock.calls.length, 1);
+      assert.equal(vi.mocked(incognito.cookies.flushStore).mock.calls.length, 0);
+    }).pipe(Effect.provide(layer)),
+  );
 
   it.effect("derives deterministic partitions and memoizes sessions", () =>
     Effect.gen(function* () {
@@ -234,6 +250,8 @@ describe("BrowserSession", () => {
         let userAgent = nativeUserAgent;
         const browserSession = {
           clearCache: vi.fn(() => Promise.resolve()),
+          flushStorageData: vi.fn(),
+          cookies: { flushStore: vi.fn(() => Promise.resolve()) },
           clearStorageData: vi.fn(() => Promise.resolve()),
           closeAllConnections: vi.fn(() => Promise.resolve()),
           storagePath: null,

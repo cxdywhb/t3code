@@ -1956,6 +1956,27 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           const config = mcpSession
             ? {
                 mcpServers: {
+                  ...Object.fromEntries(
+                    Object.entries(mcpSession.sharedResources?.mcpServers ?? {}).map(
+                      ([name, server]) => [
+                        name,
+                        server.type === "stdio"
+                          ? {
+                              transport: "stdio" as const,
+                              mode: "optional" as const,
+                              command: server.command,
+                              args: [...server.args],
+                              env: { ...server.env },
+                            }
+                          : {
+                              transport: "streamableHttp" as const,
+                              mode: "optional" as const,
+                              url: server.url,
+                              headers: { ...server.headers },
+                            },
+                      ],
+                    ),
+                  ),
                   // Muse's required default fails runs if T3 tools are unreachable; make them optional.
                   "t3-code": {
                     transport: "streamableHttp",
@@ -2218,6 +2239,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                       runtimePolicy: turnInput.runtimePolicy,
                     }),
                   },
+                  ...(turnInput.appContext ?? []).map((entry) => ({
+                    type: "text" as const,
+                    text: entry.text,
+                  })),
                   ...parts,
                 ],
                 displayText: turnInput.message.text || "Image attachment",

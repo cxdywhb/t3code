@@ -3786,6 +3786,8 @@ const make = Effect.gen(function* () {
   );
   yield* Effect.addFinalizer(() =>
     Effect.promise(async () => {
+      // 退出宿主只释放页面；后续 close 回调不能删除下次启动要恢复的标签。
+      for (const tab of tabs.values()) dropTab(tab, false);
       await contexts.close();
     }),
   );

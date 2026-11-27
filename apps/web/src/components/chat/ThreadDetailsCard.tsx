@@ -80,10 +80,10 @@ export function ThreadDetailsCard({
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // PR and issue lists, servers, lineage, side chats and automations scroll as they grow.
+      // PR and issue lists, servers, repositories, lineage, side chats and automations scroll as they grow.
       // Counting them toward density would hide the section and workspace controls when the user asks to see more.
       const lists = element.querySelectorAll<HTMLElement>(
-        "[data-thread-relationships-panel], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-details-issue-list], [data-thread-automations-panel], [data-thread-details-server-overflow]",
+        "[data-thread-relationships-panel], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-details-issue-list], [data-thread-automations-panel], [data-thread-details-server-overflow], [data-thread-details-repository-overflow]",
       );
       const fittingHeight =
         next - Array.from(lists).reduce((sum, list) => sum + list.offsetHeight, 0);
@@ -155,7 +155,7 @@ export function ThreadDetailsCard({
           data-workspace-focus-key={`details:${threadRef.environmentId}:${threadRef.threadId}`}
           // Skip the return transition to avoid overlapping the rising preview.
           className={cn(
-            "absolute z-20",
+            "absolute z-20 group-has-[[data-chat-provider-model-picker][aria-expanded=true]]/chat-workspace:invisible",
             topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
           )}
           style={{
