@@ -3,7 +3,7 @@ on:
   push:
     branches: [release-build/x-code-0.1.27-mac-smoke]
 permissions:
-  contents: read
+  contents: write
 jobs:
   launch:
     runs-on: macos-26
@@ -11,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -18,12 +19,17 @@ jobs:
       - uses: ./.github/actions/setup-ci-deps
         with:
           install-args: --filter=@t3tools/scripts...
-      - name: Check the packaged macOS app
+      - name: Download the installer from the release draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release download v0.1.27 -R "$GITHUB_REPOSITORY" -p X-Code-0.1.27-arm64.dmg -D "$RUNNER_TEMP"
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/461050709" --jq '.assets[]|select(.name=="X-Code-0.1.27-arm64.dmg")|.id')
+          test -n "$asset"
+          gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/$asset" > "$RUNNER_TEMP/X-Code-0.1.27-arm64.dmg"
+      - name: Check the packaged macOS app
+        run: |
+          set -euo pipefail
           mount="$RUNNER_TEMP/x-code-release-dmg"
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$RUNNER_TEMP/X-Code-0.1.27-arm64.dmg"
           trap 'hdiutil detach "$mount" >/dev/null || true' EXIT
