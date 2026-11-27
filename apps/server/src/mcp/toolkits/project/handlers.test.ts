@@ -1262,6 +1262,7 @@ it.effect("an agent's clone is not cut off while git is still transferring", () 
       Layer.provide(
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
           resolveLink: () => undefined,
+          getCloneHttpAuth: () => Effect.succeed(null),
         }),
       ),
       Layer.provide(
