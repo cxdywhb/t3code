@@ -38,6 +38,7 @@ import { usePromptStashStore } from "~/promptStashStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 import { environmentThreadDetails } from "~/state/threads";
 import {
   CODEX_PROVIDER,
@@ -47,6 +48,7 @@ import {
   answerRpc,
   assistantItem,
   dispatchedCommands,
+  emitKeybindings,
   emitProviderStatuses,
   emitThreadEvent,
   hasPendingAssetUrl,
@@ -1023,13 +1025,13 @@ it("a mounted thread view lets go of the thread structures it has replaced", asy
 it("a shortcut conditioned on rightPanelOpen sees the thread's open right panel", async () => {
   await page.viewport(1280, 800);
   const thread = threadWithHistory("thread-panel-shortcut", 1);
+  const customKeybindings = compileResolvedKeybindingsConfig([
+    { key: "ctrl+t", command: "rightPanel.new", when: "rightPanelOpen && !terminalFocus" },
+    { key: "ctrl+t", command: "rightPanel.toggle", when: "!rightPanelOpen" },
+  ]);
+  const keybindings = mergeWithDefaultKeybindings(customKeybindings);
   using _environment = installFakeEnvironment([thread], {
-    keybindings: mergeWithDefaultKeybindings(
-      compileResolvedKeybindingsConfig([
-        { key: "ctrl+t", command: "rightPanel.new", when: "rightPanelOpen && !terminalFocus" },
-        { key: "ctrl+t", command: "rightPanel.toggle", when: "!rightPanelOpen" },
-      ]),
-    ),
+    keybindings,
   });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
@@ -1046,6 +1048,11 @@ it("a shortcut conditioned on rightPanelOpen sees the thread's open right panel"
   const composer = page.getByTestId("composer-editor");
   const toggle = page.getByRole("button", { name: "Toggle right panel", exact: true });
   await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
+  // A connection reused from an earlier render keeps its previous config until an update arrives.
+  await act(() => emitKeybindings(keybindings));
+  await expect
+    .poll(() => appAtomRegistry.get(primaryServerKeybindingsAtom))
+    .toEqual(expect.arrayContaining([...customKeybindings]));
   await toggle.click();
   await page.getByRole("button", { name: /^Files/ }).click();
   await composer.click();

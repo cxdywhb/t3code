@@ -758,3 +758,14 @@ export const emitProviderStatuses = (providers: ServerConfig["providers"]) =>
   Effect.forEach(serverConfigSubscribers, (queue) =>
     Queue.offer(queue, { version: 1, type: "providerStatuses", payload: { providers } }),
   );
+
+export const emitKeybindings = (keybindings: ResolvedKeybindingsConfig) =>
+  Effect.runPromise(
+    Effect.forEach(serverConfigSubscribers, (queue) =>
+      Queue.offer(queue, {
+        version: 1,
+        type: "keybindingsUpdated",
+        payload: { keybindings, issues: [] },
+      }),
+    ),
+  );
