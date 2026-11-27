@@ -2557,13 +2557,12 @@ const make = Effect.gen(function* () {
       sourceRunId: RunId,
       resumableTaskId?: IssueAutomationTaskId,
     ) {
-      const projection = yield* threadManagement
-        .getThreadProjection(threadId)
-        .pipe(
-          Effect.catchTag("OrchestratorProjectionError", (error) =>
+      const projection = yield* threadManagement.getThreadProjection(threadId).pipe(
+        Effect.catchTags({
+          OrchestratorProjectionError: (error) =>
             isThreadNotFound(error.cause) ? Effect.succeed(null) : Effect.fail(error),
-          ),
-        );
+        }),
+      );
       if (projection === null) return null;
       const source = projection.runs.find((run) => run.id === sourceRunId);
       const resumeMessageId =

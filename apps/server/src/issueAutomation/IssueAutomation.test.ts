@@ -35,7 +35,11 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
+import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
+import {
+  emptyProjection,
+  ProjectionStoreThreadNotFoundError,
+} from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -216,6 +220,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
     const scope = { id: "5", name: "好轻 App" };
     const platform = IssueAutomationPlatformKind.make("zentao");
     const threadId = ThreadId.make("thread:issue-diagnosis:2849");
+    const missingThreadId = ThreadId.make("thread:issue-diagnosis:removed");
     const oldRunId = RunId.make("run:issue-2849:1");
     const newRunId = RunId.make("run:issue-2849:2");
     const repairThreadId = ThreadId.make("thread:repair-2849");
@@ -520,7 +525,14 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadProjection: (id) =>
-          Effect.sync(id === repairThreadId ? repairProjection : projection),
+          id === missingThreadId
+            ? Effect.fail(
+                new OrchestratorProjectionError({
+                  threadId: id,
+                  cause: new ProjectionStoreThreadNotFoundError({ threadId: id }),
+                }),
+              )
+            : Effect.sync(id === repairThreadId ? repairProjection : projection),
         interruptThread: (input) =>
           Effect.gen(function* () {
             expect(input).toMatchObject({ threadId, runId: oldRunId });
@@ -1077,6 +1089,14 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         .soft((yield* Effect.result(service.cancelTask({ taskId: missingRunId })))._tag)
         .toBe("Success");
       expect.soft((yield* repository.getTask(missingRunId))?.stage).toBe("cancelled");
+      const missingThreadTaskId = IssueAutomationTaskId.make("task-with-removed-thread");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: missingThreadTaskId,
+        primaryThreadId: missingThreadId,
+      });
+      yield* service.cancelTask({ taskId: missingThreadTaskId });
+      expect((yield* repository.getTask(missingThreadTaskId))?.stage).toBe("cancelled");
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
   }),
 );
