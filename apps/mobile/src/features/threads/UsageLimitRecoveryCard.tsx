@@ -25,9 +25,11 @@ import { useAtomCommand } from "../../state/use-atom-command";
 export function UsageLimitRecoveryCard({
   thread,
   environmentId,
+  onResumeNow,
 }: {
   thread: EnvironmentThreadShell;
   environmentId: EnvironmentId;
+  onResumeNow?: () => Promise<void>;
 }) {
   const gt = useGT();
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata);
@@ -65,6 +67,7 @@ export function UsageLimitRecoveryCard({
     !runId
   )
     return null;
+  const canResumeNow = onResumeNow !== undefined && thread.settledOverride !== "settled";
   const resumes = canSchedule && scheduled;
   const resumesUpcoming = resumes && !displayPassed;
   const shownAt = resumesUpcoming ? displayAt : resetAt;
@@ -115,6 +118,12 @@ export function UsageLimitRecoveryCard({
       const cause = squashAtomCommandFailure(result);
       setError(errorDisplayMessage(cause, m) ?? gt("Could not change limit recovery."));
     }
+  }
+  async function resumeNow() {
+    if (pending || !canResumeNow) return;
+    setPending(true);
+    await onResumeNow?.();
+    setPending(false);
   }
   const action = workspaceLimit
     ? {
@@ -185,7 +194,7 @@ export function UsageLimitRecoveryCard({
                     "Usage limit reached. The provider did not report a reset time. Retry manually when your limit is available.",
                   )}
         </Text>
-        {chatGptLimit || canSchedule ? (
+        {chatGptLimit || canSchedule || canResumeNow ? (
           // The margins cancel the 44pt touch height so the links sit 8pt under the text.
           <View className="-mb-3 -mt-2 flex-row flex-wrap gap-x-4">
             {chatGptLimit ? (
@@ -196,25 +205,32 @@ export function UsageLimitRecoveryCard({
                 onPress={action.run}
               />
             ) : null}
+            {canResumeNow ? (
+              <RecoveryAction
+                label={gt("Resume now")}
+                disabled={pending}
+                onPress={() => void resumeNow()}
+              />
+            ) : null}
+            {canSchedule && (scheduled || !resetPassed || !canResumeNow) ? (
+              <RecoveryAction
+                label={
+                  scheduled
+                    ? gt("Cancel auto-resume")
+                    : resetPassed
+                      ? gt("Resume now")
+                      : gt("Resume at reset")
+                }
+                disabled={pending}
+                onPress={() => void toggle("resume")}
+              />
+            ) : null}
             {canSchedule ? (
-              <>
-                <RecoveryAction
-                  label={
-                    scheduled
-                      ? gt("Cancel auto-resume")
-                      : resetPassed
-                        ? gt("Resume now")
-                        : gt("Resume at reset")
-                  }
-                  disabled={pending}
-                  onPress={() => void toggle("resume")}
-                />
-                <RecoveryAction
-                  label={snoozed ? gt("Wake now") : gt("Snooze until reset")}
-                  disabled={pending || (!snoozed && resetPassed)}
-                  onPress={() => void toggle("snooze")}
-                />
-              </>
+              <RecoveryAction
+                label={snoozed ? gt("Wake now") : gt("Snooze until reset")}
+                disabled={pending || (!snoozed && resetPassed)}
+                onPress={() => void toggle("snooze")}
+              />
             ) : null}
           </View>
         ) : null}

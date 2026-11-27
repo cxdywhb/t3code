@@ -16,7 +16,7 @@ import {
   ThreadId,
   type IssueAutomationSaveProfileInput,
   type IssueAutomationConnector,
-  type IssueAutomationTaskId,
+  IssueAutomationTaskId,
   type IssueAutomationWriteBackAction,
   type OrchestrationProjectShell,
   type OrchestrationV2Run,
@@ -35,7 +35,11 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
+import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
+import {
+  emptyProjection,
+  ProjectionStoreThreadNotFoundError,
+} from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -187,6 +191,13 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
     const runWaiting = yield* Deferred.make<void>();
     const stopRequested = yield* Deferred.make<void>();
     const confirmStop = yield* Deferred.make<void>();
+    const pauseRunWaiting = yield* Deferred.make<void>();
+    const pauseRequested = yield* Deferred.make<void>();
+    const confirmPause = yield* Deferred.make<void>();
+    const stalePollStarted = yield* Deferred.make<void>();
+    const releaseStalePoll = yield* Deferred.make<void>();
+    let testRulePause = false;
+    let holdPoll = false;
     const outbound: Array<{ readonly url: string; readonly body: unknown }> = [];
     const writeBacks: IssueAutomationWriteBackAction[] = [];
     const startedMessages: ThreadLaunchService.ThreadLaunchInitialMessage[] = [];
@@ -199,11 +210,18 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
+    const routedProject = {
+      ...project,
+      id: ProjectId.make("proj-routed"),
+      title: "routed-app",
+    };
     const webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook";
     const baseUrl = "https://zentao.example.com/zentao";
     const scope = { id: "5", name: "好轻 App" };
     const platform = IssueAutomationPlatformKind.make("zentao");
     const threadId = ThreadId.make("thread:issue-diagnosis:2849");
+    const missingThreadId = ThreadId.make("thread:issue-diagnosis:removed");
+    const deletedThreadId = ThreadId.make("thread:issue-diagnosis:deleted");
     const oldRunId = RunId.make("run:issue-2849:1");
     const newRunId = RunId.make("run:issue-2849:2");
     const repairThreadId = ThreadId.make("thread:repair-2849");
@@ -279,6 +297,16 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       updatedAt: at,
     });
     let oldPermissions = false;
+    const diagnosisReport = [
+      "New diagnosis",
+      "代码位置：/repos/example-app/records.ts",
+      "",
+      "## 禅道评论",
+      "问题原因：保存记录后，列表仍显示旧数据。",
+      "解决方案：建议在保存成功后刷新列表。",
+      "",
+      "本次使用 skill：example-review",
+    ].join("\n");
     const projection = () => ({
       ...baseProjection,
       thread: oldPermissions
@@ -286,7 +314,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         : baseProjection.thread,
       runs: [...runs],
       messages: [
-        ...(runs.length > 1 ? [reply(newRunId, "New diagnosis")] : []),
+        ...(runs.length > 1 ? [reply(newRunId, diagnosisReport)] : []),
         reply(oldRunId, "Cancelled diagnosis fragment"),
       ],
     });
@@ -295,6 +323,13 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       threadId: repairThreadId,
       ordinal: 1,
     });
+    const repairReport = [
+      "Applied and tested the repair",
+      "",
+      "## 禅道评论",
+      "问题原因：保存记录后，列表仍显示旧数据。",
+      "解决方案：保存成功后会刷新列表。",
+    ].join("\n");
     const repairProjection = () => ({
       ...baseProjection,
       thread: {
@@ -304,9 +339,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         branch: repairBranch,
       },
       runs: [repairRun()],
-      messages: [
-        { ...reply(repairRunId, "Applied and tested the repair"), threadId: repairThreadId },
-      ],
+      messages: [{ ...reply(repairRunId, repairReport), threadId: repairThreadId }],
       checkpoints: [
         {
           id: CheckpointId.make("repair-checkpoint"),
@@ -389,6 +422,26 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
             pageSize,
           });
         }
+        if (testRulePause) {
+          const keys = holdPoll ? ["2853"] : ["2851", "2852"];
+          const pageResult = {
+            items: keys.map((key) => ({
+              ...detail,
+              key,
+              displayKey: `#${key}`,
+              status: "active" as const,
+            })),
+            total: keys.length,
+            page,
+            pageSize,
+          };
+          return holdPoll
+            ? Deferred.succeed(stalePollStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseStalePoll)),
+                Effect.as(pageResult),
+              )
+            : Effect.succeed(pageResult);
+        }
         return Deferred.succeed(pollStarted, undefined).pipe(
           Effect.andThen(Deferred.await(finishPoll)),
           Effect.as({ items: [{ ...detail, status: "active" }], total: 1, page: 1, pageSize: 30 }),
@@ -398,12 +451,13 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         issueKey === "2847"
           ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.succeed(
-              issueKey === "2849"
+              issueKey === "2849" || (testRulePause && ["2851", "2852", "2856"].includes(issueKey))
                 ? {
                     ...detail,
                     key: issueKey,
-                    displayKey: "#2849",
+                    displayKey: `#${issueKey}`,
                     status: "active",
+                    moduleName: issueKey === "2856" ? "Routed module" : detail.moduleName,
                     statusLabel: "激活",
                     availableBuilds: [{ id: "7", name: "v1.2.0" }],
                   }
@@ -426,7 +480,9 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issue-feishu-" })),
         Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
       ),
-      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([project]) }),
+      Layer.mock(ProjectService.ProjectService)({
+        listShells: () => Effect.succeed([project, routedProject]),
+      }),
       Layer.mock(GitWorkflow.GitWorkflowService)({ currentBranch: () => Effect.succeed("main") }),
       Layer.mock(ThreadIssueService.ThreadIssueService)({
         link: () => Effect.succeed({ alreadyLinked: false }),
@@ -449,7 +505,10 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
               resumed: false,
             });
           }
-          if (input.initialMessage?.context?.issueAutomation?.issueKey === "#2849") {
+          if (
+            input.initialMessage?.context?.issueAutomation?.issueKey ===
+            (testRulePause ? "#2851" : "#2849")
+          ) {
             expect(input.threadId).toMatch(/^thread:issue-diagnosis:/);
             expect(input.runtimeMode).toBe("approval-required");
             runs.push(makeRun(oldRunId, input.initialMessage.messageId!, "running"));
@@ -466,12 +525,33 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         },
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadProjection: (id) =>
-          Effect.sync(id === repairThreadId ? repairProjection : projection),
+        getThreadProjection: (id) => {
+          if (id === missingThreadId) {
+            return Effect.fail(
+              new OrchestratorProjectionError({
+                threadId: id,
+                cause: new ProjectionStoreThreadNotFoundError({ threadId: id }),
+              }),
+            );
+          }
+          if (id === deletedThreadId) {
+            return Effect.sync(() => ({
+              ...baseProjection,
+              thread: { ...baseProjection.thread, id, deletedAt: at },
+              runs: [
+                {
+                  ...makeRun(oldRunId, MessageId.make("retained-message"), "cancelled"),
+                  threadId: id,
+                },
+              ],
+            }));
+          }
+          return Effect.sync(id === repairThreadId ? repairProjection : projection);
+        },
         interruptThread: (input) =>
           Effect.gen(function* () {
             expect(input).toMatchObject({ threadId, runId: oldRunId });
-            yield* Deferred.succeed(stopRequested, undefined);
+            yield* Deferred.succeed(testRulePause ? pauseRequested : stopRequested, undefined);
             return {
               type: "interrupt_requested" as const,
               run: runs[0]!,
@@ -480,22 +560,36 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
           }),
         waitForThread: (input) =>
           Effect.gen(function* () {
+            if (input.threadId === deletedThreadId) {
+              return yield* new ThreadManagementService.ThreadManagementThreadNotFoundError({
+                projectId: input.projectId,
+                threadId: input.threadId,
+              });
+            }
             if (input.threadId === repairThreadId) {
               expect(input.runId).toBe(repairRunId);
               return { threadId: repairThreadId, run: repairRun(), timedOut: false };
             }
             expect(input.threadId).toBe(threadId);
             if (input.runId === oldRunId && input.untilDelegatedWorkSettled) {
-              yield* Deferred.succeed(runWaiting, undefined);
+              yield* Deferred.succeed(testRulePause ? pauseRunWaiting : runWaiting, undefined);
               return yield* Effect.never;
             }
             if (input.runId === oldRunId) {
-              yield* Deferred.await(confirmStop);
+              yield* Deferred.await(testRulePause ? confirmPause : confirmStop);
               runs[0] = { ...runs[0]!, status: "interrupted", completedAt: at };
               return { threadId, run: runs[0], timedOut: false };
             }
             expect(input.runId).toBe(newRunId);
             return { threadId, run: runs[1]!, resultRun: runs[0]!, timedOut: false };
+          }),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            if (command.type !== "message.dispatch") throw new Error("Expected continuation");
+            expect(command).toMatchObject({ threadId, manualContinuationOfRunId: oldRunId });
+            expect(command.freshContext).toBeUndefined();
+            runs.push(makeRun(newRunId, command.messageId, "completed"));
+            return { sequence: 2, storedEvents: [] };
           }),
         sendToThread: (input) =>
           Effect.sync(() => {
@@ -721,7 +815,12 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       expect(cancelledTask?.steps.map((step) => step.stage)).toContain("cancelling");
       expect(outbound).toHaveLength(2);
 
-      yield* service.saveProfile({ ...enable, feishuNotification: { enabled: false } });
+      const diagnosticPolicy = { ...input.policy, autoWriteComment: true };
+      yield* service.saveProfile({
+        ...enable,
+        policy: diagnosticPolicy,
+        feishuNotification: { enabled: false },
+      });
       const running = yield* run("2849");
       yield* Deferred.await(runWaiting);
       const stop = yield* service.cancelTask({ taskId: running }).pipe(Effect.forkChild);
@@ -755,8 +854,28 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         stage: "completed",
         primaryThreadId: threadId,
         primaryRunId: newRunId,
-        diagnosisReport: "New diagnosis",
+        diagnosisReport,
       });
+      const diagnosisComment = [
+        "问题原因：保存记录后，列表仍显示旧数据。",
+        "解决方案：建议在保存成功后刷新列表。",
+        "",
+        "[T3-Auto-Analysis]",
+        "Generated by ym-dev-zenbug AI Agent Skill",
+      ].join("\n");
+      expect(writeBacks).toEqual([
+        { kind: "comment", issueKey: "2849", comment: diagnosisComment },
+      ]);
+      const resync = (comment: string) =>
+        service.writeBack({
+          connectorId: connector.id,
+          action: { kind: "comment", issueKey: "2849", taskId: restarted.id, comment },
+        });
+      yield* resync(diagnosisReport);
+      expect(writeBacks.at(-1)).toMatchObject({ comment: diagnosisComment });
+      yield* resync("测试同事已补充复现步骤。");
+      expect(writeBacks.at(-1)).toMatchObject({ comment: "测试同事已补充复现步骤。" });
+      writeBacks.length = 0;
       expect(
         startedMessages.filter((message) => message.context?.issueAutomation?.issueKey === "#2849"),
       ).toHaveLength(1);
@@ -768,13 +887,6 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         issueKeys: ["2849"],
         repairFromTaskId: restarted.id,
       };
-      const diagnosticPolicy = { ...input.policy, autoWriteComment: true };
-      yield* service.saveProfile({
-        ...input,
-        id: rule.id,
-        policy: diagnosticPolicy,
-        feishuNotification: { enabled: false },
-      });
       const repair = (yield* service.analyzeIssues(repairInput)).tasks[0]!;
       expect(repair).toMatchObject({
         issueKey: "2849",
@@ -792,7 +904,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       expect(reviewed.tasks.find((task) => task.id === repair.id)).toMatchObject({
         stage: "needs_human",
         primaryThreadId: repairThreadId,
-        diagnosisReport: "Applied and tested the repair",
+        diagnosisReport: repairReport,
       });
       const sync = (writeComment: boolean, resolvedBuild?: string) =>
         service.writeBack({
@@ -816,7 +928,13 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         {
           kind: "comment",
           issueKey: "2849",
-          comment: expect.stringContaining("Applied and tested the repair"),
+          comment: [
+            "问题原因：保存记录后，列表仍显示旧数据。",
+            "解决方案：保存成功后会刷新列表。",
+            "",
+            "[T3-Auto-Analysis]",
+            "Generated by ym-dev-zenbug AI Agent Skill",
+          ].join("\n"),
         },
       ]);
       yield* sync(false, "7");
@@ -837,6 +955,196 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       expect(persisted.profiles.find((profile) => profile.id === rule.id)?.policy).toEqual(
         diagnosticPolicy,
       );
+
+      testRulePause = true;
+      runs.length = 0;
+      const pauseRule = yield* service.saveProfile({ ...input, enabled: true });
+      expect((yield* service.triggerPoll({ profileId: pauseRule.id })).enqueuedCount).toBe(2);
+      yield* Deferred.await(pauseRunWaiting);
+      const taskFor = (issueKey: string) =>
+        Effect.map(service.getState, (state) =>
+          state.tasks.find((task) => task.issueKey === issueKey)!,
+        );
+      const runningPollTask = yield* taskFor("2851");
+      const queuedPollTask = yield* taskFor("2852");
+      expect(queuedPollTask.stage).toBe("queued");
+      const manual = (yield* service.analyzeIssues({
+        connectorId: connector.id,
+        profileId: pauseRule.id,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        issueKeys: ["2847"],
+      })).tasks[0]!;
+      holdPoll = true;
+      const stalePoll = yield* service
+        .triggerPoll({ profileId: pauseRule.id })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(stalePollStarted);
+
+      yield* service.setProfileEnabled({ profileId: pauseRule.id, enabled: false });
+      expect((yield* taskFor("2852")).stage).toBe("cancelled");
+      expect((yield* service.getState).tasks.find((task) => task.id === manual.id)?.stage).toBe(
+        "queued",
+      );
+      yield* service.cancelTask({ taskId: manual.id });
+      yield* Deferred.await(pauseRequested);
+      expect((yield* taskFor("2851")).stage).toBe("pausing");
+      holdPoll = false;
+      for (const [capability, expectedStage] of [
+        [{}, "cancelling"],
+        [{ supportsPauseStages: true }, "pausing"],
+      ] as const) {
+        const remoteInput = { connectorId: connector.id, scopeId: scope.id, ...capability };
+        const list = yield* service.listRemoteIssues(remoteInput);
+        const scan = yield* service.scanProfileIssues({ profileId: pauseRule.id, ...capability });
+        const detail = yield* service.getRemoteIssueDetail({ ...remoteInput, issueKey: "2851" });
+        expect
+          .soft(list.issues.find((issue) => issue.key === "2851")?.latestStage)
+          .toBe(expectedStage);
+        expect
+          .soft(scan.issues.find((issue) => issue.key === "2851")?.latestStage)
+          .toBe(expectedStage);
+        expect.soft(detail.latestStage).toBe(expectedStage);
+      }
+      holdPoll = true;
+      yield* service.saveProfile({ ...input, id: pauseRule.id, enabled: true });
+      expect(runs).toHaveLength(1);
+      yield* Deferred.succeed(releaseStalePoll, undefined);
+      expect((yield* Fiber.join(stalePoll)).enqueuedCount).toBe(0);
+      yield* Deferred.succeed(confirmPause, undefined);
+
+      const resumed = yield* whenSettled(runningPollTask.id);
+      const runningTask = resumed.tasks.find((task) => task.id === runningPollTask.id)!;
+      const pauseSnapshot = {
+        ...resumed,
+        tasks: (["pausing", "paused", "resuming"] as const).map((stage) => ({
+          ...runningTask,
+          stage,
+        })),
+      };
+      const legacy = IssueAutomationService.issueAutomationSnapshotForClient(
+        pauseSnapshot,
+        undefined,
+      );
+      expect(legacy.tasks.map((task) => task.stage)).toEqual([
+        "cancelling",
+        "diagnosing",
+        "diagnosing",
+      ]);
+      expect(legacy.tasks[0]!.steps.map((step) => step.stage)).not.toContain("paused");
+      expect(legacy.tasks[0]!.steps.map((step) => step.stage)).not.toContain("resuming");
+      expect(IssueAutomationService.issueAutomationSnapshotForClient(pauseSnapshot, true)).toBe(
+        pauseSnapshot,
+      );
+      expect(resumed.tasks.filter((task) => task.issueKey === "2851")).toEqual([
+        expect.objectContaining({
+          id: runningPollTask.id,
+          stage: "completed",
+          primaryThreadId: threadId,
+          primaryRunId: newRunId,
+          diagnosisReport,
+          steps: expect.arrayContaining([expect.objectContaining({ stage: "paused" })]),
+        }),
+      ]);
+      expect(resumed.tasks.filter((task) => task.issueKey === "2852")).toEqual([
+        expect.objectContaining({
+          id: queuedPollTask.id,
+          stage: "cancelled",
+          primaryThreadId: null,
+        }),
+      ]);
+      expect(
+        startedMessages.filter((message) => message.context?.issueAutomation?.issueKey === "#2851"),
+      ).toHaveLength(1);
+
+      yield* repository.upsertTask({
+        ...queuedPollTask,
+        id: IssueAutomationTaskId.make("save-profile-queue"),
+        issueKey: "2854",
+      });
+      yield* service.saveProfile({ ...input, id: pauseRule.id, enabled: false });
+      expect((yield* taskFor("2854")).stage).toBe("cancelled");
+
+      yield* service.setProfileEnabled({ profileId: rule.id, enabled: true });
+      yield* repository.upsertTask({
+        ...queuedPollTask,
+        id: IssueAutomationTaskId.make("write-back-queue"),
+        profileId: rule.id,
+        issueKey: "2855",
+      });
+      yield* service.setProfileEnabled({ profileId: rule.id, enabled: false });
+      expect((yield* taskFor("2855")).stage).toBe("queued");
+
+      const beforeLaunch = {
+        ...queuedPollTask,
+        id: IssueAutomationTaskId.make("paused-before-launch"),
+        issueKey: "2856",
+        stage: "paused" as const,
+      };
+      yield* repository.upsertTask(beforeLaunch);
+      yield* service.saveProfile({
+        ...input,
+        id: pauseRule.id,
+        enabled: true,
+        repositories: {
+          primaryProjectId: project.id,
+          linkedProjectIds: [routedProject.id],
+          moduleMappings: [{ pattern: "Routed module", projectId: routedProject.id }],
+        },
+      });
+      const rerouted = yield* whenSettled(beforeLaunch.id);
+      expect
+        .soft(rerouted.tasks.find((task) => task.id === beforeLaunch.id)?.targetProjectId)
+        .toBe(routedProject.id);
+
+      const staleResumeId = IssueAutomationTaskId.make("stale-resuming");
+      const pauseSentinelId = IssueAutomationTaskId.make("stale-paused");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: staleResumeId,
+        stage: "resuming",
+        primaryRunId: newRunId,
+      });
+      yield* repository.upsertTask({ ...beforeLaunch, id: pauseSentinelId });
+      yield* service.deleteProfile({ profileId: pauseRule.id });
+      const reconciled = yield* Stream.fromQueue(snapshots).pipe(
+        Stream.filter((snapshot) =>
+          snapshot.tasks.some((task) => task.id === pauseSentinelId && task.stage === "cancelled"),
+        ),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect
+        .soft(reconciled.tasks.find((task) => task.id === staleResumeId)?.stage)
+        .toBe("cancelled");
+
+      const missingRunId = IssueAutomationTaskId.make("task-with-removed-run");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: missingRunId,
+        primaryRunId: RunId.make("missing-run"),
+      });
+      expect
+        .soft((yield* Effect.result(service.cancelTask({ taskId: missingRunId })))._tag)
+        .toBe("Success");
+      expect.soft((yield* repository.getTask(missingRunId))?.stage).toBe("cancelled");
+      const missingThreadTaskId = IssueAutomationTaskId.make("task-with-removed-thread");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: missingThreadTaskId,
+        primaryThreadId: missingThreadId,
+      });
+      yield* service.cancelTask({ taskId: missingThreadTaskId });
+      expect((yield* repository.getTask(missingThreadTaskId))?.stage).toBe("cancelled");
+      const deletedThreadTaskId = IssueAutomationTaskId.make("task-with-deleted-thread");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: deletedThreadTaskId,
+        primaryThreadId: deletedThreadId,
+        primaryRunId: oldRunId,
+      });
+      yield* service.cancelTask({ taskId: deletedThreadTaskId });
+      expect((yield* repository.getTask(deletedThreadTaskId))?.stage).toBe("cancelled");
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
   }),
 );

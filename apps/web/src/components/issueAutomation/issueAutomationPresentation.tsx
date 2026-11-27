@@ -10,6 +10,7 @@ import {
   CircleCheckIcon,
   CircleDotIcon,
   CircleSlashIcon,
+  PauseIcon,
   XCircleIcon,
 } from "lucide-react";
 
@@ -42,9 +43,20 @@ export function isStageActive(stage: IssueAutomationStage): boolean {
     stage === "enriching" ||
     stage === "routing" ||
     stage === "diagnosing" ||
+    stage === "resuming" ||
     stage === "reviewing" ||
     stage === "writing_back" ||
-    stage === "cancelling"
+    stage === "cancelling" ||
+    stage === "pausing"
+  );
+}
+
+export function isTaskCancellable(task: IssueAutomationTask): boolean {
+  return (
+    task.stage === "paused" ||
+    (isStageActive(task.stage) &&
+      task.stage !== "pausing" &&
+      (task.stage !== "cancelling" || task.lastError !== null))
   );
 }
 
@@ -57,6 +69,7 @@ export function stageStepIndex(stage: IssueAutomationStage): number {
     case "routing":
       return 2;
     case "diagnosing":
+    case "resuming":
       return 3;
     case "reviewing":
       return 4;
@@ -67,6 +80,8 @@ export function stageStepIndex(stage: IssueAutomationStage): number {
       return 6;
     case "failed":
     case "cancelling":
+    case "pausing":
+    case "paused":
     case "cancelled":
       return -1;
   }
@@ -134,6 +149,11 @@ export function TaskStageGlyph({
       <XCircleIcon aria-hidden className={cn("size-4 shrink-0 text-destructive", className)} />
     );
   }
+  if (stage === "paused") {
+    return (
+      <PauseIcon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground", className)} />
+    );
+  }
   return (
     <CircleSlashIcon
       aria-hidden
@@ -186,6 +206,7 @@ export function StageBadge({
         </Badge>
       );
     case "diagnosing":
+    case "resuming":
       return (
         <Badge variant="info" size={size}>
           <span
@@ -249,6 +270,18 @@ export function StageBadge({
       return (
         <Badge variant="warning" size={size}>
           <T>Cancelling</T>
+        </Badge>
+      );
+    case "pausing":
+      return (
+        <Badge variant="warning" size={size}>
+          <T context="run status">Stopping</T>
+        </Badge>
+      );
+    case "paused":
+      return (
+        <Badge variant="outline" size={size}>
+          <T context="run status">Paused</T>
         </Badge>
       );
   }

@@ -158,7 +158,7 @@ export function IssueAutomationRepairSyncDialog({
                   <T>Comment preview</T>
                 </p>
                 <PullRequestMarkdown
-                  text={formatIssueAutomationWriteBackComment({ ...task, diagnosisReport: report })}
+                  text={formatIssueAutomationWriteBackComment(report)}
                   cwd={cwd}
                   environmentId={environmentId}
                 />

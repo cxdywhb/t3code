@@ -3,12 +3,29 @@ import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 import * as NodeURL from "node:url";
 import { ensureElectronRuntime } from "./ensure-electron-runtime.mjs";
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 export const desktopDir = NodePath.resolve(__dirname, "..");
+
+export function tryAcquireDevSupervisor(root = desktopDir) {
+  const runtimeDir = NodePath.join(root, ".electron-runtime");
+  NodeFS.mkdirSync(runtimeDir, { recursive: true });
+  const lock = new NodeSqlite.DatabaseSync(NodePath.join(runtimeDir, "dev-supervisor.sqlite"));
+  try {
+    // SQLite releases the lock even if the supervisor is killed without running cleanup.
+    lock.exec("BEGIN EXCLUSIVE;");
+    return lock;
+  } catch (cause) {
+    lock.close();
+    if (cause?.errcode === 5) return undefined; // SQLITE_BUSY
+    throw cause;
+  }
+}
+
 const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()

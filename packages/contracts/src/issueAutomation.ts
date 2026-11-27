@@ -198,6 +198,9 @@ export const IssueAutomationStage = Schema.Literals([
   "reviewing",
   "writing_back",
   "cancelling",
+  "pausing",
+  "paused",
+  "resuming",
   "completed",
   "needs_human",
   "failed",
@@ -354,7 +357,12 @@ export const IssueAutomationRefreshScopesInput = Schema.Struct({
 });
 export type IssueAutomationRefreshScopesInput = typeof IssueAutomationRefreshScopesInput.Type;
 
+export const IssueAutomationPauseStagesInput = Schema.Struct({
+  supportsPauseStages: Schema.optionalKey(Schema.Boolean),
+});
+
 export const IssueAutomationListRemoteIssuesInput = Schema.Struct({
+  ...IssueAutomationPauseStagesInput.fields,
   connectorId: IssueAutomationConnectorId,
   scopeId: TrimmedNonEmptyString,
   browseType: Schema.optional(IssueAutomationBrowseFilter),
@@ -374,6 +382,7 @@ export type IssueAutomationListRemoteIssuesResult =
   typeof IssueAutomationListRemoteIssuesResult.Type;
 
 export const IssueAutomationScanProfileIssuesInput = Schema.Struct({
+  ...IssueAutomationPauseStagesInput.fields,
   profileId: IssueAutomationProfileId,
   page: Schema.optional(PositiveInt),
 });
@@ -388,6 +397,7 @@ export type IssueAutomationScanProfileIssuesResult =
   typeof IssueAutomationScanProfileIssuesResult.Type;
 
 export const IssueAutomationGetRemoteIssueDetailInput = Schema.Struct({
+  ...IssueAutomationPauseStagesInput.fields,
   connectorId: IssueAutomationConnectorId,
   scopeId: TrimmedNonEmptyString,
   issueKey: TrimmedNonEmptyString,

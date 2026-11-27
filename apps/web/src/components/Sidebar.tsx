@@ -565,18 +565,18 @@ function useSidebarThreads(input: {
   const projectFolders = (() => {
     if (orderedFolders === null) return null;
     const projectsWithThreads = new Set(threads.map(scopedProjectKey));
+    const isEmptyProject = (group: SidebarProjectSnapshot) =>
+      !group.isScratch &&
+      group.memberProjectRefs.every(({ environmentId, projectId }) => {
+        const older = olderSettledShelf.environments.get(environmentId)?.older;
+        return (
+          !projectsWithThreads.has(scopedProjectKey({ environmentId, projectId })) &&
+          !older?.counts.get(projectId)
+        );
+      });
     const folders = groupSidebarThreadsByProject(orderedFolders, activeThreads, (group) => {
       if (group.archived) return false;
-      if (scopedProjectKeys !== null || group.pinned) return true;
-      return (
-        !group.isScratch &&
-        group.memberProjectRefs.every((ref) => {
-          const older = olderSettledShelf.environments.get(ref.environmentId)?.older;
-          return (
-            !projectsWithThreads.has(scopedProjectKey(ref)) && !older?.counts.get(ref.projectId)
-          );
-        })
-      );
+      return scopedProjectKeys !== null || group.pinned || isEmptyProject(group);
     });
     return folders.map((folder) => {
       const collapsed = !resolveProjectExpanded(
@@ -586,6 +586,7 @@ function useSidebarThreads(input: {
       return {
         group: folder.group,
         collapsed,
+        showEmptyState: !collapsed && folder.threads.length === 0 && isEmptyProject(folder.group),
         // A closed folder still shows the open thread, and hints at the rest.
         threads: collapsed ? routeThreadOnly(folder.threads, routeRowThreadKey) : folder.threads,
         hiddenThreads: collapsed
@@ -3670,6 +3671,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               key={`project-folder:${folder.group.projectKey}`}
                               group={folder.group}
                               collapsed={folder.collapsed}
+                              showEmptyState={folder.showEmptyState}
                               hiddenThreads={folder.hiddenThreads}
                               onToggle={toggleProjectFolder}
                               onNewThread={startThreadInProjectFolder}

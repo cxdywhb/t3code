@@ -5,7 +5,9 @@ import {
   IssueTrackerKind,
   ORCHESTRATION_V2_WS_METHODS,
   RunId,
+  ServerProvider,
   ThreadId,
+  TurnItemId,
   WS_METHODS,
   type IssueDetail,
   type IssueRef,
@@ -36,14 +38,18 @@ import { usePromptStashStore } from "~/promptStashStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 import { environmentThreadDetails } from "~/state/threads";
 import {
+  CODEX_PROVIDER,
   ENVIRONMENT_ID,
   PROJECT_ID,
   answerAssetUrls,
   answerRpc,
   assistantItem,
   dispatchedCommands,
+  emitKeybindings,
+  emitProviderStatuses,
   emitThreadEvent,
   hasPendingAssetUrl,
   installFakeEnvironment,
@@ -88,6 +94,7 @@ function acceptAttachmentUploads(): Disposable {
 
 // One input event, where typing a key at a time takes seconds on a loaded CI runner.
 const insertText = (text: string) => cdp().send("Input.insertText", { text });
+const decodeProvider = Schema.decodeUnknownSync(ServerProvider);
 
 /** Holds every call to `method` until `release`, then ends it with `end`, until disposed. */
 class LaunchRefused extends Schema.TaggedError<LaunchRefused>()("LaunchRefused", {}) {}
@@ -798,6 +805,126 @@ it("Enter on an empty prompt resumes an interrupted thread", async () => {
   );
 });
 
+function usageLimitedThread(id: string) {
+  const history = threadWithHistory(id, 1);
+  const run = { ...history.runs[0]!, status: "failed" as const };
+  const resetAt = "2099-10-21T05:55:00.000Z";
+  return {
+    ...history,
+    runs: [run],
+    limitRecovery: { runId: run.id, resetAt, autoResume: true, snooze: false },
+    items: [
+      ...history.items,
+      {
+        id: TurnItemId.make("usage-limit-error"),
+        threadId: history.id,
+        runId: run.id,
+        nodeId: run.rootNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        title: null,
+        startedAt: null,
+        completedAt: run.completedAt,
+        updatedAt: run.completedAt ?? run.requestedAt,
+        type: "error" as const,
+        status: "failed" as const,
+        failure: {
+          class: "usage_limit" as const,
+          message: "Usage limit exceeded.",
+          code: "usageLimitExceeded",
+          retryable: true,
+          resetAt,
+        },
+      },
+    ],
+  };
+}
+
+it("resumes a usage-limited turn now while a future auto-resume is scheduled", async () => {
+  const thread = usageLimitedThread("usage-limited");
+  using _environment = installFakeEnvironment([thread], { acceptCommands: true });
+  using _rpc = answerRpc(WS_METHODS.serverRefreshProviders, () =>
+    Effect.succeed({ providers: [] }),
+  );
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, { router: false });
+  await expect.element(page.getByRole("button", { name: "Cancel auto-resume" })).toBeVisible();
+  await page.getByRole("button", { name: "Resume now", exact: true }).click();
+
+  await vi.waitFor(() =>
+    expect(dispatchedCommands()).toContainEqual(
+      expect.objectContaining({
+        type: "message.dispatch",
+        manualContinuationOfRunId: thread.runs[0]!.id,
+      }),
+    ),
+  );
+});
+
+it("clears the usage warning when Codex reports restored allowance before the scheduled reset", async () => {
+  const thread = usageLimitedThread("external-codex-reset");
+  const providerAt = (checkedAt: string, usedPercent: number) =>
+    decodeProvider({
+      ...CODEX_PROVIDER,
+      usageLimits: {
+        checkedAt,
+        windows: [
+          {
+            id: "secondary",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent,
+            resetsAt: thread.limitRecovery.resetAt,
+          },
+        ],
+      },
+    });
+  const exhausted = providerAt("2026-03-18T00:00:00.000Z", 100);
+  const recovered = providerAt("2026-03-18T00:01:00.000Z", 0);
+  using _environment = installFakeEnvironment([thread], { providers: [exhausted] });
+  let current = exhausted;
+  const refresh = vi.fn((_input: { readonly instanceId?: string }) =>
+    emitProviderStatuses([current]).pipe(Effect.as({ providers: [current] })),
+  );
+  using _rpc = answerRpc(WS_METHODS.serverRefreshProviders, refresh);
+  using _visible = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const start = Date.parse("2098-01-01T00:00:00.000Z");
+  using time = vi.spyOn(Date, "now").mockReturnValue(start);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, { router: false });
+  await expect.element(page.getByText("Usage limit reached", { exact: true })).toBeVisible();
+  const targetedRefreshes = () =>
+    refresh.mock.calls.filter(([input]) => input.instanceId === recovered.instanceId).length;
+  await vi.waitFor(() => expect(targetedRefreshes()).toBeGreaterThan(0));
+
+  // Switch back from Codex after using a reset credit there.
+  refresh.mockClear();
+  current = recovered;
+  time.mockReturnValue(start + 11_000);
+  window.dispatchEvent(new FocusEvent("focus"));
+  await vi.waitFor(() => expect(targetedRefreshes()).toBeGreaterThan(0));
+  await expect
+    .element(page.getByText("Usage limit reached", { exact: true }))
+    .not.toBeInTheDocument();
+});
+
 it("opening a thread or returning to the window on a touch tablet does not focus the composer", async () => {
   const realMatchMedia = window.matchMedia.bind(window);
   using _touch = vi
@@ -898,13 +1025,13 @@ it("a mounted thread view lets go of the thread structures it has replaced", asy
 it("a shortcut conditioned on rightPanelOpen sees the thread's open right panel", async () => {
   await page.viewport(1280, 800);
   const thread = threadWithHistory("thread-panel-shortcut", 1);
+  const customKeybindings = compileResolvedKeybindingsConfig([
+    { key: "ctrl+t", command: "rightPanel.new", when: "rightPanelOpen && !terminalFocus" },
+    { key: "ctrl+t", command: "rightPanel.toggle", when: "!rightPanelOpen" },
+  ]);
+  const keybindings = mergeWithDefaultKeybindings(customKeybindings);
   using _environment = installFakeEnvironment([thread], {
-    keybindings: mergeWithDefaultKeybindings(
-      compileResolvedKeybindingsConfig([
-        { key: "ctrl+t", command: "rightPanel.new", when: "rightPanelOpen && !terminalFocus" },
-        { key: "ctrl+t", command: "rightPanel.toggle", when: "!rightPanelOpen" },
-      ]),
-    ),
+    keybindings,
   });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
@@ -921,6 +1048,11 @@ it("a shortcut conditioned on rightPanelOpen sees the thread's open right panel"
   const composer = page.getByTestId("composer-editor");
   const toggle = page.getByRole("button", { name: "Toggle right panel", exact: true });
   await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
+  // A connection reused from an earlier render keeps its previous config until an update arrives.
+  await act(() => emitKeybindings(keybindings));
+  await expect
+    .poll(() => appAtomRegistry.get(primaryServerKeybindingsAtom))
+    .toEqual(expect.arrayContaining([...customKeybindings]));
   await toggle.click();
   await page.getByRole("button", { name: /^Files/ }).click();
   await composer.click();

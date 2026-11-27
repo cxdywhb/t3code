@@ -957,8 +957,8 @@ export function ProfileModal({
   const [actionMode, setActionMode] = useState<IssueAutomationActionMode>(
     initial?.policy.actionMode ?? "fix_worktree_review",
   );
-  const driverKind = actionMode === "diagnose_only" ? "claudeAgent" : undefined;
-  const catalog = useOfficialModelCatalog(environmentId, driverKind);
+  const diagnosisOnly = actionMode === "diagnose_only";
+  const catalog = useOfficialModelCatalog(environmentId, diagnosisOnly);
 
   const firstConnector =
     connectors.find((c) => c.id === (initial?.connectorId ?? defaultConnectorId)) ?? connectors[0];
@@ -992,12 +992,10 @@ export function ProfileModal({
   const [primaryModel, setPrimaryModel] = useState<ModelSelection | null>(
     initial?.models.primaryModel ?? catalog.firstAvailableSelection,
   );
-  if (
-    (!primaryModel || (driverKind && !catalog.isSelectionAvailable(primaryModel))) &&
-    catalog.firstAvailableSelection
-  ) {
-    setPrimaryModel(catalog.firstAvailableSelection);
-  }
+  const resolvedPrimaryModel =
+    diagnosisOnly && !catalog.isSelectionAvailable(primaryModel)
+      ? catalog.firstAvailableSelection
+      : (primaryModel ?? catalog.firstAvailableSelection);
   const [highSeverityModel, setHighSeverityModel] = useState<ModelSelection | null>(
     initial?.models.highSeverityModel ?? null,
   );
@@ -1120,8 +1118,9 @@ export function ProfileModal({
   ].join(" · ");
   const primaryModelName =
     catalog.instanceEntries
-      .find((entry) => entry.instanceId === primaryModel?.instanceId)
-      ?.models.find((model) => model.slug === primaryModel?.model)?.name ?? primaryModel?.model;
+      .find((entry) => entry.instanceId === resolvedPrimaryModel?.instanceId)
+      ?.models.find((model) => model.slug === resolvedPrimaryModel?.model)?.name ??
+    resolvedPrimaryModel?.model;
   const modelSummary = [
     primaryModelName ?? gt("Select a model…"),
     highSeverityModel && gt("S1/S2"),
@@ -1162,10 +1161,6 @@ export function ProfileModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedPrimaryModel =
-      driverKind && !catalog.isSelectionAvailable(primaryModel)
-        ? catalog.firstAvailableSelection
-        : (primaryModel ?? catalog.firstAvailableSelection);
     if (!activeConnector || !scopeId || !primaryProject || !resolvedPrimaryModel) {
       if (!primaryProject) focusRuleField(repoField.current);
       else if (!resolvedPrimaryModel) focusRuleField(modelField.current);
@@ -1175,7 +1170,7 @@ export function ProfileModal({
 
     if (
       retryWithBackup &&
-      (!fallbackModel || (driverKind && !catalog.isSelectionAvailable(fallbackModel)))
+      (!fallbackModel || (diagnosisOnly && !catalog.isSelectionAvailable(fallbackModel)))
     ) {
       focusRuleField(backupField.current);
       setErrorText(gt("Choose a backup model to retry the task."));
@@ -1217,7 +1212,7 @@ export function ProfileModal({
         models: {
           primaryModel: resolvedPrimaryModel,
           highSeverityModel:
-            driverKind && !catalog.isSelectionAvailable(highSeverityModel)
+            diagnosisOnly && !catalog.isSelectionAvailable(highSeverityModel)
               ? null
               : highSeverityModel,
           triageModel: initial?.models.triageModel ?? null,
@@ -1541,8 +1536,8 @@ export function ProfileModal({
                   <RuleField title={gt("Primary diagnosis & fix model")}>
                     <OfficialModelPicker
                       environmentId={environmentId}
-                      value={primaryModel}
-                      driverKind={driverKind}
+                      value={resolvedPrimaryModel}
+                      diagnosisOnly={diagnosisOnly}
                       onChange={setPrimaryModel}
                       ariaLabel={gt("Primary model")}
                     />
@@ -1552,7 +1547,7 @@ export function ProfileModal({
                   <OfficialModelPicker
                     environmentId={environmentId}
                     value={highSeverityModel}
-                    driverKind={driverKind}
+                    diagnosisOnly={diagnosisOnly}
                     onChange={setHighSeverityModel}
                     ariaLabel={gt("High-severity model")}
                     emptyOptionLabel={gt("Same as primary")}
@@ -1599,7 +1594,7 @@ export function ProfileModal({
                       <OfficialModelPicker
                         environmentId={environmentId}
                         value={fallbackModel}
-                        driverKind={driverKind}
+                        diagnosisOnly={diagnosisOnly}
                         onChange={setFallbackModel}
                         ariaLabel={gt("Backup model")}
                         emptyOptionLabel={fallbackModel ? undefined : gt("Select a model…")}

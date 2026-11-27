@@ -23,6 +23,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   type VcsStatusStreamEvent,
+  type ServerConfigStreamEvent,
   type ModelSelection,
   type OrchestrationProjectShell,
   type OrchestrationV2Command,
@@ -245,6 +246,7 @@ export interface FakeThread {
   readonly providerThreads?: ReadonlyArray<OrchestrationV2ProviderThread>;
   readonly issues?: OrchestrationV2ThreadShell["issues"];
   readonly pullRequests?: OrchestrationV2ThreadShell["pullRequests"];
+  readonly limitRecovery?: OrchestrationV2ThreadShell["limitRecovery"];
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly runtimeRequests?: OrchestrationV2ThreadProjection["runtimeRequests"];
@@ -336,6 +338,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
     ...(thread.issues === undefined ? {} : { issues: thread.issues }),
     ...(thread.pullRequests === undefined ? {} : { pullRequests: thread.pullRequests }),
+    ...(thread.limitRecovery === undefined ? {} : { limitRecovery: thread.limitRecovery }),
     lineage: {
       rootThreadId: parentOf(thread) ?? thread.id,
       parentThreadId: parentOf(thread) ?? null,
@@ -397,6 +400,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
       archivedAt: null,
       settledOverride: shell.settledOverride,
       settledAt: shell.settledAt,
+      ...(shell.limitRecovery === undefined ? {} : { limitRecovery: shell.limitRecovery }),
       lastVisitedAt: AT,
       deletedAt: null,
     },
@@ -439,6 +443,7 @@ let pendingDispatches: Array<{
 let pendingAssetUrls: Array<Deferred.Deferred<AssetCreateUrlResult>> = [];
 let sequence = 1;
 let vcsStatusSubscriber: Queue.Queue<VcsStatusStreamEvent> | null = null;
+const serverConfigSubscribers = new Set<Queue.Queue<ServerConfigStreamEvent>>();
 
 const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>) => () => void) =>
   Stream.unwrap(
@@ -451,6 +456,15 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
       }
       return Stream.fromQueue(queue);
     }),
+  );
+
+const subscribeServerConfig = () =>
+  subscribe<ServerConfigStreamEvent>(
+    [{ version: 1, type: "snapshot", config: serverConfig() }],
+    (queue) => {
+      serverConfigSubscribers.add(queue);
+      return () => serverConfigSubscribers.delete(queue);
+    },
   );
 
 const handlers: Record<string, (input: never) => unknown> = {
@@ -553,8 +567,7 @@ const handlers: Record<string, (input: never) => unknown> = {
         if (vcsStatusSubscriber === queue) vcsStatusSubscriber = null;
       };
     }),
-  [WS_METHODS.subscribeServerConfig]: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  [WS_METHODS.subscribeServerConfig]: subscribeServerConfig,
 };
 
 // Unanswered calls stay pending, like a server that has not replied yet.
@@ -570,8 +583,7 @@ const client = new Proxy(handlers, {
 const session: EnvironmentConnectionLease["session"] = {
   client: client as unknown as WsRpcProtocolClient,
   initialConfig: Effect.sync(serverConfig),
-  subscribeServerConfig: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  subscribeServerConfig,
   ready: Effect.void,
   probe: Effect.void,
   inboundFrames: Effect.succeed(0),
@@ -741,3 +753,19 @@ export async function emitThreadEvent(
     } as OrchestrationV2ThreadStreamItem),
   );
 }
+
+export const emitProviderStatuses = (providers: ServerConfig["providers"]) =>
+  Effect.forEach(serverConfigSubscribers, (queue) =>
+    Queue.offer(queue, { version: 1, type: "providerStatuses", payload: { providers } }),
+  );
+
+export const emitKeybindings = (keybindings: ResolvedKeybindingsConfig) =>
+  Effect.runPromise(
+    Effect.forEach(serverConfigSubscribers, (queue) =>
+      Queue.offer(queue, {
+        version: 1,
+        type: "keybindingsUpdated",
+        payload: { keybindings, issues: [] },
+      }),
+    ),
+  );

@@ -5,10 +5,10 @@ import * as NodeTimersPromises from "node:timers/promises";
 
 const defaultTcpHosts = ["127.0.0.1", "localhost", "::1"];
 
-async function fileExists(filePath) {
+async function fileIsReady(filePath, updatedAfter) {
   try {
-    await NodeFSP.access(filePath);
-    return true;
+    const stat = await NodeFSP.stat(filePath);
+    return updatedAfter === undefined || stat.mtimeMs >= updatedAfter;
   } catch {
     return false;
   }
@@ -43,11 +43,21 @@ function tcpPortIsReady({ host, port, connectTimeoutMs = 500 }) {
   });
 }
 
-async function resolvePendingResources({ baseDir, files, tcpPort, tcpHosts, connectTimeoutMs }) {
+async function resolvePendingResources({
+  baseDir,
+  files,
+  updatedAfter,
+  tcpPort,
+  tcpHosts,
+  connectTimeoutMs,
+}) {
   const pendingFiles = [];
 
   for (const relativeFilePath of files) {
-    const ready = await fileExists(NodePath.resolve(baseDir, relativeFilePath));
+    const ready = await fileIsReady(
+      NodePath.resolve(baseDir, relativeFilePath),
+      updatedAfter?.get(relativeFilePath),
+    );
     if (!ready) {
       pendingFiles.push(relativeFilePath);
     }
@@ -74,6 +84,7 @@ async function resolvePendingResources({ baseDir, files, tcpPort, tcpHosts, conn
 export async function waitForResources({
   baseDir,
   files = [],
+  updatedAfter,
   intervalMs = 100,
   timeoutMs = 120_000,
   tcpHost,
@@ -91,6 +102,7 @@ export async function waitForResources({
     const { pendingFiles, tcpReady } = await resolvePendingResources({
       baseDir,
       files,
+      updatedAfter,
       tcpPort,
       tcpHosts,
       connectTimeoutMs,

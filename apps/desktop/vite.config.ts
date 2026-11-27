@@ -1,5 +1,4 @@
 import "vite-plus/test/config";
-import * as NodeOS from "node:os";
 
 import { defaultInclude, defineConfig } from "vite-plus";
 import { Rolldown } from "vite-plus/pack";
@@ -13,15 +12,7 @@ const domTests = ["src/preview/PickPreload.test.ts"];
 // Install only bundle externals; the server bundle already carries its dependency tree.
 const isMainProcessExternal = (id: string) =>
   id === "electron" || id.startsWith("electron/") || isDesktopRuntimeExternalDependency(id);
-const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
 const desktopOutDir = process.env.T3CODE_DESKTOP_BUNDLE_OUT_DIR ?? "dist-electron";
-// tsdown runs onSuccess through a shell. dash forks instead of exec'ing the last command, which
-// would leave an `sh` between `vp pack` and the supervisor and hide `vp pack` dying from it.
-const devElectronCommand =
-  // oxlint-disable-next-line t3code/no-global-process-runtime -- Build config has no Effect runtime.
-  NodeOS.platform() === "win32"
-    ? "node scripts/dev-electron.mjs"
-    : "exec node scripts/dev-electron.mjs";
 const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
@@ -66,14 +57,14 @@ export default defineConfig({
         cache: false,
       },
       dev: {
-        command:
-          "node scripts/build-browser-secret.mjs && node scripts/build-apple-speech.mjs && node scripts/build-preview-annotation-css.mjs && cross-env T3CODE_DESKTOP_DEV=1 vp pack --watch",
+        // Keep the Electron supervisor alive when pack reloads its configuration.
+        command: "cross-env T3CODE_DESKTOP_DEV=1 node scripts/dev-electron.mjs",
         dependsOn: ["t3#build"],
         cache: false,
       },
       "dev:bundle": {
         command:
-          "node scripts/build-browser-secret.mjs && node scripts/build-apple-speech.mjs && node scripts/build-preview-annotation-css.mjs && vp pack --watch",
+          "node scripts/build-browser-secret.mjs && node scripts/build-apple-speech.mjs && node scripts/build-preview-annotation-css.mjs && vp pack --watch --no-clean",
         cache: false,
       },
       "dev:electron": {
@@ -104,7 +95,6 @@ export default defineConfig({
         neverBundle: isMainProcessExternal,
         onlyBundle: false,
       },
-      ...(shouldLaunchElectronAfterPack ? { onSuccess: devElectronCommand } : {}),
     },
     {
       format: "cjs",

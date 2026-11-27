@@ -1,12 +1,17 @@
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+
+import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 
 import {
   desktopDir,
   resolveDevProtocolClient,
   resolveElectronLaunchCommand,
+  tryAcquireDevSupervisor,
 } from "./electron-launcher.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
@@ -54,6 +59,13 @@ const remoteDebuggingPort = process.env.T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT?.tr
 const hostPlatform = NodeOS.platform();
 const parentPid = process.ppid;
 const parentWatchIntervalMs = 1_000;
+const watchBuild = process.env.T3CODE_DESKTOP_DEV === "1";
+
+const owner = tryAcquireDevSupervisor();
+if (!owner) {
+  console.log("[dev-electron] A development launcher is already running in this checkout.");
+  process.exit(0);
+}
 
 NodeChildProcess.execFileSync(
   process.execPath,
@@ -66,13 +78,6 @@ NodeChildProcess.execFileSync(
   { stdio: "inherit" },
 );
 
-await waitForResources({
-  baseDir: desktopDir,
-  files: requiredFiles,
-  tcpHost: devServer.hostname,
-  tcpPort: port,
-});
-
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
 const devProtocolClient = resolveDevProtocolClient();
@@ -84,34 +89,46 @@ if (devProtocolClient) {
 let shuttingDown = false;
 let restartTimer = null;
 let currentApp = null;
+let appBundleDigest = null;
 let restartQueue = Promise.resolve();
-const expectedExits = new WeakSet();
 const watchers = [];
+let pack = null;
+
+function readBundleDigest() {
+  const hash = NodeCrypto.createHash("sha256");
+  try {
+    for (const file of requiredFiles) {
+      hash.update(
+        NodeCrypto.createHash("sha256")
+          .update(NodeFS.readFileSync(NodePath.join(desktopDir, file)))
+          .digest(),
+      );
+    }
+  } catch (cause) {
+    if (cause?.code === "ENOENT") return null;
+    throw cause;
+  }
+  return hash.digest("hex");
+}
 
 function killChildTreeByPid(pid, signal) {
-  if (hostPlatform === "win32" || typeof pid !== "number") {
-    return;
+  if (typeof pid !== "number") return false;
+  if (hostPlatform === "win32") {
+    return (
+      NodeChildProcess.spawnSync(
+        windowsSystem32Path(process.env, "taskkill.exe"),
+        ["/PID", String(pid), "/T", "/F"],
+        { stdio: "ignore", windowsHide: true, timeout: forcedShutdownTimeoutMs },
+      ).status === 0
+    );
   }
 
   NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
+  // pkill with a parent PID signals its children only.
+  return false;
 }
 
-function cleanupStaleDevApps() {
-  if (hostPlatform === "win32") {
-    return;
-  }
-
-  const escapedDesktopDir = desktopDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  NodeChildProcess.spawnSync(
-    "pkill",
-    ["-f", "--", `(^| )--t3code-dev-root=${escapedDesktopDir}( |$)`],
-    {
-      stdio: "ignore",
-    },
-  );
-}
-
-function startApp() {
+function startApp(bundleDigest) {
   if (shuttingDown || currentApp !== null) {
     return;
   }
@@ -130,37 +147,31 @@ function startApp() {
   });
 
   currentApp = app;
+  appBundleDigest = bundleDigest;
 
-  app.once("error", () => {
-    if (currentApp === app) {
-      currentApp = null;
-    }
-
-    if (!shuttingDown) {
-      scheduleRestart();
-    }
+  app.once("error", (error) => {
+    if (currentApp !== app) return;
+    currentApp = null;
+    console.error("[dev-electron] Could not start Electron. Waiting for a rebuild.", error);
   });
 
   app.once("exit", (code, signal) => {
-    if (currentApp === app) {
-      currentApp = null;
-    }
-
-    const exitedAbnormally = signal !== null || code !== 0;
-    if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
-      scheduleRestart();
+    if (currentApp !== app) return;
+    currentApp = null;
+    if (signal !== null || code !== 0) {
+      console.error(`[dev-electron] Electron exited (${signal ?? code}). Waiting for a rebuild.`);
     }
   });
 }
 
 async function stopApp() {
   const app = currentApp;
-  if (!app) {
-    return;
-  }
-
   currentApp = null;
-  expectedExits.add(app);
+  await stopChild(app);
+}
+
+async function stopChild(app) {
+  if (app?.pid === undefined || app.exitCode != null || app.signalCode != null) return;
 
   await new Promise((resolve) => {
     let settled = false;
@@ -175,18 +186,14 @@ async function stopApp() {
     };
 
     app.once("exit", finish);
-    app.kill("SIGTERM");
-    killChildTreeByPid(app.pid, "TERM");
-    cleanupStaleDevApps();
+    if (!killChildTreeByPid(app.pid, "TERM")) app.kill("SIGTERM");
 
     setTimeout(() => {
       if (settled) {
         return;
       }
 
-      app.kill("SIGKILL");
-      killChildTreeByPid(app.pid, "KILL");
-      cleanupStaleDevApps();
+      if (!killChildTreeByPid(app.pid, "KILL")) app.kill("SIGKILL");
       finish();
     }, forcedShutdownTimeoutMs).unref();
   });
@@ -206,9 +213,11 @@ function scheduleRestart() {
     restartQueue = restartQueue
       .catch(() => undefined)
       .then(async () => {
+        const digest = readBundleDigest();
+        if (digest === null || (currentApp !== null && digest === appBundleDigest)) return;
         await stopApp();
         if (!shuttingDown) {
-          startApp();
+          startApp(digest);
         }
       });
   }, restartDebounceMs);
@@ -255,19 +264,16 @@ async function shutdown(exitCode) {
     watcher.close();
   }
 
-  await stopApp();
+  await Promise.all([stopApp(), stopChild(pack)]);
   killChildTree("TERM");
   await new Promise((resolve) => {
     setTimeout(resolve, childTreeGracePeriodMs);
   });
   killChildTree("KILL");
 
+  owner.close();
   process.exit(exitCode);
 }
-
-startWatchers();
-cleanupStaleDevApps();
-startApp();
 
 process.once("SIGINT", () => {
   void shutdown(130);
@@ -288,4 +294,54 @@ if (hostPlatform !== "win32") {
       void shutdown(129);
     }
   }, parentWatchIntervalMs).unref();
+}
+
+try {
+  let updatedAfter;
+  if (watchBuild) {
+    NodeChildProcess.execFileSync(
+      process.execPath,
+      [NodePath.join(desktopDir, "scripts/build-preview-annotation-css.mjs")],
+      { stdio: "inherit" },
+    );
+    const require = NodeModule.createRequire(NodePath.join(desktopDir, "package.json"));
+    const vp = NodePath.join(
+      NodePath.dirname(require.resolve("vite-plus/package.json")),
+      "bin",
+      "vp",
+    );
+    const startedAt = Date.now();
+    updatedAfter = new Map(
+      requiredFiles
+        .filter((file) => file.startsWith("dist-electron/"))
+        .map((file) => [file, startedAt]),
+    );
+    pack = NodeChildProcess.spawn(process.execPath, [vp, "pack", "--watch", "--no-clean"], {
+      cwd: desktopDir,
+      env: childEnv,
+      stdio: "inherit",
+    });
+    pack.once("error", (error) => {
+      console.error("[dev-electron] Could not start the bundle watcher.", error);
+      void shutdown(1);
+    });
+    pack.once("exit", (code) => void shutdown(code ?? 1));
+  }
+
+  await waitForResources({
+    baseDir: desktopDir,
+    files: requiredFiles,
+    updatedAfter,
+    tcpHost: devServer.hostname,
+    tcpPort: port,
+  });
+
+  if (!shuttingDown) {
+    startWatchers();
+    const digest = readBundleDigest();
+    if (digest !== null) startApp(digest);
+  }
+} catch (error) {
+  console.error("[dev-electron] Could not start desktop development.", error);
+  await shutdown(1);
 }

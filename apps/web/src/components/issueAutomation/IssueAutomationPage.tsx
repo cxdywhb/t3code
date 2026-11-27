@@ -34,6 +34,7 @@ import {
   LayersIcon,
   MessageSquareIcon,
   PanelRightIcon,
+  PauseIcon,
   PencilIcon,
   PlayIcon,
   Plug2Icon,
@@ -147,6 +148,7 @@ import {
   cleanIssueText,
   formatIssueNumber,
   isStageActive,
+  isTaskCancellable,
   RemoteIssueStatusGlyph,
   SeverityIndicator,
   StageBadge,
@@ -329,14 +331,14 @@ export function IssueAutomationPage() {
     validModelKeys: [],
   });
 
-  const driverKind = resolvedTargets.actionMode === "diagnose_only" ? "claudeAgent" : undefined;
-  const catalog = useOfficialModelCatalog(environmentId, driverKind);
+  const diagnosisOnly = resolvedTargets.actionMode === "diagnose_only";
+  const catalog = useOfficialModelCatalog(environmentId, diagnosisOnly);
   const resolvedProjectId = resolvedTargets.projectId;
   const resolvedModelSelection = resolvePersistedModelSelection({
     prefs,
     scopeKey: scopePrefKey,
     profilePrimaryModel: matchedScopeProfile?.models.primaryModel,
-    ...(driverKind || catalog.pickableEntries.length > 0
+    ...(diagnosisOnly || catalog.pickableEntries.length > 0
       ? { isSelectionAvailable: catalog.isSelectionAvailable }
       : {}),
     fallbackSelection: catalog.firstAvailableSelection,
@@ -519,9 +521,7 @@ export function IssueAutomationPage() {
   const deleteConnectorCmd = useAtomCommand(issueAutomationEnvironment.deleteConnector, {
     reportFailure: false,
   });
-  const setProfileEnabledCmd = useAtomCommand(issueAutomationEnvironment.setProfileEnabled, {
-    reportFailure: false,
-  });
+  const setProfileEnabledCmd = useAtomCommand(issueAutomationEnvironment.setProfileEnabled);
   const deleteProfileCmd = useAtomCommand(issueAutomationEnvironment.deleteProfile, {
     reportFailure: false,
   });
@@ -687,7 +687,7 @@ export function IssueAutomationPage() {
     const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
       resolvedModelSelection ??
-      (driverKind ? null : matchedScopeProfile?.models.primaryModel) ??
+      (diagnosisOnly ? null : matchedScopeProfile?.models.primaryModel) ??
       catalog.firstAvailableSelection ??
       null;
 
@@ -705,6 +705,9 @@ export function IssueAutomationPage() {
     const mergedLinkedIds = baseLinkedIds.includes(chosenProjectId)
       ? baseLinkedIds
       : [chosenProjectId, ...baseLinkedIds];
+    const profileModels = matchedScopeProfile?.models;
+    const availableOverride = (selection: ModelSelection | null | undefined) =>
+      diagnosisOnly && !catalog.isSelectionAvailable(selection) ? null : (selection ?? null);
 
     setDispatching(true);
     const res = await analyzeIssuesCmd({
@@ -722,10 +725,10 @@ export function IssueAutomationPage() {
         },
         overrideModels: {
           primaryModel: chosenModel,
-          highSeverityModel: matchedScopeProfile?.models.highSeverityModel ?? null,
-          triageModel: matchedScopeProfile?.models.triageModel ?? null,
-          reviewModel: matchedScopeProfile?.models.reviewModel ?? null,
-          fallbackModel: matchedScopeProfile?.models.fallbackModel ?? null,
+          highSeverityModel: availableOverride(profileModels?.highSeverityModel),
+          triageModel: profileModels?.triageModel ?? null,
+          reviewModel: profileModels?.reviewModel ?? null,
+          fallbackModel: availableOverride(profileModels?.fallbackModel),
         },
         overridePolicy: {
           actionMode: resolvedActionMode,
@@ -865,6 +868,7 @@ export function IssueAutomationPage() {
   const groupCounts = {
     all: taskGroups.length,
     active: 0,
+    paused: 0,
     needs_human: 0,
     completed: 0,
     failed: 0,
@@ -873,12 +877,14 @@ export function IssueAutomationPage() {
   const filteredGroups = taskGroups.filter(({ latest, attempts }) => {
     const stage = latest.stage;
     const filter =
-      stage === "needs_human" || stage === "completed"
-        ? stage
+      stage === "cancelled"
+        ? "all"
         : isStageActive(stage)
           ? "active"
-          : "failed";
-    groupCounts[filter] += 1;
+          : stage === "needs_human" || stage === "completed" || stage === "paused"
+            ? stage
+            : "failed";
+    if (filter !== "all") groupCounts[filter] += 1;
     return (
       (runFilter === "all" || runFilter === filter) &&
       (!query ||
@@ -1264,7 +1270,7 @@ export function IssueAutomationPage() {
 
                   {environmentId && catalog.pickableEntries.length > 0 ? (
                     <OfficialModelPicker
-                      driverKind={driverKind}
+                      diagnosisOnly={diagnosisOnly}
                       environmentId={environmentId}
                       value={resolvedModelSelection}
                       onChange={(next) => {
@@ -1538,6 +1544,17 @@ export function IssueAutomationPage() {
                         ) : null}
                       </span>
                     </Toggle>
+                    {groupCounts.paused > 0 || runFilter === "paused" ? (
+                      <Toggle value="paused">
+                        <span className="inline-flex items-center gap-1.5">
+                          <PauseIcon />
+                          <T context="run status">Paused</T>
+                          <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                            {groupCounts.paused}
+                          </span>
+                        </span>
+                      </Toggle>
+                    ) : null}
                     <Toggle value="needs_human">
                       <span className="inline-flex items-center gap-1.5">
                         <CircleAlertIcon />
@@ -1655,9 +1672,7 @@ export function IssueAutomationPage() {
                       const repoTitle =
                         envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
                       const hasHistory = attempts.length > 1;
-                      const canCancel =
-                        isStageActive(task.stage) &&
-                        (task.stage !== "cancelling" || task.lastError !== null);
+                      const canCancel = isTaskCancellable(task);
                       return (
                         <Collapsible key={key}>
                           <div
@@ -2000,7 +2015,7 @@ export function IssueAutomationPage() {
 
                       {environmentId ? (
                         <OfficialModelPicker
-                          driverKind={driverKind}
+                          diagnosisOnly={diagnosisOnly}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {

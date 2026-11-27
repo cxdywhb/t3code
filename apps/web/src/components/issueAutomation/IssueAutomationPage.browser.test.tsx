@@ -7,6 +7,7 @@ import {
   WS_METHODS,
   type IssueAutomationAnalyzeIssuesInput,
   type IssueAutomationListRemoteIssuesInput,
+  type IssueAutomationSaveProfileInput,
   type IssueAutomationRemoteIssue,
   type IssueAutomationStateSnapshot,
   type IssueAutomationTask,
@@ -24,6 +25,8 @@ import { AppRoot } from "~/AppRoot";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
   PROJECT_ID,
   answerRpc,
   installFakeEnvironment,
@@ -43,6 +46,16 @@ vi.mock("../../../../../packages/client-runtime/src/connection/driver.ts", async
 it("scans without dispatching and opens diagnosis, repair and ZenTao sync from the task report", async () => {
   using _environment = installFakeEnvironment([], {
     capabilities: { issueAutomationRepair: true },
+    providers: [
+      CLAUDE_PROVIDER,
+      {
+        ...CODEX_PROVIDER,
+        supportsReadOnlyDiagnosis: true,
+        models: CODEX_PROVIDER.models.map((model) =>
+          model.slug === "gpt-5.4" ? { ...model, supportsReadOnlyDiagnosis: false } : model,
+        ),
+      },
+    ],
   });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
@@ -117,7 +130,10 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
         scopeName: scope.name,
         repositories: { primaryProjectId: PROJECT_ID, linkedProjectIds: [], moduleMappings: [] },
         models: {
-          primaryModel: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          primaryModel: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-4-6",
+          },
           triageModel: null,
           highSeverityModel: null,
           reviewModel: null,
@@ -155,6 +171,10 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
     ],
     activeRunCount: 0,
   };
+  const savedModels = vi.fn((input: IssueAutomationSaveProfileInput) =>
+    Effect.succeed({ ...snapshot.profiles[0]!, models: input.models }),
+  );
+  using _saveProfile = answerRpc(WS_METHODS.issueAutomationSaveProfile, savedModels);
   const diagnosis = snapshot.tasks[1]!;
   const repair = {
     ...diagnosis,
@@ -163,7 +183,13 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
     actionMode: "fix_worktree_review",
     stage: "needs_human",
     createdAt: "2026-11-24T01:00:00.000Z",
-    diagnosisReport: "Applied and tested the repair",
+    diagnosisReport: [
+      "Applied and tested the repair",
+      "",
+      "## 禅道评论",
+      "问题原因：保存记录后，列表仍显示旧数据。",
+      "解决方案：保存成功后会刷新列表。",
+    ].join("\n"),
     worktreeBranch: "fix/zentao-312",
   } satisfies IssueAutomationTask;
   let current = snapshot;
@@ -256,10 +282,42 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await expect
     .element(page.getByRole("switch", { name: /Unconfirmed mobile issues/ }))
     .not.toBeChecked();
+  await page.getByRole("button", { name: "Edit", exact: true }).last().click();
+  const profileDialog = page.getByRole("dialog", { name: "Edit unattended rule" });
+  await expect
+    .element(profileDialog.getByRole("combobox", { name: "Execution mode" }))
+    .toHaveTextContent("Diagnose the root cause only");
+  const primary = profileDialog.getByRole("button", { name: /Primary model/ });
+  await expect.element(primary).toHaveTextContent("Opus 4.6");
+  await primary.click();
+  await page.getByPlaceholder("Search models...").fill("Opus");
+  await expect.element(page.getByRole("option", { name: /Opus 4.6/ })).toBeVisible();
+  await page.getByPlaceholder("Search models...").fill("GPT-5");
+  await expect.element(page.getByRole("option", { name: /GPT-5.5/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /GPT-5.4/ })).not.toBeInTheDocument();
+  await page.getByRole("option", { name: /GPT-5.5/ }).click();
+  await expect
+    .element(profileDialog.getByRole("button", { name: /Cross-review model/ }))
+    .toBeDisabled();
+  const backgroundPolling = profileDialog.getByRole("switch", {
+    name: "Enable background polling",
+  });
+  await expect.element(backgroundPolling).not.toBeChecked();
+  await backgroundPolling.click();
+  expect(savedModels).not.toHaveBeenCalled();
+  await profileDialog.getByRole("button", { name: "Save rule" }).click();
+  await expect.element(profileDialog).not.toBeInTheDocument();
+  expect(savedModels).toHaveBeenCalledWith(
+    expect.objectContaining({
+      enabled: true,
+      models: expect.objectContaining({ primaryModel: { instanceId: "codex", model: "gpt-5.5" } }),
+    }),
+  );
   await page.getByRole("button", { name: "Scan now" }).click();
   await expect.element(page.getByText("Pairing screen stays blank")).toBeVisible();
   await expect.element(page.getByText("Pairing already confirmed")).not.toBeInTheDocument();
   const scanInput = {
+    supportsPauseStages: true,
     connectorId,
     scopeId: scope.id,
     browseType: "unresolved",
@@ -321,6 +379,8 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await page.getByRole("option", { name: "v1.2.0" }).click();
   await comment.click();
   await expect.element(dialog.getByText("Comment preview")).toBeVisible();
+  await expect.element(dialog.getByText(/解决方案：保存成功后会刷新列表。/)).toBeVisible();
+  await expect.element(dialog.getByText("Applied and tested the repair")).not.toBeInTheDocument();
   await submit.click();
   await expect.element(dialog).not.toBeInTheDocument();
   expect(writeBack).toHaveBeenCalledExactlyOnceWith({

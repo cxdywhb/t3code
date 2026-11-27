@@ -9236,6 +9236,22 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ),
       );
       assert.strictEqual(yield* store.getLimitRecoveryWakeAt(now), DateTime.toEpochMillis(reset));
+      const refreshedAt = DateTime.formatIso(DateTime.add(now, { seconds: 1 }));
+      const restored = (yield* store.getLimitRecoveryCandidates({
+        ...recoveryOptions,
+        codexAllowanceCheckedAt: { [original.providerInstanceId]: refreshedAt },
+      })).find((row) => row.id === threadId);
+      assert.equal(restored?.earlyResumeCheckedAt, refreshedAt);
+      assert.equal(
+        limitRecoveryCommand(restored!, false, DateTime.toEpochMillis(now))?.type,
+        "message.dispatch",
+      );
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({
+          ...recoveryOptions,
+          codexAllowanceCheckedAt: { "another-account": refreshedAt },
+        })).find((row) => row.id === threadId),
+      );
       assert.isNull(yield* store.getLimitRecoveryWakeAt(reset));
       const due = (yield* store.getLimitRecoveryCandidates({
         ...recoveryOptions,
@@ -9262,6 +9278,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       assert.strictEqual(
         yield* store.getLimitRecoveryWakeAt(reset),
         DateTime.toEpochMillis(DateTime.add(reset, { minutes: 1 })),
+      );
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({
+          ...recoveryOptions,
+          codexAllowanceCheckedAt: { [original.providerInstanceId]: refreshedAt },
+        })).find((row) => row.id === threadId),
       );
       yield* sql`UPDATE orchestration_v2_projection_threads
         SET payload_json = json_set(payload_json, '$.snoozedUntil', NULL, '$.limitRecovery.autoResume', json('false'))

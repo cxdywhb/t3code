@@ -50,6 +50,7 @@ import type {
   ServerConfig as T3ServerConfig,
   UsageLimitsReport,
   RunId,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
 import {
   appendCodexArtifactTemplateUsePrompt,
@@ -127,7 +128,11 @@ import {
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
+import {
+  CODEX_USAGE_LIMIT_CODE,
+  codexAvailableAllowanceCheckedAt,
+  collectProviderUsageLimits,
+} from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import {
@@ -170,6 +175,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
+import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScopeDenied } from "../../state/session";
 import type { PendingUserInputDraftAnswer } from "@t3tools/client-runtime/state/pending-user-input";
 import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
@@ -240,6 +246,7 @@ export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly canOperateThread: boolean;
   readonly selectedThread: EnvironmentThreadShell;
+  readonly limitedRunProviderInstanceId?: ProviderInstanceId | undefined;
   /** Use this for detail reads; it stays null until queued creation reaches the server. */
   readonly selectedThreadDetailRef: ScopedThreadRef | null;
   readonly contentPresentation: ThreadContentPresentation;
@@ -304,6 +311,7 @@ export interface ThreadDetailScreenProps {
   readonly onStopThread: () => void;
   /** Present while the thread's queue is held. */
   readonly onResumeQueue: (() => Promise<void>) | null;
+  readonly onResumeLimitedRun?: () => Promise<void>;
   readonly offersSideChat: boolean;
   readonly onSendMessage: (
     followUp?: ActiveTurnComposerAction,
@@ -631,6 +639,44 @@ function ThreadDetailBody(
   const configLoaded = props.serverConfig !== null;
   const snoozed = configLoaded && effectiveSnoozed(props.selectedThread, { now: lifecycleNow });
   const snoozedUntil = props.selectedThread.snoozedUntil;
+  const limitedCodexInstanceId =
+    props.selectedThread.runtime?.status === "failed" &&
+    props.selectedThread.runtime.lastErrorClass === "usage_limit" &&
+    props.selectedThread.runtime.lastErrorCode === CODEX_USAGE_LIMIT_CODE
+      ? props.limitedRunProviderInstanceId
+      : undefined;
+  const limitedCodex = props.serverConfig?.providers.find(
+    (provider) =>
+      provider.driver === "codex" &&
+      provider.enabled &&
+      provider.instanceId === limitedCodexInstanceId,
+  );
+  const allowanceCheckedAt = codexAvailableAllowanceCheckedAt(limitedCodex);
+  const allowanceRecovered =
+    allowanceCheckedAt !== undefined &&
+    Date.parse(allowanceCheckedAt) >
+      Date.parse(props.selectedThread.latestRun?.completedAt ?? props.selectedThread.updatedAt);
+  const refreshLimitedProvider = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  const refreshCodexInstanceId = allowanceRecovered ? undefined : limitedCodex?.instanceId;
+  const refreshCodexAllowance = useEffectEvent(() => {
+    if (refreshCodexInstanceId !== undefined && navigation.isFocused()) {
+      void refreshLimitedProvider({
+        environmentId: props.environmentId,
+        input: { instanceId: refreshCodexInstanceId },
+      });
+    }
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- rechecks an externally reset Codex account when the app returns to the foreground
+  useEffect(() => {
+    if (refreshCodexInstanceId === undefined) return;
+    if (AppState.currentState === "active") refreshCodexAllowance();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") refreshCodexAllowance();
+    });
+    return () => subscription.remove();
+  }, [refreshCodexInstanceId]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- arms a timer that refreshes the lifecycle clock when the thread's snooze expires
   useEffect(() => {
     if (!snoozed || snoozedUntil === null) return;
@@ -644,16 +690,17 @@ function ThreadDetailBody(
   // The usage-limit recovery card shows this snooze and its Wake now.
   const lifecycleSnoozed =
     snoozed &&
-    !limitRecoveryOwnsSnooze({
-      runId:
-        props.selectedThread.runtime?.status === "failed" &&
-        props.selectedThread.runtime.lastErrorClass === "usage_limit"
-          ? props.selectedThread.latestRun?.runId
-          : null,
-      resetAt: props.selectedThread.runtime?.usageLimitResetAt,
-      recovery: props.selectedThread.limitRecovery,
-      snoozedUntil,
-    });
+    (allowanceRecovered ||
+      !limitRecoveryOwnsSnooze({
+        runId:
+          props.selectedThread.runtime?.status === "failed" &&
+          props.selectedThread.runtime.lastErrorClass === "usage_limit"
+            ? props.selectedThread.latestRun?.runId
+            : null,
+        resetAt: props.selectedThread.runtime?.usageLimitResetAt,
+        recovery: props.selectedThread.limitRecovery,
+        snoozedUntil,
+      }));
   const settled = configLoaded && props.selectedThread.settledOverride === "settled";
   const wokeAt = configLoaded ? threadWokeAt(props.selectedThread, { now: lifecycleNow }) : null;
   const woke = isThreadWokeUnseen({
@@ -1733,11 +1780,16 @@ function ThreadDetailBody(
                         />
                       </Animated.View>
                     ) : null}
-                    <UsageLimitRecoveryCard
-                      key={props.selectedThread.latestRun?.runId}
-                      thread={props.selectedThread}
-                      environmentId={props.environmentId}
-                    />
+                    {allowanceRecovered ? null : (
+                      <UsageLimitRecoveryCard
+                        key={props.selectedThread.latestRun?.runId}
+                        thread={props.selectedThread}
+                        environmentId={props.environmentId}
+                        {...(props.onResumeLimitedRun
+                          ? { onResumeNow: props.onResumeLimitedRun }
+                          : {})}
+                      />
+                    )}
                     <ChildThreadApprovals
                       threadRef={props.selectedThreadDetailRef}
                       maxHeight={pendingUserInputMaxHeight}

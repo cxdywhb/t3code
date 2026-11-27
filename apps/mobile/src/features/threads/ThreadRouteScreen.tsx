@@ -392,6 +392,11 @@ function ThreadRouteContent(
   );
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  const limitedRunProviderInstanceId =
+    selectedThread?.runtime?.lastErrorClass === "usage_limit"
+      ? selectedThreadDetail?.runs.find((run) => run.id === selectedThread.latestRun?.runId)
+          ?.providerInstanceId
+      : undefined;
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const startSideChat = useStartSideChat();
   const composer = useThreadComposerState({ startSideChat });
@@ -1065,6 +1070,7 @@ function ThreadRouteContent(
         canOperateThread={canOperateThread}
         selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
         selectedThreadDetailRef={selectedThreadDetailRef}
+        limitedRunProviderInstanceId={limitedRunProviderInstanceId}
         contentPresentation={contentPresentation}
         screenTone={connectionTone(
           routeConnectionState,
@@ -1140,6 +1146,11 @@ function ThreadRouteContent(
         serverConfig={serverConfig}
         onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
         onResumeQueue={composer.canResume ? handleResumeQueue : null}
+        {...(canOperateThread &&
+        composer.canResume &&
+        composer.resumableRunId === selectedThread?.latestRun?.runId
+          ? { onResumeLimitedRun: handleResumeQueue }
+          : {})}
         onSendMessage={composer.onSendMessage}
         offersSideChat={composer.sideChatUnavailableReason === null}
         onSendCommand={composer.onSendCommand}

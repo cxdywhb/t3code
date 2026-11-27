@@ -209,7 +209,7 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "updatedAt"
   | "limitRecovery"
   | "snoozedUntil"
->;
+> & { readonly earlyResumeCheckedAt?: string };
 
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
@@ -681,6 +681,7 @@ export interface ProjectionStoreV2Shape {
     readonly now: DateTime.Utc;
     readonly autoResume: boolean;
     readonly snooze: boolean;
+    readonly codexAllowanceCheckedAt?: Readonly<Record<string, string>>;
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
   /** Epoch ms of the next armed reset or snooze end after `now`, when a waiting thread becomes a candidate. */
   readonly getLimitRecoveryWakeAt: (
@@ -1357,6 +1358,9 @@ const shellIndexLineage = (row: {
 });
 
 const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const encodeAllowanceChecks = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);
 
 // Empty filters still scan SQLite rows; short-circuit them, including turnItemTypes: [].
 const matchesNothing = (...filters: ReadonlyArray<ReadonlyArray<unknown> | undefined>) =>
@@ -5024,9 +5028,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly completed_at: string | null;
           readonly failure_payload_json: string;
           readonly last_error: string | null;
+          readonly early_resume_checked_at: string | null;
         }>`
           SELECT t.payload_json, r.run_id, r.completed_at,
             item.payload_json AS failure_payload_json,
+            allowance.value AS early_resume_checked_at,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
               -- Keep bindings outermost: one provider instance can hold every session.
@@ -5060,6 +5066,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
             LIMIT 1
           )
+          LEFT JOIN json_each(${encodeAllowanceChecks(options.codexAllowanceCheckedAt ?? {})}) allowance
+            ON allowance.key = r.provider_instance_id
+            AND r.provider_instance_id = t.provider_instance_id
+            AND CASE WHEN json_valid(item.payload_json)
+              THEN json_extract(item.payload_json, '$.failure.code') = 'usageLimitExceeded' ELSE 0 END
+            AND julianday(allowance.value) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
           WHERE t.deleted_at IS NULL
             -- The sweep runs every scheduler tick. Without this list the latest-run
             -- lookup above sorts every run of every thread, tens of milliseconds
@@ -5083,10 +5095,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
                 AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
                 AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
-                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                AND (
+                  julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                  OR allowance.key IS NOT NULL
+                )
                 AND (
                   json_extract(t.payload_json, '$.snoozedUntil') IS NULL
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
+                  OR (
+                    allowance.key IS NOT NULL
+                    AND json_extract(t.payload_json, '$.limitRecovery.snooze') = 1
+                    AND julianday(json_extract(t.payload_json, '$.snoozedUntil')) =
+                      julianday(json_extract(item.payload_json, '$.failure.resetAt'))
+                  )
                 )
               )
               OR (
@@ -5140,6 +5161,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             pendingRuntimeRequest: null,
             limitRecovery: thread.limitRecovery ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
+            ...(row.early_resume_checked_at === null
+              ? {}
+              : { earlyResumeCheckedAt: row.early_resume_checked_at }),
           });
         }
         return candidates;

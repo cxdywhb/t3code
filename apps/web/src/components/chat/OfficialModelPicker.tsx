@@ -3,7 +3,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   type ModelSelection,
-  type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
 import { createModelSelection, pickModelSelection } from "@t3tools/shared/model";
@@ -15,14 +14,13 @@ import { useState } from "react";
 
 import { mergeEnvironmentSettings, useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
-import { getCustomModelOptionsByInstance } from "~/modelSelection";
+import { getAppModelOptionsForInstance, getCustomModelOptionsByInstance } from "~/modelSelection";
 import {
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
   providerInstanceEntriesFor,
-  type ProviderInstanceEntry,
 } from "~/providerInstances";
-import { useEnvironmentProviders } from "~/state/environments";
+import { useEnvironment, useEnvironmentProviders } from "~/state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { Button } from "../ui/button";
 import { SETTINGS_PICKER_TRIGGER_CLASSNAME } from "../settings/settingsLayout";
@@ -33,18 +31,12 @@ import type { TraitsSelectionInput } from "./TraitsPicker";
 
 const noEnvironmentSettingsAtom = Atom.make<ServerSettings | null>(null);
 
-export interface OfficialModelCatalog {
-  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
-  readonly pickableEntries: ReadonlyArray<ProviderInstanceEntry>;
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly firstAvailableSelection: ModelSelection | null;
-  readonly isSelectionAvailable: (selection: ModelSelection | null | undefined) => boolean;
-}
-
 export function useOfficialModelCatalog(
   environmentId: EnvironmentId | null,
-  driverKind?: string,
-): OfficialModelCatalog {
+  diagnosisOnly = false,
+) {
+  const legacyDiagnosisDrivers = useEnvironment(diagnosisOnly ? environmentId : null)?.serverConfig
+    ?.environment.capabilities.issueAutomationDiagnosisDrivers;
   const providersByEnvironment = useEnvironmentProviders();
   const providers =
     (environmentId ? providersByEnvironment.get(environmentId) : undefined) ??
@@ -56,8 +48,27 @@ export function useOfficialModelCatalog(
     mergeEnvironmentSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, clientSettings),
   );
   const entries = providerInstanceEntriesFor(providers, settings, null);
-  const instanceEntries = driverKind
-    ? entries.filter((entry) => entry.driverKind === driverKind)
+  const instanceEntries = diagnosisOnly
+    ? entries
+        .filter(
+          (entry) =>
+            entry.snapshot.supportsReadOnlyDiagnosis ??
+            (legacyDiagnosisDrivers === undefined
+              ? entry.driverKind === "claudeAgent"
+              : legacyDiagnosisDrivers.includes(entry.driverKind)),
+        )
+        .map((entry) => {
+          const configuredModels = new Set(
+            getAppModelOptionsForInstance(settings, entry).map((model) => model.slug),
+          );
+          return {
+            ...entry,
+            models: entry.models.filter(
+              (model) =>
+                model.supportsReadOnlyDiagnosis !== false && configuredModels.has(model.slug),
+            ),
+          };
+        })
     : entries;
   const pickableEntries = instanceEntries.filter(
     (entry) => isProviderInstancePickerVisible(entry) && entry.models.length > 0,
@@ -82,6 +93,7 @@ export function useOfficialModelCatalog(
     instanceEntries,
     pickableEntries,
     providers,
+    settings,
     firstAvailableSelection,
     isSelectionAvailable,
   };
@@ -99,7 +111,7 @@ export function OfficialModelPicker({
   triggerClassName,
   disabled = false,
   workspaceCwd = null,
-  driverKind,
+  diagnosisOnly = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly value: ModelSelection | null;
@@ -112,42 +124,17 @@ export function OfficialModelPicker({
   readonly triggerClassName?: string;
   readonly disabled?: boolean;
   readonly workspaceCwd?: string | null;
-  readonly driverKind?: string | undefined;
+  readonly diagnosisOnly?: boolean;
 }) {
   const gt = useGT();
   const messages = useMessages();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
-  const providersByEnvironment = useEnvironmentProviders();
-  const providers = providersByEnvironment.get(environmentId) ?? EMPTY_SERVER_PROVIDERS;
-  const serverSettings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
-  const settings = useClientSettings((clientSettings) =>
-    mergeEnvironmentSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, clientSettings),
-  );
-  const entries = providerInstanceEntriesFor(providers, settings, null);
-  const instanceEntries = driverKind
-    ? entries.filter((entry) => entry.driverKind === driverKind)
-    : entries;
-  const pickableEntries = instanceEntries.filter(
-    (entry) => isProviderInstancePickerVisible(entry) && entry.models.length > 0,
-  );
-  const fallbackEntry =
-    pickableEntries.find((entry) => isProviderInstancePickerReady(entry)) ??
-    pickableEntries[0] ??
-    null;
-  const fallbackModel =
-    fallbackEntry?.models.find((m) => m.isDefault) ?? fallbackEntry?.models[0] ?? null;
-  const fallbackSelection =
-    fallbackEntry && fallbackModel
-      ? createModelSelection(fallbackEntry.instanceId, fallbackModel.slug)
-      : null;
-
-  const selected =
-    driverKind && !pickableEntries.some((entry) => entry.instanceId === value?.instanceId)
-      ? null
-      : value;
-  const effectiveSelection = selected ?? fallbackSelection;
+  const catalog = useOfficialModelCatalog(environmentId, diagnosisOnly);
+  const { settings, providers, instanceEntries, firstAvailableSelection } = catalog;
+  const selected = diagnosisOnly && !catalog.isSelectionAvailable(value) ? null : value;
+  const effectiveSelection = selected ?? firstAvailableSelection;
   if (!effectiveSelection) {
     return (
       <button
@@ -164,12 +151,23 @@ export function OfficialModelPicker({
     );
   }
 
-  const modelOptionsByInstance = getCustomModelOptionsByInstance(
+  const options = getCustomModelOptionsByInstance(
     settings,
     providers,
     effectiveSelection.instanceId,
     effectiveSelection.model,
   );
+  const modelOptionsByInstance = diagnosisOnly
+    ? new Map(
+        instanceEntries.map((entry) => {
+          const allowedModels = new Set(entry.models.map((model) => model.slug));
+          return [
+            entry.instanceId,
+            (options.get(entry.instanceId) ?? []).filter((model) => allowedModels.has(model.slug)),
+          ];
+        }),
+      )
+    : options;
   const activeEntry =
     instanceEntries.find((entry) => entry.instanceId === effectiveSelection.instanceId) ?? null;
 

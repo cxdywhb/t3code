@@ -1,9 +1,16 @@
-import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/contracts";
+import {
+  CommandId,
+  MessageId,
+  type OrchestrationV2Command,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import { codexAvailableAllowanceCheckedAt } from "@t3tools/shared/usageLimits";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import type { OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -55,13 +62,15 @@ export function limitRecoveryCommand(
       },
     };
   }
-  if (
-    !recovery.autoResume ||
-    resetMs > nowMs ||
-    (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs)
-  )
+  const early = resetMs > nowMs;
+  const snoozedUntil =
+    thread.snoozedUntil == null ? 0 : DateTime.toEpochMillis(thread.snoozedUntil);
+  const snoozeBlocks =
+    snoozedUntil > nowMs && !(early && recovery.snooze && snoozedUntil === resetMs);
+  if (!recovery.autoResume || (early && thread.earlyResumeCheckedAt === undefined) || snoozeBlocks)
     return null;
-  const deliveryIdentity = `${identity}:${recovery.requestId ?? "legacy"}`;
+  // A rejected early delivery must leave the regular reset-time delivery available.
+  const deliveryIdentity = `${identity}:${recovery.requestId ?? "legacy"}${early ? `:early:${thread.earlyResumeCheckedAt}` : ""}`;
   return {
     type: "message.dispatch",
     commandId: CommandId.make(`limit-resume:${deliveryIdentity}`),
@@ -88,11 +97,20 @@ const affectsLimitRecovery = (event: OrchestrationV2DomainEvent) =>
   event.type.startsWith("provider-session.") ||
   (event.type === "turn-item.updated" && event.payload.type === "error");
 
+function availableCodexAccounts(providers: readonly ServerProvider[]) {
+  const entries = providers.flatMap((provider) => {
+    const checkedAt = codexAvailableAllowanceCheckedAt(provider);
+    return checkedAt === undefined ? [] : [[provider.instanceId, checkedAt] as const];
+  });
+  return Object.fromEntries(entries);
+}
+
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const providers = yield* ProviderRegistry;
   const due = DueHint.make();
   yield* forkParked(
     Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
@@ -100,6 +118,13 @@ const makeSweep = Effect.gen(function* () {
     ),
   );
   yield* forkParked(Stream.runForEach(settings.streamChanges, () => due.invalidate));
+  yield* forkParked(
+    providers.streamChanges.pipe(
+      Stream.map((snapshots) => JSON.stringify(availableCodexAccounts(snapshots))),
+      Stream.changes,
+      Stream.runForEach(() => due.invalidate),
+    ),
+  );
   return Effect.fn("UsageLimitRecoveryWorker.sweep", { attributes: routineSpan })(function* () {
     const now = yield* DateTime.now;
     const nowMs = DateTime.toEpochMillis(now);
@@ -110,6 +135,7 @@ const makeSweep = Effect.gen(function* () {
       now,
       autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
+      codexAllowanceCheckedAt: availableCodexAccounts(yield* providers.getProviders),
     });
     let acted = false;
     for (const thread of candidates) {

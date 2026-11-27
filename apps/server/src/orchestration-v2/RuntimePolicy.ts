@@ -149,22 +149,27 @@ export const layerFromProjectStore: Layer.Layer<
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         yield* refuseAboveCeiling(managedPolicy, input.thread);
         const instance = yield* providerInstances.getInstance(input.modelSelection.instanceId);
+        const snapshot = instance === undefined ? undefined : yield* instance.snapshot.getSnapshot;
         const diagnosis = isDiagnosisThread(input.thread.id);
+        const selectedModel = input.modelSelection.model;
+        const diagnosisModel = diagnosis
+          ? (snapshot?.models.find((model) => model.slug === selectedModel) ??
+            snapshot?.models.find((model) => model.aliases?.includes(selectedModel)))
+          : undefined;
         if (
           diagnosis &&
-          (instance?.driverKind !== "claudeAgent" ||
+          (snapshot?.supportsReadOnlyDiagnosis !== true ||
+            diagnosisModel === undefined ||
+            diagnosisModel.supportsReadOnlyDiagnosis === false ||
             input.thread.runtimeMode !== "approval-required")
         ) {
           return yield* new RuntimePolicyResolveError({
             projectId: input.thread.projectId,
             providerInstanceId: input.modelSelection.instanceId,
-            cause: "只读诊断仅支持 Claude Code，只允许读取、查找和搜索文件。",
+            cause: "仅诊断需要支持只读执行的模型，并且必须保持审批模式。",
           });
         }
-        const supportedRuntimeModes =
-          instance === undefined
-            ? undefined
-            : (yield* instance.snapshot.getSnapshot).supportedRuntimeModes;
+        const supportedRuntimeModes = snapshot?.supportedRuntimeModes;
         const cwd =
           input.thread.worktreePath ??
           (yield* projects.get(input.thread.projectId).pipe(

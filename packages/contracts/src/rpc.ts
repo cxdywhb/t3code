@@ -235,6 +235,7 @@ import {
   IssueAutomationGetRemoteIssueDetailInput,
   IssueAutomationListRemoteIssuesInput,
   IssueAutomationListRemoteIssuesResult,
+  IssueAutomationPauseStagesInput,
   IssueAutomationProfile,
   IssueAutomationRefreshScopesInput,
   IssueAutomationRemoteIssueDetail,
@@ -1636,13 +1637,13 @@ const WsIssueTrackersBindProjectRpc = Rpc.make(WS_METHODS.issueTrackersBindProje
 const IssueAutomationRpcError = Schema.Union([IssueAutomationError, EnvironmentAuthorizationError]);
 
 const WsIssueAutomationGetStateRpc = Rpc.make(WS_METHODS.issueAutomationGetState, {
-  payload: Schema.Struct({}),
+  payload: IssueAutomationPauseStagesInput,
   success: IssueAutomationStateSnapshot,
   error: IssueAutomationRpcError,
 });
 
 const WsIssueAutomationSubscribeRpc = Rpc.make(WS_METHODS.issueAutomationSubscribe, {
-  payload: Schema.Struct({}),
+  payload: IssueAutomationPauseStagesInput,
   success: IssueAutomationStateSnapshot,
   error: IssueAutomationRpcError,
   stream: true,

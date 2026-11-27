@@ -1,4 +1,5 @@
 import type { OrchestrationProjectShell } from "@t3tools/contracts";
+import { ISSUE_AUTOMATION_COMMENT_INSTRUCTIONS } from "@t3tools/shared/issueAutomationWriteBack";
 
 import type { PlatformIssueDetail } from "./plugin/IssuePlatformPlugin.ts";
 
@@ -35,5 +36,7 @@ export function buildManualRepairPrompt(input: {
     "",
     "## 修复报告",
     "简述沿用的诊断结论，列出实际改动和验证结果。如有未完成项，说明原因。",
+    "",
+    ISSUE_AUTOMATION_COMMENT_INSTRUCTIONS,
   ].join("\n");
 }

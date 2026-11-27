@@ -86,6 +86,10 @@ import {
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import {
+  CODEX_USAGE_LIMIT_CODE,
+  codexAvailableAllowanceCheckedAt,
+} from "@t3tools/shared/usageLimits";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { modelSwitchSince } from "./modelSwitch.ts";
 import {
@@ -7391,6 +7395,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const failure = latestRootProviderFailure(run, projection.turnItems);
       const recovery = projection.thread.limitRecovery;
       const now = yield* DateTime.now;
+      const nowMs = DateTime.toEpochMillis(now);
+      const resetMs = Date.parse(recovery?.resetAt ?? "");
+      const early = resetMs > nowMs;
+      const allowanceCheckedAt =
+        early && run !== null && failure?.code === CODEX_USAGE_LIMIT_CODE
+          ? codexAvailableAllowanceCheckedAt(
+              yield* providerAdapters.getSnapshot?.(run.providerInstanceId) ?? Effect.undefined,
+            )
+          : undefined;
+      const allowanceRecovered =
+        allowanceCheckedAt !== undefined &&
+        Date.parse(allowanceCheckedAt) >
+          DateTime.toEpochMillis(run?.completedAt ?? projection.thread.updatedAt);
+      const snoozedUntil = projection.thread.snoozedUntil;
+      const snoozeMs = snoozedUntil == null ? 0 : DateTime.toEpochMillis(snoozedUntil);
+      const snoozeBlocks =
+        snoozeMs > nowMs &&
+        !(allowanceRecovered && recovery?.snooze === true && snoozeMs === resetMs);
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
         failure?.class !== "usage_limit" ||
@@ -7399,14 +7421,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         recovery.requestId !== command.usageLimitRecoveryRequestId ||
         recovery.runId !== run.id ||
         recovery.resetAt !== failure.resetAt ||
-        Date.parse(recovery.resetAt) > DateTime.toEpochMillis(now) ||
+        (early && !allowanceRecovered) ||
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
         projection.thread.settledOverride === "settled" ||
         projection.thread.providerInstanceId !== run.providerInstanceId ||
         projection.runtimeRequests.some((request) => request.status === "pending") ||
-        (projection.thread.snoozedUntil != null &&
-          DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now))
+        snoozeBlocks
       ) {
         yield* emit(
           events,
@@ -7420,8 +7441,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(recovery?.autoResume &&
             recovery.requestId === command.usageLimitRecoveryRequestId &&
             recovery.runId === command.usageLimitContinuationOfRunId &&
-            projection.thread.snoozedUntil != null &&
-            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)
+            snoozeBlocks
               ? { limitRecovery: { ...recovery, requestId: command.commandId } }
               : {}),
           },

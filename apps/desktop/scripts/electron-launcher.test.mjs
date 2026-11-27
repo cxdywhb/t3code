@@ -1,10 +1,11 @@
-import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
 
+import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 import { assert, describe, it } from "vite-plus/test";
 
 import {
@@ -12,6 +13,7 @@ import {
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
   resolveMacLauncherPaths,
+  tryAcquireDevSupervisor,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
@@ -116,6 +118,24 @@ describe("electron development launcher", () => {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("permits only one dev supervisor per checkout and releases ownership on close", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-supervisor-"));
+    try {
+      const first = tryAcquireDevSupervisor(directory);
+      assert.exists(first);
+      try {
+        assert.isUndefined(tryAcquireDevSupervisor(directory));
+      } finally {
+        first.close();
+      }
+      const next = tryAcquireDevSupervisor(directory);
+      assert.exists(next);
+      next.close();
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 // Supply inert imports so the real startup runs without launching Electron or signalling processes.
@@ -134,12 +154,15 @@ async function runDevElectronStartup({
         spawnSync: spawnSync ?? (() => undefined),
         spawn: spawn ?? (() => new NodeEvents.EventEmitter()),
       },
-      NodeFS: { watch: () => ({ close: () => undefined }) },
+      NodeCrypto,
+      NodeFS: { readFileSync: () => "", watch: () => ({ close: () => undefined }) },
       NodeOS: { platform: () => "linux" },
       NodePath,
+      windowsSystem32Path,
       desktopDir,
       resolveDevProtocolClient: () => null,
       resolveElectronLaunchCommand: (args) => ({ electronPath: "electron", args }),
+      tryAcquireDevSupervisor: () => ({ close: () => undefined }),
       waitForResources: async () => undefined,
       URL,
       ...makeFakeClock(),
@@ -152,18 +175,6 @@ async function runDevElectronStartup({
       ...context,
     },
   );
-}
-
-async function startupCleanupPattern(desktopDir) {
-  let pattern;
-  await runDevElectronStartup({
-    desktopDir,
-    spawnSync: (command, args) => {
-      if (command === "pkill" && args.includes("-f")) pattern = args.at(-1);
-    },
-  });
-  assert.isString(pattern);
-  return pattern;
 }
 
 function makeFakeClock() {
@@ -250,59 +261,137 @@ it("dev supervisor stops Electron and exits once its parent process goes away", 
   assert.lengthOf(exitCodes, 1, "supervisor did not exit after its parent process went away");
 });
 
-it
-  // oxlint-disable-next-line t3code/no-global-process-runtime -- Native pgrep is unavailable on Windows.
-  .skipIf(NodeOS.platform() === "win32")
-  .each([
-    "/tmp/t3-feature.one/apps/desktop",
-    "/tmp/t3-feature.one [two](three)+?^${four}|back\\slash*/apps/desktop",
-  ])("dev cleanup matches only the literal root argument: %s", async (desktopDir) => {
-  const pattern = await startupCleanupPattern(desktopDir);
-  const flag = `--t3code-dev-root=${desktopDir}`;
-  const argvCases = [
-    [flag],
-    [flag, "main.cjs"],
-    [flag.replace(".one", "Xone")],
-    [`${flag}-two`],
-    [`prefix${flag}`],
-    [`--t3code-dev-root=/other${desktopDir}`],
-  ];
-  const children = [];
-  try {
-    for (const args of argvCases) {
-      const child = NodeChildProcess.spawn(
-        process.execPath,
-        ["-e", "process.send('ready'); setInterval(() => {}, 1000)", "--", ...args],
-        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
-      );
-      children.push(child);
-      await Promise.race([
-        NodeEvents.once(child, "message"),
-        NodeEvents.once(child, "exit").then(() => {
-          throw new Error("Fixture exited before readiness");
-        }),
-      ]);
-    }
-    // Use the native ERE engine, but never execute the launcher's signal-producing command.
-    const result = NodeChildProcess.spawnSync(
-      "pgrep",
-      ["-P", String(process.pid), "-f", "--", pattern],
-      { encoding: "utf8" },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const matches = result.stdout.trim().split(/\s+/).map(Number);
-    assert.sameMembers(
-      matches,
-      children.slice(0, 2).map((child) => child.pid),
-    );
-  } finally {
-    await Promise.all(
-      children.map(async (child) => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        const exited = NodeEvents.once(child, "exit");
-        child.kill("SIGTERM");
-        await exited;
+it.each([
+  ["linux", false],
+  ["win32", false],
+  ["win32", true],
+])(
+  "releases the dev supervisor and stops its pack watcher after a startup timeout on %s (tree kill fails: %s)",
+  async (platform, treeKillFails) => {
+    const clock = makeFakeClock();
+    const signals = [];
+    const treeKills = [];
+    const exitCodes = [];
+    let released = false;
+    const pack = new NodeEvents.EventEmitter();
+    pack.pid = 5151;
+    pack.kill = (signal) => {
+      signals.push(signal);
+      pack.emit("exit", null, signal);
+    };
+    const startup = runDevElectronStartup({
+      ...clock,
+      spawn: () => pack,
+      spawnSync: (command, args) => {
+        treeKills.push({ command, args: [...args] });
+        if (platform === "win32" && !treeKillFails) pack.emit("exit", null, "SIGTERM");
+        return { status: treeKillFails ? 1 : 0 };
+      },
+      NodeOS: { platform: () => platform },
+      NodeModule: {
+        createRequire: () => ({ resolve: () => "/repo/node_modules/vite-plus/package.json" }),
+      },
+      tryAcquireDevSupervisor: () => ({
+        close: () => {
+          released = true;
+        },
       }),
+      waitForResources: async () => {
+        throw new Error("Timed out waiting for desktop dev resources");
+      },
+      console: { error: () => undefined },
+      process: {
+        env: { VITE_DEV_SERVER_URL: "http://localhost:1234", T3CODE_DESKTOP_DEV: "1" },
+        execPath: "node",
+        pid: 4242,
+        ppid: 1,
+        once: () => undefined,
+        exit: (code) => exitCodes.push(code),
+      },
+    }).catch(() => undefined);
+    await clock.advance(5_000);
+    await startup;
+
+    assert.deepEqual(
+      treeKills[0],
+      platform === "win32"
+        ? { command: windowsSystem32Path({}, "taskkill.exe"), args: ["/PID", "5151", "/T", "/F"] }
+        : { command: "pkill", args: ["-TERM", "-P", "5151"] },
     );
-  }
+    assert.deepEqual(signals, platform === "win32" && !treeKillFails ? [] : ["SIGTERM"]);
+    assert.deepEqual(exitCodes, [1]);
+    assert.isTrue(released);
+  },
+);
+
+it("does not signal other development apps when starting", async () => {
+  const signals = [];
+  await runDevElectronStartup({
+    spawnSync: (command, args) => signals.push({ command, args }),
+  });
+  assert.isEmpty(signals);
+});
+
+it("waits for a new build if Electron exits unexpectedly", async () => {
+  const clock = makeFakeClock();
+  const apps = [];
+  const onChange = new Map();
+  await runDevElectronStartup({
+    ...clock,
+    spawn: () => {
+      const app = new NodeEvents.EventEmitter();
+      apps.push(app);
+      return app;
+    },
+    NodeFS: {
+      readFileSync: () => "",
+      watch(directory, _options, listener) {
+        onChange.set(directory, listener);
+        return { close: () => undefined };
+      },
+    },
+    console: { error: () => undefined },
+  });
+
+  apps[0].emit("exit", 1, null);
+  await clock.advance(5_000);
+
+  assert.lengthOf(apps, 1);
+  onChange.get(NodePath.join("/repo/apps/desktop", "dist-electron"))("change", "main.cjs");
+  await clock.advance(5_000);
+  assert.lengthOf(apps, 2);
+});
+
+it("restarts Electron only when the built files change", async () => {
+  const clock = makeFakeClock();
+  const onChange = new Map();
+  const apps = [];
+  let main = "original";
+  await runDevElectronStartup({
+    ...clock,
+    spawn: () => {
+      const app = new NodeEvents.EventEmitter();
+      app.kill = () => app.emit("exit", 0, null);
+      apps.push(app);
+      return app;
+    },
+    NodeFS: {
+      readFileSync: (file) => (file.endsWith("main.cjs") ? main : file),
+      watch(directory, _options, listener) {
+        onChange.set(directory, listener);
+        return { close: () => undefined };
+      },
+    },
+  });
+  const notifyMain = () =>
+    onChange.get(NodePath.join("/repo/apps/desktop", "dist-electron"))("change", "main.cjs");
+
+  notifyMain();
+  await clock.advance(5_000);
+  assert.lengthOf(apps, 1, "rewriting identical output stopped the running app");
+
+  main = "updated";
+  notifyMain();
+  await clock.advance(5_000);
+  assert.lengthOf(apps, 2, "a changed output did not reload the app");
 });

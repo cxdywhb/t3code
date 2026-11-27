@@ -1293,6 +1293,88 @@ describe("CodexAdapterV2 session initialize", () => {
   const replayPreamble = (nativeThreadId: string) =>
     codexReplayPreamble({ nativeThreadId, nativeTurnId: "unused", prompt: "unused" });
 
+  it.effect(
+    "starts a diagnosis thread in the read-only sandbox with configured MCP servers disabled",
+    () =>
+      Effect.gen(function* () {
+        const preamble = replayPreamble("diagnosis");
+        const session = yield* openReplaySession(
+          makeCodexReplayTranscript({
+            scenario: "diagnosis",
+            entries: [
+              ...preamble.slice(0, 3),
+              {
+                type: "expect_outbound",
+                label: "config/read",
+                frame: {
+                  id: 2,
+                  method: "config/read",
+                  params: { cwd: "/workspace", includeLayers: false },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "config/read",
+                frame: {
+                  id: 2,
+                  result: {
+                    config: {
+                      mcp_servers: {
+                        "local.tool": { command: "node" },
+                        remote: { url: "https://example.com/mcp" },
+                      },
+                    },
+                    origins: {},
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "thread/start",
+                frame: {
+                  id: 3,
+                  method: "thread/start",
+                  params: {
+                    cwd: "/workspace",
+                    model: "gpt-5.4",
+                    sandbox: "read-only",
+                    approvalPolicy: "never",
+                    config: {
+                      mcp_servers: {
+                        "local.tool": { enabled: false },
+                        remote: { enabled: false },
+                      },
+                      notify: [],
+                      "features.apps": false,
+                      "features.connectors": false,
+                      "features.hooks": false,
+                      "features.codex_hooks": false,
+                      "features.plugins": false,
+                      "features.skill_mcp_dependency_install": false,
+                      "features.multi_agent": false,
+                      "features.multi_agent_v2": false,
+                    },
+                  },
+                },
+              },
+              withReplayRequestId(preamble[4]!, 3),
+            ],
+          }),
+        );
+        yield* session.ensureThread(IdAllocator.diagnosisThreadId("fixture"));
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
   it.effect("sends one initialize when two threads start on a fresh session at once", () =>
     Effect.gen(function* () {
       const initializeAwaitingResponse = yield* Deferred.make<void>();

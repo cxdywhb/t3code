@@ -233,6 +233,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueAutomationRuleScan: Schema.optionalKey(Schema.Boolean),
   issueAutomationRetry: Schema.optionalKey(Schema.Boolean),
   issueAutomationRepair: Schema.optionalKey(Schema.Boolean),
+  /** Older servers advertised diagnosis support by driver rather than by instance. */
+  issueAutomationDiagnosisDrivers: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Serves `prReview.*` multi-model pull request fusion review workstation workflows. */
   prReview: Schema.optionalKey(Schema.Boolean),
   /** Keeps more than one account per standalone issue tracker; older servers keep one. */

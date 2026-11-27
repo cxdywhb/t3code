@@ -24,6 +24,32 @@ import { isLocalLoopbackHost, isWildcardHost } from "./hostClassification.ts";
 
 const MINUTE = 60_000;
 
+export const CODEX_USAGE_LIMIT_CODE = "usageLimitExceeded";
+
+/** The timestamp of a positive Codex account allowance report. An expired reset time alone proves nothing. */
+export function codexAvailableAllowanceCheckedAt(provider: ServerProvider | undefined) {
+  const limits = provider?.usageLimits;
+  if (
+    provider?.driver !== "codex" ||
+    !provider.enabled ||
+    provider.auth.status !== "authenticated" ||
+    !limits ||
+    limits.unavailable ||
+    limits.zeroSpendCap ||
+    !Number.isFinite(Date.parse(limits.checkedAt))
+  )
+    return undefined;
+  const plan = limits.windows.filter(
+    (window) => window.id === "primary" || window.id === "secondary",
+  );
+  const windows =
+    plan.length > 0 ? plan : limits.windows.filter((window) => window.id === "individual");
+  return windows.length > 0 &&
+    windows.every((window) => window.usedPercent != null && window.usedPercent < 100)
+    ? limits.checkedAt
+    : undefined;
+}
+
 export function exhaustedUsageWindow(
   provider: ServerProvider | undefined,
   now: number,

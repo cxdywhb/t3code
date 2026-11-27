@@ -89,7 +89,10 @@ const withLivePresentation = (
 ) => {
   let current = created;
   const restamp = <S extends ServerProvider>(snapshot: S): S => {
-    const next: { -readonly [K in keyof S]: S[K] } = { ...snapshot };
+    const next: { -readonly [K in keyof S]: S[K] } = {
+      ...snapshot,
+      supportsReadOnlyDiagnosis: instance.orchestrationAdapter.supportsReadOnlyDiagnosis === true,
+    };
     for (const key of ["displayName", "accentColor"] as const) {
       const value = current[key];
       if (value === created[key]) continue;

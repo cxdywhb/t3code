@@ -22,6 +22,8 @@ import { useServerConfigs } from "./entities";
 import { usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
 
+const pauseStages = { supportsPauseStages: true };
+
 function createIssueAutomationAtoms() {
   const scheduler = createAtomCommandScheduler();
   const serialPerEnvironment = {
@@ -67,6 +69,7 @@ function createIssueAutomationAtoms() {
         input.filter,
         (page, pageSize) =>
           request(WS_METHODS.issueAutomationListRemoteIssues, {
+            ...pauseStages,
             connectorId: input.connectorId,
             scopeId: input.scopeId,
             browseType: input.filter.browseType,
@@ -79,13 +82,16 @@ function createIssueAutomationAtoms() {
     }),
   });
 
-  const refreshState = (environmentId: EnvironmentId) => stateQuery({ environmentId, input: {} });
+  const refreshState = (environmentId: EnvironmentId) =>
+    stateQuery({ environmentId, input: pauseStages });
 
   return {
     stateQuery,
     stateStream,
-    remoteIssues,
-    remoteIssueDetail,
+    remoteIssues: (query: Parameters<typeof remoteIssues>[0]) =>
+      remoteIssues({ ...query, input: { ...query.input, ...pauseStages } }),
+    remoteIssueDetail: (query: Parameters<typeof remoteIssueDetail>[0]) =>
+      remoteIssueDetail({ ...query, input: { ...query.input, ...pauseStages } }),
     scanProfileIssues: ({
       environmentId,
       profile,
@@ -98,7 +104,10 @@ function createIssueAutomationAtoms() {
       readonly supportsRuleScan: boolean;
     }) =>
       supportsRuleScan
-        ? remoteScanProfileIssues({ environmentId, input: { profileId: profile.id, page } })
+        ? remoteScanProfileIssues({
+            environmentId,
+            input: { profileId: profile.id, page, ...pauseStages },
+          })
         : scanWithIssueList({
             environmentId,
             input: {
@@ -205,7 +214,7 @@ const liveStreamSnapshotAtom = Atom.family((environmentId: EnvironmentId | null)
   Atom.make((get): IssueAutomationStateSnapshot | null => {
     if (environmentId === null) return null;
     return AsyncResult.getOrElse(
-      get(issueAutomationEnvironment.stateStream({ environmentId, input: {} })),
+      get(issueAutomationEnvironment.stateStream({ environmentId, input: pauseStages })),
       () => null,
     );
   }).pipe(Atom.withLabel(`web:issue-automation:live-stream:${environmentId ?? "none"}`)),
@@ -231,7 +240,7 @@ export function useIssueAutomationLiveState(environmentId: EnvironmentId | null)
   const streamed = useAtomValue(liveStreamSnapshotAtom(targetEnvId));
   const queried = useEnvironmentQuery(
     targetEnvId !== null
-      ? issueAutomationEnvironment.stateQuery({ environmentId: targetEnvId, input: {} })
+      ? issueAutomationEnvironment.stateQuery({ environmentId: targetEnvId, input: pauseStages })
       : null,
   );
 
