@@ -787,11 +787,24 @@ jobs:
 
       - name: Collect release assets
         shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_ARCH: ${{ inputs.arch }}
         run: |
           set -euo pipefail
           mkdir -p release-publish
 
           shopt -s nullglob
+          if [[ "$PLATFORM" == "win" ]]; then
+            installers=(release/*.exe)
+            expected="release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.exe"
+            if [[ ${#installers[@]} -ne 1 || "${installers[0]:-}" != "$expected" ]]; then
+              echo "::error::Expected exactly one Windows installer named $expected"
+              exit 1
+            fi
+          fi
+
           patterns=(
             "release/*.dmg"
             "release/*.zip"

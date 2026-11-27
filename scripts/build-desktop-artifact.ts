@@ -2815,7 +2815,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
     artifactName:
-      platform === "mac" ? "X-Code-${version}-${arch}.${ext}" : "T3-Code-${version}-${arch}.${ext}",
+      platform === "linux"
+        ? "T3-Code-${version}-${arch}.${ext}"
+        : "X-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     // runAsNode stays on: the app starts its server, helpers and the `t3` shim by running this
     // binary as Node, and that mode still accepts inspector flags.

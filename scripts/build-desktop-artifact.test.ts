@@ -638,6 +638,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("names Windows installers and macOS archives with the X Code prefix", () =>
+    Effect.gen(function* () {
+      for (const [platform, target] of [
+        ["win", "nsis"],
+        ["mac", "dmg"],
+      ] as const) {
+        const config = yield* createBuildConfig(
+          platform,
+          target,
+          "0.1.27",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        assert.strictEqual(config.artifactName, "X-Code-${version}-${arch}.${ext}");
+      }
+    }),
+  );
+
   it.effect("names updatable AppImages without a version and apart per channel", () =>
     Effect.gen(function* () {
       const appImageName = (version: string) =>
