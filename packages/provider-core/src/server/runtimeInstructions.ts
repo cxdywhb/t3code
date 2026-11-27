@@ -17,6 +17,7 @@ If available, call link_issue for each issue you take on or file, even via CLI; 
 
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
+  readonly globalAgentInstructions?: string | undefined;
   readonly harness: string;
   readonly agentFeedback?: AgentFeedbackMode;
   readonly model?: string | undefined;
@@ -44,7 +45,25 @@ export function buildRuntimeInstructions(runtime: {
     runtime.pullRequestLinking === false
       ? runtimeInfo
       : `${runtimeInfo}\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`;
-  return [linked + feedback, ...(workspace === "" ? [] : [workspace])].join("\n\n");
+  return [
+    linked + feedback,
+    workspace,
+    buildGlobalAgentInstructions(runtime.globalAgentInstructions),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function buildGlobalAgentInstructions(content: string | undefined): string {
+  if (content === undefined) return "";
+  // Resumed native conversations can retain the old rules after the setting is cleared.
+  if (!content.trim())
+    return "<global_agents_md>No global AGENTS.md instructions are configured for this session. Ignore earlier global_agents_md blocks; project instructions still apply.</global_agents_md>";
+  return `<global_agents_md>
+The user configured these global AGENTS.md instructions for agents in this application. They replace earlier global_agents_md blocks. Apply them as defaults across projects. More specific project instructions and explicit user requests take precedence. They do not grant extra tool permissions.
+
+${content}
+</global_agents_md>`;
 }
 
 function toSingleLine(value: string): string {

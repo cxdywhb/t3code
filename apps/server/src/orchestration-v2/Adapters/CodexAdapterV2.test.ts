@@ -78,6 +78,7 @@ import type * as ProviderContinuationRequests from "@t3tools/provider-core/serve
 import * as ModelManifest from "../../provider/ModelManifest.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import { resolveProviderCompatibility } from "../../provider/providerCompatibility.ts";
+import { buildCodexGlobalAgentContext } from "../../provider/CodexDeveloperInstructions.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
@@ -191,6 +192,24 @@ describe("CodexAdapterV2 runtime policy", () => {
           }
         }
       }),
+  );
+
+  it.effect("sends global instructions even without T3 MCP", () =>
+    Effect.gen(function* () {
+      const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-global-rules",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "custom-model" },
+        globalAgentInstructions: "# Shared rules\nRun the relevant tests.",
+        hasT3Mcp: false,
+      });
+      assert.include(
+        params.additionalContext?.t3_global_agents_01?.value,
+        "Run the relevant tests.",
+      );
+      assert.isUndefined(params.additionalContext?.t3_code_runtime);
+    }),
   );
 
   it.effect("derives concrete Codex turn policies from every T3 runtime mode", () =>
@@ -930,8 +949,37 @@ function withConfigReadBeforeTurnStart(
 function withConfigReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
   threadName?: string,
+  globalAgentInstructions?: string,
 ): CodexReplay.CodexAppServerReplayTranscript {
-  return { ...transcript, entries: withConfigReadBeforeTurnStart(transcript.entries, threadName) };
+  return {
+    ...transcript,
+    entries: withConfigReadBeforeTurnStart(transcript.entries, threadName).map((entry) => {
+      // Orchestrated sessions also send the empty-setting reset block on each turn.
+      if (
+        globalAgentInstructions === undefined ||
+        entry.type !== "expect_outbound" ||
+        !Predicate.isObject(entry.frame) ||
+        entry.frame.method !== "turn/start" ||
+        !Predicate.isObject(entry.frame.params)
+      )
+        return entry;
+      return {
+        ...entry,
+        frame: {
+          ...entry.frame,
+          params: {
+            ...entry.frame.params,
+            additionalContext: {
+              ...(Predicate.isObject(entry.frame.params.additionalContext)
+                ? entry.frame.params.additionalContext
+                : {}),
+              ...buildCodexGlobalAgentContext(globalAgentInstructions),
+            },
+          },
+        },
+      };
+    }),
+  };
 }
 
 function makeCodexReplayTranscript(input: {
@@ -5924,7 +5972,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           )).replaceAll(yield* encodeStringJson("/workspace"), yield* encodeStringJson(cwd)),
         );
         const driver = yield* CodexReplay.makeReplayDriver(
-          withConfigReads(localTranscript, "Capacity retry"),
+          withConfigReads(localTranscript, "Capacity retry", ""),
         );
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -7962,7 +8010,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         ),
       );
       const replayDriver = yield* CodexReplay.makeReplayDriver(
-        withConfigReads(localTranscript, "Background stop"),
+        withConfigReads(localTranscript, "Background stop", ""),
       );
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       assert.equal(
@@ -8169,7 +8217,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ProviderReplayHarness.layerWithRegistry(
             { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
             CodexAdapterV2Testkit.layer({
-              transcript: withConfigReads(localTranscript, "Background stop untracked"),
+              transcript: withConfigReads(localTranscript, "Background stop untracked", ""),
             }),
             { runEffectWorker: false },
           ),
@@ -8222,6 +8270,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
         ),
         "Background late result",
+        "",
       );
       const released = yield* Deferred.make<void>();
       const replayDriver = yield* CodexReplay.makeReplayDriver(localTranscript, {

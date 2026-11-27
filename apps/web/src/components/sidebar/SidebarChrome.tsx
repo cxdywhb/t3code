@@ -50,6 +50,7 @@ import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUp
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
+import { GlobalTerminalButton } from "../terminal/GlobalTerminal";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -281,6 +282,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   return (
     <SidebarMenu className="flex-row items-center">
+      <SidebarMenuItem className="shrink-0">
+        <GlobalTerminalButton />
+      </SidebarMenuItem>
       {isOnUtilityPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>

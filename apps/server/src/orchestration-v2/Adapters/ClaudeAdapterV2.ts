@@ -232,7 +232,10 @@ import {
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  buildGlobalAgentInstructions,
+  buildRuntimeInstructions,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -2594,13 +2597,15 @@ Text you write before a tool call may reach the user only as a one-line summary.
 `;
 
 // Native subagents start from their task, not this session's system prompt.
-const subagentDeviceInstructions: HookCallback = () =>
-  Promise.resolve({
-    hookSpecificOutput: {
-      hookEventName: "SubagentStart",
-      additionalContext: T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
-    },
-  });
+const subagentInstructions =
+  (additionalContext: string): HookCallback =>
+  () =>
+    Promise.resolve({
+      hookSpecificOutput: {
+        hookEventName: "SubagentStart",
+        additionalContext,
+      },
+    });
 
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
@@ -2619,6 +2624,7 @@ export function makeClaudeQueryOptions(input: {
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   readonly agentFeedback?: AgentFeedbackMode;
+  readonly globalAgentInstructions?: string | undefined;
   /** The thread's T3 MCP session holds the `device` capability. */
   readonly deviceToolsAvailable?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
@@ -2724,6 +2730,12 @@ export function makeClaudeQueryOptions(input: {
           },
         } as ClaudeSdkSettings);
   const deviceInstructions = input.mcpServers !== undefined && input.deviceToolsAvailable === true;
+  const subagentContext = [
+    deviceInstructions ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH : "",
+    buildGlobalAgentInstructions(input.globalAgentInstructions),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const agentFeedback = input.mcpServers === undefined ? "off" : (input.agentFeedback ?? "off");
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -2780,6 +2792,7 @@ export function makeClaudeQueryOptions(input: {
       append: [
         buildRuntimeInstructions({
           harness: "Claude Code",
+          globalAgentInstructions: input.globalAgentInstructions,
           agentFeedback,
           runtimePolicy: { cwd: input.cwd, workspace: input.workspace },
         }) +
@@ -2794,11 +2807,11 @@ export function makeClaudeQueryOptions(input: {
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
-    ...(deviceInstructions || input.onStop !== undefined
+    ...(subagentContext || input.onStop !== undefined
       ? {
           hooks: {
-            ...(deviceInstructions
-              ? { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] }
+            ...(subagentContext
+              ? { SubagentStart: [{ hooks: [subagentInstructions(subagentContext)] }] }
               : {}),
             ...(input.onStop === undefined ? {} : { Stop: [{ hooks: [input.onStop] }] }),
           },
@@ -14198,6 +14211,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
           const normalQueryOptions = makeClaudeQueryOptions({
             agentFeedback: turnInput.agentFeedback ?? "off",
+            globalAgentInstructions: input.globalAgentInstructions,
             modelSelection: turnInput.modelSelection,
             modelCatalog: catalog,
             nativeThreadId,

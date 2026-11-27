@@ -3321,6 +3321,18 @@ export const layerWithOptions = (
                     }),
                 ),
               );
+              const globalAgentInstructions = Option.isSome(serverSettings)
+                ? (yield* serverSettings.value.getSettings.pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderSessionOpenError({
+                          instanceId: input.modelSelection.instanceId,
+                          providerSessionId: input.providerSessionId,
+                          cause,
+                        }),
+                    ),
+                  )).globalAgentInstructions
+                : "";
               const openedWithLinkedEnvironments = yield* readLinkedEnvironments;
               const prepared = yield* prepareMcpSession(
                 input.threadId,
@@ -3343,6 +3355,7 @@ export const layerWithOptions = (
                 .execute(
                   input.modelSelection.instanceId,
                   adapter.openSession({
+                    globalAgentInstructions,
                     threadId: input.threadId,
                     providerSessionId: input.providerSessionId,
                     modelSelection: input.modelSelection,

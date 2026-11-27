@@ -70,6 +70,7 @@ const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
 
 function layerElectronWindow(destroyAll: Effect.Effect<void> = Effect.void) {
   return Layer.succeed(ElectronWindow.ElectronWindow, {
+    trustedAppFrame: () => Effect.succeed(false),
     create: () => Effect.die("unexpected window creation"),
     main: Effect.die("unexpected main window read"),
     currentMainOrFirst: Effect.die("unexpected current window read"),
@@ -91,6 +92,8 @@ function layerDesktopWindow(
   } = {},
 ) {
   return Layer.succeed(DesktopWindow.DesktopWindow, {
+    openGlobalTerminal: () => Effect.die("unexpected terminal window"),
+    setGlobalTerminalPinned: () => Effect.void,
     createMain: Effect.die("unexpected window creation"),
     ensureMain: Effect.die("unexpected window creation"),
     revealOrCreateMain: Effect.die("unexpected window creation"),

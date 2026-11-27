@@ -100,6 +100,8 @@ const layerDesktopUpdates = ({ checkResult, onRevealDownloadedFile }: MenuServic
 
 const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
   Layer.succeed(DesktopWindow.DesktopWindow, {
+    openGlobalTerminal: () => Effect.die("unexpected terminal window"),
+    setGlobalTerminalPinned: () => Effect.void,
     createMain: Effect.die("unexpected createMain"),
     ensureMain: Effect.die("unexpected ensureMain"),
     revealOrCreateMain: Effect.die("unexpected revealOrCreateMain"),

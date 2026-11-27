@@ -7,6 +7,7 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import { createBrowserHistory, createHashHistory } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
 
 import { applyAppearanceContrast } from "./appearanceContrast";
 import { applyAppearanceFontVariables, TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "./appearanceFonts";
@@ -31,6 +32,7 @@ import { startGuideRunNotifications } from "./components/pullRequest/guide/PullR
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "./branding";
 import { resolveServerBackedAppDisplayName, resolveWindowTitle } from "./branding.logic";
 import { isElectron } from "./env";
+import { isGlobalTerminalWindow } from "./components/terminal/globalTerminalStore";
 import {
   subscribeComposerDraftModelReconciliation,
   subscribeDraftThreadPromotion,
@@ -152,6 +154,14 @@ function windowTitleThreadStatus(
  * Screen readers read it on Alt+Tab, so it can lead with the thread and what it's doing.
  */
 function startDocumentTitle(router: AppRouter): void {
+  if (isGlobalTerminalWindow()) {
+    const write = () => {
+      document.title = m(msg("Global terminal"));
+    };
+    subscribeI18n(write);
+    write();
+    return;
+  }
   const readOnGuestPage = () => router.state.matches.some((match) => match.routeId === "/guest");
   let openThreadRef = readOpenThreadRef(router);
   let onGuestPage = readOnGuestPage();
@@ -285,6 +295,8 @@ export function startAppServices(): AppRouter {
   startThemeBackground();
   startBrowserChromeThemeSync(router);
   startDefaultThemeAdoption();
+  // The auxiliary renderer only needs connections, appearance and terminals, not conversation subscriptions.
+  if (isGlobalTerminalWindow()) return router;
   startModelPreferencesMigration();
   startAgentOpenedPreviews();
   if (isElectron) startElectronBrowserHost();

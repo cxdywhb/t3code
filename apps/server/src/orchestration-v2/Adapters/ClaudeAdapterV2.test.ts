@@ -432,6 +432,7 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
       nativeThreadId: "native-add-dir",
+      globalAgentInstructions: "# Shared rules\nRun the relevant tests.",
       resume: false,
       cwd: "/workspace",
       workspace: {
@@ -445,6 +446,10 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
           '--add-dir ../apps ../lib --verbose --add-dir=/shared --plugin-dir ./a --plugin-dir=./b.zip --append-system-prompt "--plugin-dir=./prompt"',
       },
     });
+    assert.include(
+      (options.systemPrompt as { readonly append?: string }).append,
+      "Run the relevant tests.",
+    );
     assert.deepEqual(options.additionalDirectories, [
       "/workspace",
       "/repos/api",
@@ -999,6 +1004,7 @@ describe("ClaudeAdapterV2 T3 tool instructions", () => {
     readonly mcp: boolean;
     readonly deviceToolsAvailable: boolean;
     readonly agentFeedback?: "off" | "on-request" | "auto";
+    readonly globalAgentInstructions?: string;
   }) =>
     ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: {
@@ -1013,6 +1019,7 @@ describe("ClaudeAdapterV2 T3 tool instructions", () => {
         : {}),
       deviceToolsAvailable: input.deviceToolsAvailable,
       agentFeedback: input.agentFeedback ?? "off",
+      globalAgentInstructions: input.globalAgentInstructions,
       environment: {},
     });
   const append = (input: Parameters<typeof options>[0]) =>
@@ -1071,6 +1078,27 @@ describe("ClaudeAdapterV2 T3 tool instructions", () => {
     ]);
     assert.deepEqual(await subagentContext({ mcp: true, deviceToolsAvailable: false }), []);
     assert.deepEqual(await subagentContext({ mcp: false, deviceToolsAvailable: true }), []);
+    assert.include(
+      JSON.stringify(
+        await subagentContext({
+          mcp: false,
+          deviceToolsAvailable: false,
+          globalAgentInstructions: "Shared rules for children.",
+        }),
+      ),
+      "Shared rules for children.",
+    );
+    assert.include(
+      JSON.stringify(
+        await subagentContext({
+          mcp: true,
+          deviceToolsAvailable: true,
+          globalAgentInstructions: "",
+        }),
+      ),
+      "Ignore earlier global_agents_md blocks",
+    );
+
     // A custom subagent can lack T3 tools even when this session has them.
     assert.notInclude(
       JSON.stringify(

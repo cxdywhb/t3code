@@ -1,3 +1,4 @@
+import { buildGlobalAgentInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as NodeAssert from "node:assert/strict";
 
 import { T3_CODE_DEVICE_TOOL_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
@@ -5,6 +6,7 @@ import { describe, it } from "vite-plus/test";
 
 import {
   buildCodexAdditionalContext,
+  buildCodexGlobalAgentContext,
   CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
 } from "./CodexDeveloperInstructions.ts";
 
@@ -82,3 +84,28 @@ describe("Codex device context", () => {
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
   return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
 }
+
+describe("Codex global AGENTS.md", () => {
+  it("splits Chinese and emoji without truncating or breaking code points", () => {
+    const content = "规则 🦊\n".repeat(2000);
+    const entries = Object.entries(buildCodexGlobalAgentContext(content)).sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+    NodeAssert.ok(entries.length > 1);
+    NodeAssert.equal(
+      entries.map(([, entry]) => entry.value).join(""),
+      buildGlobalAgentInstructions(content),
+    );
+    for (const [, entry] of entries) {
+      NodeAssert.ok(
+        Buffer.byteLength(entry.value, "utf8") <= CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
+      );
+      NodeAssert.ok(entry.value.isWellFormed());
+    }
+    NodeAssert.deepEqual(buildCodexGlobalAgentContext(undefined), {});
+    NodeAssert.match(
+      buildCodexGlobalAgentContext("").t3_global_agents_01!.value,
+      /Ignore earlier global_agents_md blocks/,
+    );
+  });
+});

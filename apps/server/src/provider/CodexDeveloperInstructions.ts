@@ -1,6 +1,9 @@
 import type { AgentFeedbackMode } from "@t3tools/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
-import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  buildGlobalAgentInstructions,
+  buildRuntimeInstructions,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
@@ -10,6 +13,30 @@ import {
 
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
+
+export function buildCodexGlobalAgentContext(content: string | undefined) {
+  const chunks: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  // Split by code point so Chinese and emoji survive Codex's per-entry UTF-8 cap intact.
+  for (const character of buildGlobalAgentInstructions(content)) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES) {
+      chunks.push(chunk);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += character;
+    bytes += size;
+  }
+  if (chunk) chunks.push(chunk);
+  return Object.fromEntries(
+    chunks.map((value, index) => [
+      `t3_global_agents_${String(index + 1).padStart(2, "0")}`,
+      { kind: "application" as const, value },
+    ]),
+  );
+}
 
 export interface T3CodeToolAvailability {
   readonly browser: boolean;
