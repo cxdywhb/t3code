@@ -49,7 +49,6 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
-  AuthTerminalReadScope,
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   type DesktopWslState,
@@ -91,6 +90,7 @@ import {
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
 import { showGlobalTerminal } from "./terminal/globalTerminalStore";
+import { useGlobalTerminalEnvironmentId } from "./terminal/globalTerminalTarget";
 import { dispatchPreviewAction } from "./preview/previewActionBus";
 import { previewBridge } from "./preview/previewBridge";
 import {
@@ -1836,11 +1836,8 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const globalTerminalEnvironmentId = currentProjectEnvironmentId ?? primaryEnvironmentId;
-  if (
-    globalTerminalEnvironmentId !== null &&
-    readEnvironmentScope(globalTerminalEnvironmentId, AuthTerminalReadScope)
-  ) {
+  const globalTerminalEnvironmentId = useGlobalTerminalEnvironmentId();
+  if (globalTerminalEnvironmentId !== null) {
     actionItems.push({
       kind: "action",
       value: "action:global-terminal",

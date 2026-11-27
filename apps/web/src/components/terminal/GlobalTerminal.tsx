@@ -4,12 +4,14 @@ import { AsyncResult } from "effect/reactivity";
 import { T, useGT } from "gt-react";
 import { TerminalIcon, XIcon } from "lucide-react";
 import { lazy, Suspense, useEffect, useEffectEvent, useRef } from "react";
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
+import { useEnvironments } from "../../state/environments";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { showGlobalTerminal, useGlobalTerminalStore } from "./globalTerminalStore";
+
+import { useGlobalTerminalEnvironmentId } from "./globalTerminalTarget";
 
 const GlobalTerminalPanel = lazy(() =>
   import("./GlobalTerminalPanel").then((module) => ({ default: module.GlobalTerminalPanel })),
@@ -17,13 +19,12 @@ const GlobalTerminalPanel = lazy(() =>
 
 export function GlobalTerminalButton() {
   const gt = useGT();
-  const environmentId = usePrimaryEnvironmentId();
-  const canRead = useEnvironmentScope(environmentId, AuthTerminalReadScope);
+  const environmentId = useGlobalTerminalEnvironmentId();
   return (
     <Button
       variant="ghost"
       size="icon"
-      disabled={!environmentId || !canRead}
+      disabled={!environmentId}
       aria-label={gt("Global terminal")}
       title={gt("Global terminal")}
       onClick={() => {

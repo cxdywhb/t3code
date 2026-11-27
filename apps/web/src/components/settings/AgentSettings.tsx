@@ -5,7 +5,9 @@ import {
 import { T, useGT } from "gt-react";
 import { useState } from "react";
 
-import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useAtomValue } from "@effect/atom-react";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -22,7 +24,14 @@ export function AgentSettingsPanel() {
   const environmentId = environment?.environmentId ?? null;
   const saved = useScopedSettings((settings) => settings.globalAgentInstructions);
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const supported =
+    environment?.serverConfig?.environment.capabilities.globalAgentInstructions === true;
+  const canWrite = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
+  const editable = supported && canWrite && canOperate;
+  const updateSettings = useAtomCommand(
+    serverEnvironment.updateSettings,
+    "global agent instructions update",
+  );
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const value = draft ?? saved;
@@ -33,11 +42,13 @@ export function AgentSettingsPanel() {
         <SettingsRow
           serverScoped
           managed={
-            !canOperate
-              ? gt(
-                  "This connection lacks permission to change settings on the selected environment.",
-                )
-              : undefined
+            !supported
+              ? gt("Update older servers to save this setting.")
+              : !canWrite || !canOperate
+                ? gt(
+                    "This connection lacks permission to change settings on the selected environment.",
+                  )
+                : undefined
           }
           settingKeys={["globalAgentInstructions"]}
           {...setting("global-agents-md")}
@@ -50,7 +61,7 @@ export function AgentSettingsPanel() {
               aria-label={gt("Global AGENTS.md")}
               rows={12}
               value={value}
-              disabled={saving || !canOperate}
+              disabled={saving || !editable}
               maxLength={GLOBAL_AGENT_INSTRUCTIONS_MAX_LENGTH}
               spellCheck={false}
               onChange={(event) => setDraft(event.target.value)}
@@ -70,23 +81,30 @@ export function AgentSettingsPanel() {
               </p>
               <Button
                 size="sm"
-                disabled={saving || !canOperate || value === saved}
-                onClick={() => {
+                disabled={saving || !editable || value === saved}
+                onClick={async () => {
+                  if (!environmentId || !editable) return;
                   setSaving(true);
-                  updateSettings(
-                    { globalAgentInstructions: value },
-                    {
-                      onFailed: () => setSaving(false),
-                      onSaved: () => {
-                        setSaving(false);
-                        setDraft(null);
-                        toastManager.add({
-                          type: "success",
-                          title: gt("Saved", { $context: "settings save confirmation" }),
-                        });
-                      },
-                    },
-                  );
+                  const result = await updateSettings({
+                    environmentId,
+                    input: { patch: { globalAgentInstructions: value } },
+                  });
+                  setSaving(false);
+                  if (result._tag !== "Success") return;
+                  // 旧服务器可能成功响应却丢弃未知字段；确认回读一致后才能清除草稿。
+                  if (result.value.globalAgentInstructions !== value) {
+                    toastManager.add({
+                      type: "error",
+                      title: gt("Setting not saved"),
+                      description: gt("Update older servers to save this setting."),
+                    });
+                    return;
+                  }
+                  setDraft(null);
+                  toastManager.add({
+                    type: "success",
+                    title: gt("Saved", { $context: "settings save confirmation" }),
+                  });
                 }}
               >
                 <T>Save</T>

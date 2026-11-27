@@ -254,6 +254,7 @@ export const make = Effect.gen(function* () {
       worktreesDirectory: true,
       ...(hostPlatform === "darwin" ? { fastWorktreeCheckout: true } : {}),
       threadAutoSettlementScope: true,
+      globalAgentInstructions: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,

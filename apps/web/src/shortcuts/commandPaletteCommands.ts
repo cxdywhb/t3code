@@ -17,7 +17,7 @@ import { type CommandHandler, type CommandScopeOptions, registerCommands } from 
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { showGlobalTerminal } from "../components/terminal/globalTerminalStore";
-import { readPrimaryEnvironmentId } from "../state/environments";
+import { readGlobalTerminalEnvironmentId } from "../components/terminal/globalTerminalTarget";
 
 function consume(event: KeyboardEvent): void {
   event.preventDefault();
@@ -68,7 +68,9 @@ export function installCommandPaletteCommands(
   const disposeCommands = registerCommands(
     {
       "globalTerminal.open": (event) => {
-        const environmentId = readRouteThreadRef()?.environmentId ?? readPrimaryEnvironmentId();
+        const environmentId = readGlobalTerminalEnvironmentId(
+          resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {}),
+        );
         if (environmentId === null) return false;
         consume(event);
         if (!event.repeat)
