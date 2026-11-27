@@ -41,6 +41,7 @@ export function sidebarFolderRowId(projectKey: string) {
 export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHeader(props: {
   group: SidebarProjectSnapshot;
   collapsed: boolean;
+  showEmptyState: boolean;
   hiddenThreads: readonly EnvironmentThreadShell[];
   onToggle: (group: SidebarProjectSnapshot) => void;
   onNewThread: (group: SidebarProjectSnapshot) => void;
@@ -111,7 +112,7 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
         />
       </button>
       {/* Sits over the count, which hides on hover or focus, and left of the chevron. */}
-      <span className="absolute inset-y-0 right-6 flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+      <span className="absolute top-0 right-6 flex h-8 items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
         <SharedTooltipTrigger
           render={
             <Button
@@ -133,6 +134,11 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           <SquarePenIcon aria-hidden />
         </SharedTooltipTrigger>
       </span>
+      {props.showEmptyState ? (
+        <p className="py-1 ps-9 pe-(--sidebar-row-content-inset) text-sm text-sidebar-muted-foreground">
+          <T>No threads yet</T>
+        </p>
+      ) : null}
     </li>
   );
 });
