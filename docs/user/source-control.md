@@ -84,7 +84,10 @@ MCP service for the same ZenTao instance. Existing rules and run history stay wi
 connection, and polling resumes after authorization. When access expires and cannot be
 renewed, open the connection and authorize again.
 
-只读诊断目前支持 Claude Code，可以读取、查找和搜索文件。升级前的全权限诊断会话需要新建一次诊断，之后可以在只读会话内重跑。
+支持只读诊断的 Claude Code 和 Codex 模型可以读取、查找和搜索文件。升级前的全权限诊断会话需要新建一次诊断，之后可以在只读会话内重跑。
+
+无自动回写的只读诊断规则关闭后台轮询时，会取消该规则自动派发的排队任务，并暂停正在执行的诊断。
+重新开启后，已暂停的诊断优先在原会话继续。已取消的排队记录仍可在「全部」中查看，后续轮询可能再次发现这些缺陷。
 
 ## GitHub stacks
 

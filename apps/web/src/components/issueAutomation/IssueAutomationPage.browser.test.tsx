@@ -297,10 +297,17 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await expect
     .element(profileDialog.getByRole("button", { name: /Cross-review model/ }))
     .toBeDisabled();
+  const backgroundPolling = profileDialog.getByRole("switch", {
+    name: "Enable background polling",
+  });
+  await expect.element(backgroundPolling).not.toBeChecked();
+  await backgroundPolling.click();
+  expect(savedModels).not.toHaveBeenCalled();
   await profileDialog.getByRole("button", { name: "Save rule" }).click();
   await expect.element(profileDialog).not.toBeInTheDocument();
   expect(savedModels).toHaveBeenCalledWith(
     expect.objectContaining({
+      enabled: true,
       models: expect.objectContaining({ primaryModel: { instanceId: "codex", model: "gpt-5.5" } }),
     }),
   );

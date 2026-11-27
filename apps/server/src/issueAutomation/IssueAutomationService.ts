@@ -75,6 +75,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as RcMap from "effect/RcMap";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -286,9 +287,24 @@ function blocksNewTask(task: IssueAutomationTask): boolean {
   );
 }
 
+function canPauseAutomaticDiagnosis(policy: IssueAutomationPolicy): boolean {
+  return policy.actionMode === "diagnose_only" && !policy.autoWriteComment;
+}
+
+function isTaskStoppingOrStopped(stage: IssueAutomationStage): boolean {
+  return (
+    stage === "cancelling" || stage === "pausing" || stage === "paused" || isTerminalStage(stage)
+  );
+}
+
+function continuationMessageId(taskId: IssueAutomationTaskId, runId: RunId): MessageId {
+  return MessageId.make(`issue-automation-continue:${taskId}:${runId}`);
+}
+
 type TaskContinuation =
   | { readonly kind: "retry"; readonly threadId: ThreadId | null; readonly attemptNumber: number }
-  | { readonly kind: "repair"; readonly diagnosisReport: string };
+  | { readonly kind: "repair"; readonly diagnosisReport: string }
+  | { readonly kind: "resume" };
 
 function hasRunBackgroundWork(projection: OrchestrationV2ThreadProjection, runId: RunId): boolean {
   return (
@@ -384,6 +400,8 @@ const make = Effect.gen(function* () {
   const taskStarts = yield* Semaphore.make(1);
   const repairWrites = yield* Semaphore.make(1);
   const pendingCancellations = new Set<IssueAutomationTaskId>();
+  const pollGenerations = new Map<IssueAutomationProfileId, symbol>();
+  const reconcileWake = yield* Queue.sliding<void>(1);
   const profileSemaphores = new Map<string, { max: number; sem: Semaphore.Semaphore }>();
 
   const getProfileSemaphore = Effect.fn("IssueAutomationService.getProfileSemaphore")(function* (
@@ -529,7 +547,10 @@ const make = Effect.gen(function* () {
         tasks,
         activeRunCount:
           runningMap.size +
-          tasks.filter((task) => task.stage === "cancelling" && !runningMap.has(task.id)).length,
+          tasks.filter(
+            (task) =>
+              (task.stage === "cancelling" || task.stage === "pausing") && !runningMap.has(task.id),
+          ).length,
       };
     });
 
@@ -579,11 +600,13 @@ const make = Effect.gen(function* () {
       readonly modelLabel?: string;
       readonly message: string;
     },
+    expectedStage?: IssueAutomationStage,
   ) {
     const updated = yield* taskWrites.withPermits(1)(
       Effect.gen(function* () {
         const latest =
           (yield* repo.getTask(task.id).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? task;
+        if (expectedStage !== undefined && latest.stage !== expectedStage) return latest;
         const nextStage = patch.stage ?? latest.stage;
         const confirmsRepair =
           latest.repairOfTaskId !== undefined &&
@@ -593,6 +616,8 @@ const make = Effect.gen(function* () {
         if (
           nextStage !== latest.stage &&
           ((isTerminalStage(latest.stage) && !confirmsRepair) ||
+            ((latest.stage === "pausing" || latest.stage === "paused") &&
+              expectedStage === undefined) ||
             (latest.stage === "cancelling" && nextStage !== "cancelled"))
         ) {
           return latest;
@@ -629,6 +654,32 @@ const make = Effect.gen(function* () {
     return updated;
   });
 
+  const persistProfile = Effect.fn("IssueAutomationService.persistProfile")(function* (
+    previous: IssueAutomationProfile | undefined,
+    profile: IssueAutomationRepository.StoredProfile,
+  ) {
+    const toggled = previous !== undefined && previous.enabled !== profile.enabled;
+    const stop =
+      previous?.enabled === true && !profile.enabled && canPauseAutomaticDiagnosis(previous.policy);
+    const cancelled = yield* taskStarts.withPermits(1)(
+      Effect.gen(function* () {
+        const cancelled = yield* taskWrites.withPermits(1)(repo.upsertProfile(profile, stop));
+        if (stop) pollGenerations.set(profile.id, Symbol());
+        return cancelled;
+      }),
+    );
+    const fibers = yield* Ref.get(activeTaskFibers);
+    yield* Effect.forEach(
+      cancelled,
+      (id) => {
+        const fiber = fibers.get(id);
+        return fiber ? Fiber.interrupt(fiber) : Effect.void;
+      },
+      { concurrency: "unbounded", discard: true },
+    );
+    if (toggled) yield* Queue.offer(reconcileWake, undefined);
+  });
+
   const downloadIssueImages = Effect.fn("IssueAutomationService.downloadIssueImages")(function* (
     plugin: IssuePlatformPlugin,
     credentials: PlatformCredentials,
@@ -660,6 +711,7 @@ const make = Effect.gen(function* () {
       readonly prompt: string;
       readonly summary: IssueAutomationMessageSummary;
       readonly existingThreadId?: ThreadId | undefined;
+      readonly automaticDiagnosisId?: IssueAutomationTaskId | undefined;
       readonly onStarted: (
         threadId: ThreadId,
         runId: RunId,
@@ -680,47 +732,72 @@ const make = Effect.gen(function* () {
         createdBy: "user",
         creationSource: "web",
       } as const;
+      const start = Effect.gen(function* () {
+        if (input.automaticDiagnosisId !== undefined) {
+          const latest = yield* repo
+            .getTask(input.automaticDiagnosisId)
+            .pipe(Effect.mapError(mapRepoErr("getTask")));
+          if (!latest || isTaskStoppingOrStopped(latest.stage)) return yield* Effect.interrupt;
+        }
+        let threadId: ThreadId;
+        let runId: RunId | undefined;
+        if (input.existingThreadId !== undefined) {
+          threadId = input.existingThreadId;
+          const sent = yield* threadManagement.sendToThread({
+            ...sender,
+            ...message,
+            threadId,
+            mode: "queue",
+            freshContext: true,
+          });
+          runId = sent.run.id;
+        } else {
+          const launched = yield* threadLaunch.launch({
+            ...sender,
+            title: input.title,
+            ...(input.summary.mode === "diagnose"
+              ? { threadId: diagnosisThreadId(NodeCrypto.randomUUID()) }
+              : {}),
+            runtimeMode: input.summary.mode === "diagnose" ? "approval-required" : "full-access",
+            interactionMode: "default",
+            workspaceStrategy: input.workspaceStrategy,
+            initialMessage: message,
+          });
+          threadId = launched.threadId;
+          runId = launched.projection.runs.find((run) => run.userMessageId === messageId)?.id;
+        }
+        if (runId === undefined) {
+          return yield* new IssueAutomationError({
+            operation: "runModelTurn",
+            detail: "未找到刚启动的模型轮次",
+          });
+        }
+        yield* input.onStarted(threadId, runId);
+        return { threadId, runId };
+      });
       // A cancel can interrupt the wait once the accepted run can be addressed by id.
       const { threadId, runId } = yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          let threadId: ThreadId;
-          let runId: RunId | undefined;
-          if (input.existingThreadId !== undefined) {
-            threadId = input.existingThreadId;
-            const sent = yield* threadManagement.sendToThread({
-              ...sender,
-              ...message,
-              threadId,
-              mode: "queue",
-              freshContext: true,
-            });
-            runId = sent.run.id;
-          } else {
-            const launched = yield* threadLaunch.launch({
-              ...sender,
-              title: input.title,
-              ...(input.summary.mode === "diagnose"
-                ? { threadId: diagnosisThreadId(NodeCrypto.randomUUID()) }
-                : {}),
-              runtimeMode: input.summary.mode === "diagnose" ? "approval-required" : "full-access",
-              interactionMode: "default",
-              workspaceStrategy: input.workspaceStrategy,
-              initialMessage: message,
-            });
-            threadId = launched.threadId;
-            runId = launched.projection.runs.find((run) => run.userMessageId === messageId)?.id;
-          }
-          if (runId === undefined) {
-            return yield* new IssueAutomationError({
-              operation: "runModelTurn",
-              detail: "未找到刚启动的模型轮次",
-            });
-          }
-          yield* input.onStarted(threadId, runId);
-          return { threadId, runId };
-        }),
+        input.automaticDiagnosisId === undefined ? start : taskStarts.withPermits(1)(start),
       );
 
+      return yield* collectModelResult({
+        projectId: input.projectId,
+        threadId,
+        runId,
+        ...(input.existingThreadId === undefined ? {} : { messageId }),
+      });
+    },
+  );
+
+  const collectModelResult = Effect.fn("IssueAutomationService.collectModelResult")(
+    function* (input: {
+      readonly projectId: ProjectId;
+      readonly threadId: ThreadId;
+      readonly runId: RunId;
+      readonly messageId?: MessageId;
+      readonly requireCompleted?: boolean;
+    }) {
+      const { threadId, runId } = input;
       const waited = yield* threadManagement.waitForThread({
         projectId: input.projectId,
         threadId,
@@ -736,8 +813,9 @@ const make = Effect.gen(function* () {
       );
       const terminalRun =
         result &&
-        (input.existingThreadId === undefined ||
-          result.userMessageId === messageId ||
+        (input.messageId === undefined ||
+          result.userMessageId === input.messageId ||
+          (input.requireCompleted && result.restartContinuationOfRunId === runId) ||
           resultMessage?.delegatedCompletion?.parentRunId === runId)
           ? result
           : waited.run;
@@ -753,15 +831,16 @@ const make = Effect.gen(function* () {
         });
       }
       if (
-        terminalRun &&
-        (terminalRun.status === "failed" ||
-          terminalRun.status === "cancelled" ||
-          terminalRun.status === "interrupted") &&
-        latestText.length === 0
+        (input.requireCompleted && terminalRun?.status !== "completed") ||
+        (terminalRun &&
+          (terminalRun.status === "failed" ||
+            terminalRun.status === "cancelled" ||
+            terminalRun.status === "interrupted") &&
+          latestText.length === 0)
       ) {
         return yield* new IssueAutomationError({
           operation: "runModelTurn",
-          detail: `模型会话以状态 ${terminalRun.status} 结束`,
+          detail: `模型会话以状态 ${terminalRun?.status ?? "unknown"} 结束`,
         });
       }
       return {
@@ -781,6 +860,143 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const linkIssueThread = Effect.fn("IssueAutomationService.linkIssueThread")(function* (
+    projectId: ProjectId,
+    threadId: ThreadId,
+    connector: IssueAutomationConnector,
+    issue: Pick<IssueAutomationRemoteIssue, "scopeId" | "key" | "displayKey" | "url" | "title">,
+  ) {
+    // Link issue to the T3 Thread for seamless cross-navigation in native UI
+    yield* threadIssues
+      .link({
+        threadId,
+        ref: {
+          projectId,
+          tracker: IssueTrackerKind.make(connector.platform),
+          host: extractHostFromUrl(connector.baseUrl),
+          scope: issue.scopeId,
+          key: issue.key,
+        },
+        url: issue.url,
+        displayKey: issue.displayKey,
+        title: issue.title,
+        source: "agent",
+      })
+      .pipe(Effect.ignore);
+  });
+
+  const startPausedTask = Effect.fn("IssueAutomationService.startPausedTask")(
+    function* (task: IssueAutomationTask) {
+      const latest = yield* repo.getTask(task.id).pipe(Effect.mapError(mapRepoErr("getTask")));
+      if (
+        !latest ||
+        (latest.stage !== "paused" && latest.stage !== "resuming") ||
+        latest.lastError !== null ||
+        !latest.profileId
+      )
+        return;
+      const profile = yield* repo
+        .getProfile(latest.profileId)
+        .pipe(Effect.mapError(mapRepoErr("getProfile")));
+      if (
+        !profile?.enabled ||
+        !canPauseAutomaticDiagnosis(profile.policy) ||
+        profile.connectorId !== latest.connectorId ||
+        profile.scopeId !== latest.scopeId
+      )
+        return;
+
+      const {
+        primaryThreadId: threadId,
+        primaryRunId: sourceRunId,
+        targetProjectId: projectId,
+      } = latest;
+      if (latest.stage === "paused" && threadId === null && sourceRunId === undefined) {
+        const task = yield* updateTaskState(
+          latest,
+          { stage: "enriching" },
+          { message: "自动轮询已开启，继续准备本次诊断" },
+          "paused",
+        );
+        if (task.stage === "enriching") return { task, run: null };
+        return;
+      }
+
+      const unavailable = new IssueAutomationError({
+        operation: "resumeTask",
+        detail: "原诊断会话无法继续，请查看会话状态",
+      });
+      if (!threadId || !projectId || !sourceRunId || !isDiagnosisThread(threadId)) {
+        return yield* unavailable;
+      }
+      const projection = yield* threadManagement.getThreadProjection(threadId);
+      if (
+        projection.thread.runtimeMode !== "approval-required" ||
+        projection.thread.projectId !== projectId ||
+        projection.thread.worktreePath !== null ||
+        projection.thread.archivedAt !== null ||
+        projection.thread.deletedAt !== null
+      )
+        return yield* unavailable;
+      const source = projection.runs.find((run) => run.id === sourceRunId);
+      if (!source) return yield* unavailable;
+      if (latest.stage === "resuming") {
+        return {
+          task: latest,
+          run: { projectId, threadId, runId: source.id, messageId: source.userMessageId },
+        };
+      }
+
+      const resumeId = continuationMessageId(task.id, source.id);
+      let run = projection.runs.find((run) => run.userMessageId === resumeId);
+      if (!run && source.status === "completed") run = source;
+      if (!run) {
+        if (
+          projection.runs.some((run) => !ThreadManagementService.isTerminalRunStatus(run.status)) ||
+          hasRunBackgroundWork(projection, source.id)
+        )
+          return yield* unavailable;
+        const unsent =
+          source.status === "cancelled" && source.startedAt === null
+            ? projection.messages.find((message) => message.id === source.userMessageId)
+            : undefined;
+        if (source.status !== "interrupted" && !unsent) return yield* unavailable;
+        yield* threadManagement.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(resumeId),
+          threadId,
+          messageId: resumeId,
+          text: unsent?.text ?? "",
+          attachments: unsent?.attachments ?? [],
+          ...(unsent?.context ? { context: unsent.context } : {}),
+          ...(unsent ? {} : { manualContinuationOfRunId: source.id }),
+          modelSelection: source.modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const accepted = yield* threadManagement.getThreadProjection(threadId);
+        run = accepted.runs.find((run) => run.userMessageId === resumeId);
+        if (!run) return yield* unavailable;
+      }
+
+      const resumed = yield* updateTaskState(
+        latest,
+        { stage: "resuming", primaryRunId: run.id },
+        { message: "自动轮询已开启，正在原会话继续诊断" },
+        "paused",
+      );
+      if (resumed.stage !== "resuming") return;
+      return {
+        task: resumed,
+        run: { projectId, threadId, runId: run.id, messageId: run.userMessageId },
+      };
+    },
+    Effect.mapError(mapRepoErr("resumeTask")),
+    taskStarts.withPermits(1),
+    Effect.uninterruptible,
+  );
+
   const executeTaskPipeline = Effect.fn("IssueAutomationService.executeTaskPipeline")(function* (
     initialTask: IssueAutomationTask,
     binding: IssueAutomationRepoBinding,
@@ -791,6 +1007,11 @@ const make = Effect.gen(function* () {
   ) {
     const retry = continuation?.kind === "retry" ? continuation : undefined;
     const repair = continuation?.kind === "repair" ? continuation : undefined;
+    const resuming = continuation?.kind === "resume";
+    const automaticDiagnosisId =
+      initialTask.trigger === "poll" && initialTask.actionMode === "diagnose_only"
+        ? initialTask.id
+        : undefined;
     const profileSem = yield* getProfileSemaphore(
       initialTask.profileId ?? initialTask.connectorId,
       maxConcurrency,
@@ -814,17 +1035,42 @@ const make = Effect.gen(function* () {
     const finishedTask = yield* withGlobalPermit(
       profileSem.withPermits(1)(
         Effect.gen(function* () {
-          current = yield* updateTaskState(
-            initialTask,
-            { stage: "enriching", lastError: null },
-            {
-              stage: "enriching",
-              message: repair
-                ? `正在刷新 ${initialTask.displayKey} 的缺陷信息，准备沿用已有诊断...`
-                : `正在从平台拉取 ${initialTask.displayKey} 完整详情与报错截图...`,
-            },
-          );
-          if (current.stage === "cancelling" || isTerminalStage(current.stage)) return current;
+          if (resuming) {
+            const resumed = yield* startPausedTask(initialTask);
+            if (!resumed) return current;
+            current = resumed.task;
+            if (resumed.run) {
+              const result = yield* collectModelResult({ ...resumed.run, requireCompleted: true });
+              const connector = yield* getConnector(current.connectorId).pipe(
+                Effect.orElseSucceed(() => undefined),
+              );
+              if (connector) {
+                yield* linkIssueThread(resumed.run.projectId, result.threadId, connector, {
+                  scopeId: current.scopeId,
+                  key: current.issueKey,
+                  displayKey: current.displayKey,
+                  url: current.issueUrl,
+                  title: current.issueTitle,
+                });
+              }
+              return yield* updateTaskState(
+                current,
+                { stage: "completed", diagnosisReport: result.reportText },
+                { message: "已在原会话完成诊断" },
+              );
+            }
+          } else
+            current = yield* updateTaskState(
+              initialTask,
+              { stage: "enriching", lastError: null },
+              {
+                stage: "enriching",
+                message: repair
+                  ? `正在刷新 ${initialTask.displayKey} 的缺陷信息，准备沿用已有诊断...`
+                  : `正在从平台拉取 ${initialTask.displayKey} 完整详情与报错截图...`,
+              },
+            );
+          if (isTaskStoppingOrStopped(current.stage)) return current;
 
           const { connector, plugin, credentials } = yield* readConnectorCredentials(
             current.connectorId,
@@ -943,7 +1189,7 @@ const make = Effect.gen(function* () {
                 : `${route.matchedReason} -> [${targetProject.title}]，已调度模型 ${chosenModelLabel} 开始深度分析${policy.actionMode === "diagnose_only" ? "" : `（隔离分支 ${branchSlug}）`}`,
             },
           );
-          if (current.stage === "cancelling" || isTerminalStage(current.stage)) return current;
+          if (isTaskStoppingOrStopped(current.stage)) return current;
 
           const prompt = repair
             ? buildManualRepairPrompt({
@@ -980,6 +1226,7 @@ const make = Effect.gen(function* () {
               prompt,
               summary,
               existingThreadId: retry?.threadId ?? undefined,
+              automaticDiagnosisId,
               onStarted: recordPrimaryRun,
             }),
           );
@@ -1022,6 +1269,7 @@ const make = Effect.gen(function* () {
                 prompt,
                 summary,
                 existingThreadId: retry?.threadId ?? undefined,
+                automaticDiagnosisId,
                 onStarted: recordPrimaryRun,
               }),
             );
@@ -1045,23 +1293,7 @@ const make = Effect.gen(function* () {
             solved.worktreePath !== null &&
             solved.hasConfirmedChanges;
 
-          // Link issue to the T3 Thread for seamless cross-navigation in native UI
-          yield* threadIssues
-            .link({
-              threadId: solved.threadId,
-              ref: {
-                projectId: targetProject.id,
-                tracker: IssueTrackerKind.make(connector.platform),
-                host: extractHostFromUrl(connector.baseUrl),
-                scope: detail.scopeId,
-                key: detail.key,
-              },
-              url: detail.url,
-              displayKey: detail.displayKey,
-              title: detail.title,
-              source: "agent",
-            })
-            .pipe(Effect.ignore);
+          yield* linkIssueThread(targetProject.id, solved.threadId, connector, detail);
 
           current = yield* updateTaskState(
             current,
@@ -1165,6 +1397,7 @@ const make = Effect.gen(function* () {
               { stage: "writing_back" },
               { stage: "writing_back", message: "正在将诊断摘要写回问题平台..." },
             );
+            if (isTaskStoppingOrStopped(current.stage)) return current;
 
             const formattedComment = formatIssueAutomationWriteBackComment(solved.reportText);
 
@@ -1243,11 +1476,10 @@ const make = Effect.gen(function* () {
               : updateTaskState(
                   current,
                   {
-                    stage: "failed",
+                    stage: resuming ? "paused" : "failed",
                     lastError: Cause.pretty(cause).slice(0, 400),
                   },
                   {
-                    stage: "failed",
                     message: `执行过程中发生异常: ${Cause.pretty(cause).slice(0, 200)}`,
                   },
                 ),
@@ -1336,10 +1568,30 @@ const make = Effect.gen(function* () {
   };
 
   const pollSingleProfile = Effect.fn("IssueAutomationService.pollSingleProfile")(function* (
-    profile: IssueAutomationProfile,
+    profileId: IssueAutomationProfileId,
+    requireEnabled = false,
   ) {
+    const scan = yield* taskStarts.withPermits(1)(
+      Effect.gen(function* () {
+        const profile = yield* repo
+          .getProfile(profileId)
+          .pipe(Effect.mapError(mapRepoErr("getProfile")));
+        if (!profile || (requireEnabled && !profile.enabled)) return;
+        if (requireEnabled && canPauseAutomaticDiagnosis(profile.policy)) {
+          const pending = yield* repo
+            .hasPendingResume(profileId)
+            .pipe(Effect.mapError(mapRepoErr("pollProfile")));
+          if (pending) return;
+        }
+        return { profile, generation: pollGenerations.get(profileId) };
+      }),
+    );
+    if (!scan) return { enqueuedCount: 0, skippedCount: 0 };
+    const { profile, generation } = scan;
     const polledAt = yield* nowIso;
     const credResult = yield* Effect.result(readConnectorCredentials(profile.connectorId));
+    if (pollGenerations.get(profile.id) !== generation)
+      return { enqueuedCount: 0, skippedCount: 0 };
     if (credResult._tag === "Failure") {
       yield* repo
         .recordProfilePoll(profile.id, polledAt, credResult.failure.detail)
@@ -1359,6 +1611,8 @@ const make = Effect.gen(function* () {
         pageSize: 30,
       }),
     );
+    if (pollGenerations.get(profile.id) !== generation)
+      return { enqueuedCount: 0, skippedCount: 0 };
 
     if (pageResult._tag === "Failure") {
       yield* repo
@@ -1375,6 +1629,7 @@ const make = Effect.gen(function* () {
     let skippedCount = 0;
 
     for (const item of pageResult.success.items) {
+      if (pollGenerations.get(profile.id) !== generation) break;
       if (item.status === "closed" || item.status === "resolved") {
         skippedCount += 1;
         continue;
@@ -1461,6 +1716,7 @@ const make = Effect.gen(function* () {
       };
       const enqueued = yield* taskStarts.withPermits(1)(
         Effect.gen(function* () {
+          if (pollGenerations.get(profile.id) !== generation) return false;
           const latest = yield* repo
             .listIssueTasks(connector.id, item.key)
             .pipe(Effect.mapError(mapRepoErr("listIssueTasks")));
@@ -1492,7 +1748,7 @@ const make = Effect.gen(function* () {
     Effect.ignore,
   );
 
-  yield* Effect.gen(function* () {
+  const pollProfiles = Effect.gen(function* () {
     const [profiles, connectors] = yield* Effect.all([
       repo.listProfiles.pipe(Effect.orElseSucceed(() => [])),
       repo.listConnectors.pipe(Effect.orElseSucceed(() => [])),
@@ -1508,14 +1764,10 @@ const make = Effect.gen(function* () {
       const lastMs = profile.lastPolledAt ? Date.parse(profile.lastPolledAt) : 0;
       const intervalMs = profile.filter.pollIntervalMinutes * 60 * 1000;
       if (!Number.isFinite(lastMs) || nowMs - lastMs >= intervalMs) {
-        yield* pollSingleProfile(profile).pipe(Effect.ignore);
+        yield* pollSingleProfile(profile.id, true).pipe(Effect.ignore);
       }
     }
-  }).pipe(
-    Effect.repeat(Schedule.spaced(POLL_TICK_INTERVAL)),
-    Effect.ignoreCause({ log: true }),
-    Effect.forkScoped,
-  );
+  });
 
   interface AuthorizationAttempt {
     readonly input: IssueAutomationStartConnectorAuthInput;
@@ -1958,7 +2210,7 @@ const make = Effect.gen(function* () {
           .set(replacementSecretId, encoder.encode(webhook))
           .pipe(Effect.mapError(mapRepoErr("storeFeishuWebhook")));
       }
-      yield* repo.upsertProfile(profile).pipe(
+      yield* persistProfile(prev, profile).pipe(
         Effect.tapError(() =>
           replacementSecretId
             ? secrets.remove(replacementSecretId).pipe(Effect.ignore)
@@ -1983,10 +2235,20 @@ const make = Effect.gen(function* () {
       const profile = yield* repo
         .getProfile(input.profileId)
         .pipe(Effect.mapError(mapRepoErr("getProfile")));
-      yield* repo.deleteProfile(input.profileId).pipe(Effect.mapError(mapRepoErr("deleteProfile")));
+      yield* taskStarts.withPermits(1)(
+        repo.deleteProfile(input.profileId).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              pollGenerations.set(input.profileId, Symbol());
+            }),
+          ),
+          Effect.mapError(mapRepoErr("deleteProfile")),
+        ),
+      );
       if (profile?.feishuWebhookSecretId) {
         yield* secrets.remove(profile.feishuWebhookSecretId).pipe(Effect.ignore);
       }
+      yield* Queue.offer(reconcileWake, undefined);
       yield* publishSnapshot;
     },
     Effect.uninterruptible,
@@ -1995,26 +2257,30 @@ const make = Effect.gen(function* () {
 
   const setProfileEnabled: IssueAutomationService["Service"]["setProfileEnabled"] = Effect.fn(
     "IssueAutomationService.setProfileEnabled",
-  )(function* (input) {
-    const found = yield* repo
-      .getProfile(input.profileId)
-      .pipe(Effect.mapError(mapRepoErr("getProfile")));
-    if (!found) {
-      return yield* new IssueAutomationError({
-        operation: "setProfileEnabled",
-        detail: "未找到对应的自动分析策略配置",
-      });
-    }
-    const updatedAt = yield* nowIso;
-    const next = {
-      ...found,
-      enabled: input.enabled,
-      updatedAt,
-    };
-    yield* repo.upsertProfile(next).pipe(Effect.mapError(mapRepoErr("setProfileEnabled")));
-    yield* publishSnapshot;
-    return profileForClient(next);
-  }, profileWrites.withPermits(1));
+  )(
+    function* (input) {
+      const found = yield* repo
+        .getProfile(input.profileId)
+        .pipe(Effect.mapError(mapRepoErr("getProfile")));
+      if (!found) {
+        return yield* new IssueAutomationError({
+          operation: "setProfileEnabled",
+          detail: "未找到对应的自动分析策略配置",
+        });
+      }
+      const updatedAt = yield* nowIso;
+      const next = {
+        ...found,
+        enabled: input.enabled,
+        updatedAt,
+      };
+      yield* persistProfile(found, next).pipe(Effect.mapError(mapRepoErr("setProfileEnabled")));
+      yield* publishSnapshot;
+      return profileForClient(next);
+    },
+    Effect.uninterruptible,
+    profileWrites.withPermits(1),
+  );
 
   const triggerPoll: IssueAutomationService["Service"]["triggerPoll"] = Effect.fn(
     "IssueAutomationService.triggerPoll",
@@ -2027,7 +2293,7 @@ const make = Effect.gen(function* () {
         detail: "未找到对应的自动分析策略配置",
       });
     }
-    return yield* pollSingleProfile(found);
+    return yield* pollSingleProfile(found.id);
   });
 
   const analyzeIssues: IssueAutomationService["Service"]["analyzeIssues"] = Effect.fn(
@@ -2251,14 +2517,29 @@ const make = Effect.gen(function* () {
   }, taskStarts.withPermits(1));
 
   const stopTaskRun = Effect.fn("IssueAutomationService.stopTaskRun")(
-    function* (projectId: ProjectId, threadId: ThreadId, runId: RunId) {
+    function* (
+      projectId: ProjectId,
+      threadId: ThreadId,
+      sourceRunId: RunId,
+      resumableTaskId?: IssueAutomationTaskId,
+    ) {
       const projection = yield* threadManagement.getThreadProjection(threadId);
-      const run = projection.runs.find((run) => run.id === runId);
-      if (!run)
+      const source = projection.runs.find((run) => run.id === sourceRunId);
+      if (!source)
         return yield* new IssueAutomationError({
           operation: "cancelTask",
           detail: "找不到需要停止的模型轮次",
         });
+      const resumeMessageId =
+        resumableTaskId === undefined
+          ? undefined
+          : continuationMessageId(resumableTaskId, source.id);
+      const accepted = projection.runs.find((run) => run.userMessageId === resumeMessageId);
+      const run =
+        resumableTaskId === undefined
+          ? source
+          : ThreadManagementService.latestRestartContinuation(projection.runs, accepted ?? source);
+      const runId = run.id;
       const commandId = CommandId.make(`issue-automation-cancel:${NodeCrypto.randomUUID()}`);
       const reason = "Cancelled from Issue Automation workbench";
       const pendingWork = hasRunBackgroundWork(projection, runId);
@@ -2299,33 +2580,41 @@ const make = Effect.gen(function* () {
           detail: "模型尚未确认停止，请重试取消",
         });
       }
+      return runId;
     },
     Effect.mapError(mapRepoErr("cancelTask")),
   );
 
-  const cancelTask: IssueAutomationService["Service"]["cancelTask"] = Effect.fn(
-    "IssueAutomationService.cancelTask",
-  )(function* ({ taskId }) {
+  const stopTask = Effect.fn("IssueAutomationService.stopTask")(function* (
+    taskId: IssueAutomationTaskId,
+    pause: boolean,
+  ) {
     if (pendingCancellations.has(taskId)) return;
     pendingCancellations.add(taskId);
     const stopping = yield* Effect.gen(function* () {
-      const task = yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
-      if (!task || isTerminalStage(task.stage)) return;
-      const cancelling = yield* updateTaskState(
-        task,
-        { stage: "cancelling", lastError: null },
-        task.stage === "cancelling"
-          ? undefined
-          : {
-              message: task.repairOfTaskId ? "正在停止本次修复" : "正在停止本次诊断",
-            },
+      const stopping = yield* taskStarts.withPermits(1)(
+        Effect.gen(function* () {
+          const task = yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
+          if (!task || isTerminalStage(task.stage)) return;
+          if (pause) return task.stage === "pausing" ? task : undefined;
+          if (task.stage === "pausing") return;
+          return yield* updateTaskState(
+            task,
+            { stage: "cancelling", lastError: null },
+            task.stage === "cancelling"
+              ? undefined
+              : { message: task.repairOfTaskId ? "正在停止本次修复" : "正在停止本次诊断" },
+            task.stage === "paused" ? "paused" : undefined,
+          );
+        }),
       );
-      if (cancelling.stage !== "cancelling") return;
+      const stoppingStage = pause ? "pausing" : "cancelling";
+      if (stopping?.stage !== stoppingStage) return;
 
       const fiber = (yield* Ref.get(activeTaskFibers)).get(taskId);
       if (fiber) yield* Fiber.interrupt(fiber);
-      const linked =
-        (yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? cancelling;
+      let linked =
+        (yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? stopping;
       const stop = yield* Effect.result(
         Effect.gen(function* () {
           if (!linked.targetProjectId) return;
@@ -2333,7 +2622,19 @@ const make = Effect.gen(function* () {
             yield* stopTaskRun(linked.targetProjectId, linked.reviewThreadId, linked.reviewRunId);
           }
           if (linked.primaryThreadId && linked.primaryRunId) {
-            yield* stopTaskRun(linked.targetProjectId, linked.primaryThreadId, linked.primaryRunId);
+            const resumableTaskId =
+              linked.trigger === "poll" && linked.actionMode === "diagnose_only"
+                ? taskId
+                : undefined;
+            const stoppedRunId = yield* stopTaskRun(
+              linked.targetProjectId,
+              linked.primaryThreadId,
+              linked.primaryRunId,
+              resumableTaskId,
+            );
+            if (stoppedRunId !== linked.primaryRunId) {
+              linked = yield* updateTaskState(linked, { primaryRunId: stoppedRunId });
+            }
           }
         }),
       );
@@ -2343,10 +2644,15 @@ const make = Effect.gen(function* () {
       }
       yield* updateTaskState(
         linked,
-        { stage: "cancelled" },
+        { stage: pause ? "paused" : "cancelled", lastError: null },
         {
-          message: linked.repairOfTaskId ? "已确认停止本次修复" : "已确认停止本次诊断",
+          message: pause
+            ? "已暂停诊断，重新开启自动轮询后可继续"
+            : linked.repairOfTaskId
+              ? "已确认停止本次修复"
+              : "已确认停止本次诊断",
         },
+        stoppingStage,
       );
     }).pipe(
       Effect.ensuring(
@@ -2359,6 +2665,69 @@ const make = Effect.gen(function* () {
     );
     yield* Fiber.join(stopping).pipe(Effect.interruptible);
   }, Effect.uninterruptible);
+
+  const cancelTask: IssueAutomationService["Service"]["cancelTask"] = ({ taskId }) =>
+    stopTask(taskId, false);
+
+  const reconcilePausedTasks = Effect.gen(function* () {
+    const stopping = yield* repo.listPauseRelatedTasks;
+    yield* Effect.forEach(
+      stopping.filter((task) => task.stage === "pausing"),
+      (task) => stopTask(task.id, true).pipe(Effect.ignore),
+      { concurrency: 3, discard: true },
+    );
+    const paused = yield* repo.listPauseRelatedTasks;
+    for (const task of paused) {
+      const profileId = task.profileId;
+      if ((task.stage !== "paused" && task.stage !== "resuming") || profileId === null) continue;
+      yield* taskStarts.withPermits(1)(
+        Effect.gen(function* () {
+          const profile = yield* repo.getProfile(profileId);
+          if (
+            !profile ||
+            profile.connectorId !== task.connectorId ||
+            profile.scopeId !== task.scopeId
+          ) {
+            yield* updateTaskState(
+              task,
+              { stage: "cancelled" },
+              { message: "原规则已移除或监控对象已更改，已取消暂停的诊断" },
+              "paused",
+            );
+            return;
+          }
+          if (
+            !profile.enabled ||
+            !canPauseAutomaticDiagnosis(profile.policy) ||
+            task.lastError !== null ||
+            (yield* Ref.get(activeTaskFibers)).has(task.id)
+          )
+            return;
+          yield* spawnTaskExecution(
+            task,
+            profile.repositories,
+            profile.models,
+            profile.policy,
+            profile.filter.maxConcurrency,
+            { kind: "resume" },
+          );
+        }),
+      );
+    }
+  }).pipe(Effect.ignoreCause({ log: true }));
+
+  yield* Queue.offer(reconcileWake, undefined);
+  yield* Queue.take(reconcileWake).pipe(
+    Effect.andThen(reconcilePausedTasks),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+  yield* Queue.offer(reconcileWake, undefined).pipe(
+    Effect.andThen(pollProfiles),
+    Effect.repeat(Schedule.spaced(POLL_TICK_INTERVAL)),
+    Effect.ignoreCause({ log: true }),
+    Effect.forkScoped,
+  );
 
   yield* repo.listTasks(1000).pipe(
     Effect.orElseSucceed(() => []),

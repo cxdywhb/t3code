@@ -34,6 +34,7 @@ import {
   LayersIcon,
   MessageSquareIcon,
   PanelRightIcon,
+  PauseIcon,
   PencilIcon,
   PlayIcon,
   Plug2Icon,
@@ -147,6 +148,7 @@ import {
   cleanIssueText,
   formatIssueNumber,
   isStageActive,
+  isTaskCancellable,
   RemoteIssueStatusGlyph,
   SeverityIndicator,
   StageBadge,
@@ -519,9 +521,7 @@ export function IssueAutomationPage() {
   const deleteConnectorCmd = useAtomCommand(issueAutomationEnvironment.deleteConnector, {
     reportFailure: false,
   });
-  const setProfileEnabledCmd = useAtomCommand(issueAutomationEnvironment.setProfileEnabled, {
-    reportFailure: false,
-  });
+  const setProfileEnabledCmd = useAtomCommand(issueAutomationEnvironment.setProfileEnabled);
   const deleteProfileCmd = useAtomCommand(issueAutomationEnvironment.deleteProfile, {
     reportFailure: false,
   });
@@ -868,6 +868,7 @@ export function IssueAutomationPage() {
   const groupCounts = {
     all: taskGroups.length,
     active: 0,
+    paused: 0,
     needs_human: 0,
     completed: 0,
     failed: 0,
@@ -876,12 +877,14 @@ export function IssueAutomationPage() {
   const filteredGroups = taskGroups.filter(({ latest, attempts }) => {
     const stage = latest.stage;
     const filter =
-      stage === "needs_human" || stage === "completed"
-        ? stage
+      stage === "cancelled"
+        ? "all"
         : isStageActive(stage)
           ? "active"
-          : "failed";
-    groupCounts[filter] += 1;
+          : stage === "needs_human" || stage === "completed" || stage === "paused"
+            ? stage
+            : "failed";
+    if (filter !== "all") groupCounts[filter] += 1;
     return (
       (runFilter === "all" || runFilter === filter) &&
       (!query ||
@@ -1541,6 +1544,17 @@ export function IssueAutomationPage() {
                         ) : null}
                       </span>
                     </Toggle>
+                    {groupCounts.paused > 0 || runFilter === "paused" ? (
+                      <Toggle value="paused">
+                        <span className="inline-flex items-center gap-1.5">
+                          <PauseIcon />
+                          <T context="run status">Paused</T>
+                          <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                            {groupCounts.paused}
+                          </span>
+                        </span>
+                      </Toggle>
+                    ) : null}
                     <Toggle value="needs_human">
                       <span className="inline-flex items-center gap-1.5">
                         <CircleAlertIcon />
@@ -1658,9 +1672,7 @@ export function IssueAutomationPage() {
                       const repoTitle =
                         envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
                       const hasHistory = attempts.length > 1;
-                      const canCancel =
-                        isStageActive(task.stage) &&
-                        (task.stage !== "cancelling" || task.lastError !== null);
+                      const canCancel = isTaskCancellable(task);
                       return (
                         <Collapsible key={key}>
                           <div

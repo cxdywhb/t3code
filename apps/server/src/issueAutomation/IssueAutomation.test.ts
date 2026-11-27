@@ -16,7 +16,7 @@ import {
   ThreadId,
   type IssueAutomationSaveProfileInput,
   type IssueAutomationConnector,
-  type IssueAutomationTaskId,
+  IssueAutomationTaskId,
   type IssueAutomationWriteBackAction,
   type OrchestrationProjectShell,
   type OrchestrationV2Run,
@@ -187,6 +187,13 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
     const runWaiting = yield* Deferred.make<void>();
     const stopRequested = yield* Deferred.make<void>();
     const confirmStop = yield* Deferred.make<void>();
+    const pauseRunWaiting = yield* Deferred.make<void>();
+    const pauseRequested = yield* Deferred.make<void>();
+    const confirmPause = yield* Deferred.make<void>();
+    const stalePollStarted = yield* Deferred.make<void>();
+    const releaseStalePoll = yield* Deferred.make<void>();
+    let testRulePause = false;
+    let holdPoll = false;
     const outbound: Array<{ readonly url: string; readonly body: unknown }> = [];
     const writeBacks: IssueAutomationWriteBackAction[] = [];
     const startedMessages: ThreadLaunchService.ThreadLaunchInitialMessage[] = [];
@@ -404,6 +411,26 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
             pageSize,
           });
         }
+        if (testRulePause) {
+          const keys = holdPoll ? ["2853"] : ["2851", "2852"];
+          const pageResult = {
+            items: keys.map((key) => ({
+              ...detail,
+              key,
+              displayKey: `#${key}`,
+              status: "active" as const,
+            })),
+            total: keys.length,
+            page,
+            pageSize,
+          };
+          return holdPoll
+            ? Deferred.succeed(stalePollStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseStalePoll)),
+                Effect.as(pageResult),
+              )
+            : Effect.succeed(pageResult);
+        }
         return Deferred.succeed(pollStarted, undefined).pipe(
           Effect.andThen(Deferred.await(finishPoll)),
           Effect.as({ items: [{ ...detail, status: "active" }], total: 1, page: 1, pageSize: 30 }),
@@ -413,11 +440,11 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         issueKey === "2847"
           ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.succeed(
-              issueKey === "2849"
+              issueKey === "2849" || (testRulePause && ["2851", "2852"].includes(issueKey))
                 ? {
                     ...detail,
                     key: issueKey,
-                    displayKey: "#2849",
+                    displayKey: `#${issueKey}`,
                     status: "active",
                     statusLabel: "激活",
                     availableBuilds: [{ id: "7", name: "v1.2.0" }],
@@ -464,7 +491,10 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
               resumed: false,
             });
           }
-          if (input.initialMessage?.context?.issueAutomation?.issueKey === "#2849") {
+          if (
+            input.initialMessage?.context?.issueAutomation?.issueKey ===
+            (testRulePause ? "#2851" : "#2849")
+          ) {
             expect(input.threadId).toMatch(/^thread:issue-diagnosis:/);
             expect(input.runtimeMode).toBe("approval-required");
             runs.push(makeRun(oldRunId, input.initialMessage.messageId!, "running"));
@@ -486,7 +516,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         interruptThread: (input) =>
           Effect.gen(function* () {
             expect(input).toMatchObject({ threadId, runId: oldRunId });
-            yield* Deferred.succeed(stopRequested, undefined);
+            yield* Deferred.succeed(testRulePause ? pauseRequested : stopRequested, undefined);
             return {
               type: "interrupt_requested" as const,
               run: runs[0]!,
@@ -501,16 +531,24 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
             }
             expect(input.threadId).toBe(threadId);
             if (input.runId === oldRunId && input.untilDelegatedWorkSettled) {
-              yield* Deferred.succeed(runWaiting, undefined);
+              yield* Deferred.succeed(testRulePause ? pauseRunWaiting : runWaiting, undefined);
               return yield* Effect.never;
             }
             if (input.runId === oldRunId) {
-              yield* Deferred.await(confirmStop);
+              yield* Deferred.await(testRulePause ? confirmPause : confirmStop);
               runs[0] = { ...runs[0]!, status: "interrupted", completedAt: at };
               return { threadId, run: runs[0], timedOut: false };
             }
             expect(input.runId).toBe(newRunId);
             return { threadId, run: runs[1]!, resultRun: runs[0]!, timedOut: false };
+          }),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            if (command.type !== "message.dispatch") throw new Error("Expected continuation");
+            expect(command).toMatchObject({ threadId, manualContinuationOfRunId: oldRunId });
+            expect(command.freshContext).toBeUndefined();
+            runs.push(makeRun(newRunId, command.messageId, "completed"));
+            return { sequence: 2, storedEvents: [] };
           }),
         sendToThread: (input) =>
           Effect.sync(() => {
@@ -876,6 +914,85 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       expect(persisted.profiles.find((profile) => profile.id === rule.id)?.policy).toEqual(
         diagnosticPolicy,
       );
+
+      testRulePause = true;
+      runs.length = 0;
+      const pauseRule = yield* service.saveProfile({ ...input, enabled: true });
+      expect((yield* service.triggerPoll({ profileId: pauseRule.id })).enqueuedCount).toBe(2);
+      yield* Deferred.await(pauseRunWaiting);
+      const taskFor = (issueKey: string) =>
+        Effect.map(service.getState, (state) =>
+          state.tasks.find((task) => task.issueKey === issueKey)!,
+        );
+      const runningPollTask = yield* taskFor("2851");
+      const queuedPollTask = yield* taskFor("2852");
+      expect(queuedPollTask.stage).toBe("queued");
+      const manual = (yield* service.analyzeIssues({
+        connectorId: connector.id,
+        profileId: pauseRule.id,
+        scopeId: scope.id,
+        scopeName: scope.name,
+        issueKeys: ["2847"],
+      })).tasks[0]!;
+      holdPoll = true;
+      const stalePoll = yield* service
+        .triggerPoll({ profileId: pauseRule.id })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(stalePollStarted);
+
+      yield* service.setProfileEnabled({ profileId: pauseRule.id, enabled: false });
+      expect((yield* taskFor("2852")).stage).toBe("cancelled");
+      expect((yield* service.getState).tasks.find((task) => task.id === manual.id)?.stage).toBe(
+        "queued",
+      );
+      yield* service.cancelTask({ taskId: manual.id });
+      yield* Deferred.await(pauseRequested);
+      expect((yield* taskFor("2851")).stage).toBe("pausing");
+      yield* service.saveProfile({ ...input, id: pauseRule.id, enabled: true });
+      expect(runs).toHaveLength(1);
+      yield* Deferred.succeed(releaseStalePoll, undefined);
+      expect((yield* Fiber.join(stalePoll)).enqueuedCount).toBe(0);
+      yield* Deferred.succeed(confirmPause, undefined);
+
+      const resumed = yield* whenSettled(runningPollTask.id);
+      expect(resumed.tasks.filter((task) => task.issueKey === "2851")).toEqual([
+        expect.objectContaining({
+          id: runningPollTask.id,
+          stage: "completed",
+          primaryThreadId: threadId,
+          primaryRunId: newRunId,
+          diagnosisReport,
+          steps: expect.arrayContaining([expect.objectContaining({ stage: "paused" })]),
+        }),
+      ]);
+      expect(resumed.tasks.filter((task) => task.issueKey === "2852")).toEqual([
+        expect.objectContaining({
+          id: queuedPollTask.id,
+          stage: "cancelled",
+          primaryThreadId: null,
+        }),
+      ]);
+      expect(
+        startedMessages.filter((message) => message.context?.issueAutomation?.issueKey === "#2851"),
+      ).toHaveLength(1);
+
+      yield* repository.upsertTask({
+        ...queuedPollTask,
+        id: IssueAutomationTaskId.make("save-profile-queue"),
+        issueKey: "2854",
+      });
+      yield* service.saveProfile({ ...input, id: pauseRule.id, enabled: false });
+      expect((yield* taskFor("2854")).stage).toBe("cancelled");
+
+      yield* service.setProfileEnabled({ profileId: rule.id, enabled: true });
+      yield* repository.upsertTask({
+        ...queuedPollTask,
+        id: IssueAutomationTaskId.make("write-back-queue"),
+        profileId: rule.id,
+        issueKey: "2855",
+      });
+      yield* service.setProfileEnabled({ profileId: rule.id, enabled: false });
+      expect((yield* taskFor("2855")).stage).toBe("queued");
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
   }),
 );

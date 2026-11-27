@@ -71,6 +71,7 @@ import {
   cleanIssueText,
   formatIssueNumber,
   isStageActive,
+  isTaskCancellable,
   RemoteIssueStatusGlyph,
   SeverityIndicator,
   StageBadge,
@@ -831,8 +832,7 @@ export function IssueAutomationInspectorContent({
                       <T>Cross-review Thread</T>
                     </Button>
                   ) : null}
-                  {isStageActive(activeTask.stage) &&
-                  (activeTask.stage !== "cancelling" || activeTask.lastError !== null) ? (
+                  {isTaskCancellable(activeTask) ? (
                     <Button
                       size="xs"
                       variant="ghost-destructive"

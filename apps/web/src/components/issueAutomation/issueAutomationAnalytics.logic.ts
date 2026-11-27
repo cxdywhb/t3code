@@ -14,6 +14,7 @@ export type WorkbenchTab = typeof WorkbenchTabSchema.Type;
 export const RunStatusFilterSchema = Schema.Literals([
   "all",
   "active",
+  "paused",
   "needs_human",
   "completed",
   "failed",
@@ -188,8 +189,10 @@ export function isStageRunning(stage: IssueAutomationStage): boolean {
     stage === "enriching" ||
     stage === "routing" ||
     stage === "diagnosing" ||
+    stage === "resuming" ||
     stage === "reviewing" ||
     stage === "writing_back" ||
+    stage === "pausing" ||
     stage === "cancelling"
   );
 }

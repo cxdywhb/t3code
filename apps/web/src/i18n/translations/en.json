@@ -4152,6 +4152,7 @@
   "426354e32729bb5a": "Clear",
   "0e3886b02fb92ae3": "Agent not responding to Stop",
   "a9586d74868273b7": "Stopping",
+  "a2dc5ebd1018c406": "Paused",
   "aae1e87a3919b642": "It may be short on memory. Force stop kills its processes.",
   "e9d48e7c2bae2f68": "Force stopping...",
   "b9a547b1936fb658": "Force stop",

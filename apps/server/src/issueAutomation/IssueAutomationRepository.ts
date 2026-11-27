@@ -171,7 +171,15 @@ export class IssueAutomationRepository extends Context.Service<
     ) => Effect.Effect<StoredProfile | undefined, IssueAutomationRepositoryError>;
     readonly upsertProfile: (
       profile: StoredProfile,
-    ) => Effect.Effect<void, IssueAutomationRepositoryError>;
+      stopAutomaticDiagnosis?: boolean,
+    ) => Effect.Effect<ReadonlyArray<IssueAutomationTaskId>, IssueAutomationRepositoryError>;
+    readonly listPauseRelatedTasks: Effect.Effect<
+      ReadonlyArray<IssueAutomationTask>,
+      IssueAutomationRepositoryError
+    >;
+    readonly hasPendingResume: (
+      id: IssueAutomationProfileId,
+    ) => Effect.Effect<boolean, IssueAutomationRepositoryError>;
     readonly recordProfilePoll: (
       id: IssueAutomationProfileId,
       at: string,
@@ -388,14 +396,14 @@ const make = Effect.gen(function* () {
   const upsertProfile: IssueAutomationRepository["Service"]["upsertProfile"] = Effect.fn(
     "IssueAutomationRepository.upsertProfile",
   )(
-    function* (profile) {
+    function* (profile, stopAutomaticDiagnosis) {
       const [reposJson, modelsJson, filterJson, policyJson] = yield* Effect.all([
         encodeRepoBinding(profile.repositories),
         encodeModelStrategy(profile.models),
         encodeFilter(profile.filter),
         encodePolicy(profile.policy),
       ]);
-      yield* sql`
+      const save = sql`
         INSERT INTO issue_automation_profiles (
           profile_id, connector_id, name, enabled, scope_id, scope_name,
           repositories_json, models_json, filter_json, policy_json,
@@ -422,6 +430,35 @@ const make = Effect.gen(function* () {
           feishu_webhook_secret_id = excluded.feishu_webhook_secret_id,
           updated_at = excluded.updated_at
       `;
+      if (!stopAutomaticDiagnosis) {
+        yield* save;
+        return [];
+      }
+
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* save;
+          const cancelled = yield* sql<{ task_id: IssueAutomationTaskId; stage: string }>`
+            UPDATE issue_automation_tasks
+            SET stage = CASE WHEN stage = 'queued' THEN 'cancelled' ELSE 'pausing' END,
+                last_error = NULL,
+                updated_at = ${profile.updatedAt},
+                completed_at = CASE WHEN stage = 'queued' THEN ${profile.updatedAt} ELSE NULL END,
+                steps_json = json_insert(steps_json, '$[#]', json_object(
+                  'at', ${profile.updatedAt},
+                  'stage', CASE WHEN stage = 'queued' THEN 'cancelled' ELSE 'pausing' END,
+                  'message', CASE WHEN stage = 'queued' THEN '自动轮询已关闭，已取消排队诊断'
+                                  ELSE '自动轮询已关闭，正在暂停诊断' END
+                ))
+            WHERE profile_id = ${profile.id}
+              AND trigger_kind = 'poll'
+              AND action_mode = 'diagnose_only'
+              AND stage IN ('queued', 'enriching', 'routing', 'diagnosing', 'paused', 'resuming')
+            RETURNING task_id, stage
+          `;
+          return cancelled.filter((row) => row.stage === "cancelled").map((row) => row.task_id);
+        }),
+      );
     },
     Effect.mapError(toRepoError("upsertIssueAutomationProfile", "IssueAutomationProfile")),
   );
@@ -469,6 +506,27 @@ const make = Effect.gen(function* () {
       return yield* Effect.forEach(rows, rowToTask);
     },
     Effect.mapError(toRepoError("listIssueAutomationTasks", "IssueAutomationTask")),
+  );
+
+  const listPauseRelatedTasks = sql<TaskRow>`
+    SELECT * FROM issue_automation_tasks
+    WHERE stage IN ('pausing', 'paused', 'resuming')
+    ORDER BY created_at, rowid
+  `.pipe(
+    Effect.flatMap((rows) => Effect.forEach(rows, rowToTask)),
+    Effect.mapError(toRepoError("listPauseRelatedIssueAutomationTasks", "IssueAutomationTask")),
+  );
+
+  const hasPendingResume = Effect.fn("IssueAutomationRepository.hasPendingResume")(
+    function* (id: IssueAutomationProfileId) {
+      const rows = yield* sql`
+        SELECT 1 FROM issue_automation_tasks
+        WHERE profile_id = ${id} AND stage IN ('pausing', 'paused') AND last_error IS NULL
+        LIMIT 1
+      `;
+      return rows.length > 0;
+    },
+    Effect.mapError(toRepoError("hasPendingIssueAutomationResume", "IssueAutomationTask")),
   );
 
   const getTask = Effect.fn("IssueAutomationRepository.getTask")(
@@ -564,6 +622,8 @@ const make = Effect.gen(function* () {
     listProfiles,
     getProfile,
     upsertProfile,
+    listPauseRelatedTasks,
+    hasPendingResume,
     recordProfilePoll,
     deleteProfile,
     listTasks,
