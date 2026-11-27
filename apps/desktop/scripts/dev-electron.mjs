@@ -7,6 +7,7 @@ import {
   desktopDir,
   resolveDevProtocolClient,
   resolveElectronLaunchCommand,
+  tryAcquireDevSupervisor,
 } from "./electron-launcher.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
@@ -55,6 +56,12 @@ const hostPlatform = NodeOS.platform();
 const parentPid = process.ppid;
 const parentWatchIntervalMs = 1_000;
 
+const owner = tryAcquireDevSupervisor();
+if (!owner) {
+  console.log("[dev-electron] A development launcher is already running in this checkout.");
+  process.exit(0);
+}
+
 NodeChildProcess.execFileSync(
   process.execPath,
   [NodePath.join(desktopDir, "scripts/build-browser-secret.mjs")],
@@ -85,7 +92,6 @@ let shuttingDown = false;
 let restartTimer = null;
 let currentApp = null;
 let restartQueue = Promise.resolve();
-const expectedExits = new WeakSet();
 const watchers = [];
 
 function killChildTreeByPid(pid, signal) {
@@ -94,21 +100,6 @@ function killChildTreeByPid(pid, signal) {
   }
 
   NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
-}
-
-function cleanupStaleDevApps() {
-  if (hostPlatform === "win32") {
-    return;
-  }
-
-  const escapedDesktopDir = desktopDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  NodeChildProcess.spawnSync(
-    "pkill",
-    ["-f", "--", `(^| )--t3code-dev-root=${escapedDesktopDir}( |$)`],
-    {
-      stdio: "ignore",
-    },
-  );
 }
 
 function startApp() {
@@ -131,24 +122,17 @@ function startApp() {
 
   currentApp = app;
 
-  app.once("error", () => {
-    if (currentApp === app) {
-      currentApp = null;
-    }
-
-    if (!shuttingDown) {
-      scheduleRestart();
-    }
+  app.once("error", (error) => {
+    if (currentApp !== app) return;
+    currentApp = null;
+    console.error("[dev-electron] Could not start Electron. Waiting for a rebuild.", error);
   });
 
   app.once("exit", (code, signal) => {
-    if (currentApp === app) {
-      currentApp = null;
-    }
-
-    const exitedAbnormally = signal !== null || code !== 0;
-    if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
-      scheduleRestart();
+    if (currentApp !== app) return;
+    currentApp = null;
+    if (signal !== null || code !== 0) {
+      console.error(`[dev-electron] Electron exited (${signal ?? code}). Waiting for a rebuild.`);
     }
   });
 }
@@ -160,7 +144,6 @@ async function stopApp() {
   }
 
   currentApp = null;
-  expectedExits.add(app);
 
   await new Promise((resolve) => {
     let settled = false;
@@ -177,7 +160,6 @@ async function stopApp() {
     app.once("exit", finish);
     app.kill("SIGTERM");
     killChildTreeByPid(app.pid, "TERM");
-    cleanupStaleDevApps();
 
     setTimeout(() => {
       if (settled) {
@@ -186,7 +168,6 @@ async function stopApp() {
 
       app.kill("SIGKILL");
       killChildTreeByPid(app.pid, "KILL");
-      cleanupStaleDevApps();
       finish();
     }, forcedShutdownTimeoutMs).unref();
   });
@@ -262,11 +243,11 @@ async function shutdown(exitCode) {
   });
   killChildTree("KILL");
 
+  owner.close();
   process.exit(exitCode);
 }
 
 startWatchers();
-cleanupStaleDevApps();
 startApp();
 
 process.once("SIGINT", () => {

@@ -1,4 +1,3 @@
-import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -12,6 +11,7 @@ import {
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
   resolveMacLauncherPaths,
+  tryAcquireDevSupervisor,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
@@ -116,6 +116,24 @@ describe("electron development launcher", () => {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("permits only one dev supervisor per checkout and releases ownership on close", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-supervisor-"));
+    try {
+      const first = tryAcquireDevSupervisor(directory);
+      assert.exists(first);
+      try {
+        assert.isUndefined(tryAcquireDevSupervisor(directory));
+      } finally {
+        first.close();
+      }
+      const next = tryAcquireDevSupervisor(directory);
+      assert.exists(next);
+      next.close();
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 // Supply inert imports so the real startup runs without launching Electron or signalling processes.
@@ -140,6 +158,7 @@ async function runDevElectronStartup({
       desktopDir,
       resolveDevProtocolClient: () => null,
       resolveElectronLaunchCommand: (args) => ({ electronPath: "electron", args }),
+      tryAcquireDevSupervisor: () => ({ close: () => undefined }),
       waitForResources: async () => undefined,
       URL,
       ...makeFakeClock(),
@@ -152,18 +171,6 @@ async function runDevElectronStartup({
       ...context,
     },
   );
-}
-
-async function startupCleanupPattern(desktopDir) {
-  let pattern;
-  await runDevElectronStartup({
-    desktopDir,
-    spawnSync: (command, args) => {
-      if (command === "pkill" && args.includes("-f")) pattern = args.at(-1);
-    },
-  });
-  assert.isString(pattern);
-  return pattern;
 }
 
 function makeFakeClock() {
@@ -250,59 +257,39 @@ it("dev supervisor stops Electron and exits once its parent process goes away", 
   assert.lengthOf(exitCodes, 1, "supervisor did not exit after its parent process went away");
 });
 
-it
-  // oxlint-disable-next-line t3code/no-global-process-runtime -- Native pgrep is unavailable on Windows.
-  .skipIf(NodeOS.platform() === "win32")
-  .each([
-    "/tmp/t3-feature.one/apps/desktop",
-    "/tmp/t3-feature.one [two](three)+?^${four}|back\\slash*/apps/desktop",
-  ])("dev cleanup matches only the literal root argument: %s", async (desktopDir) => {
-  const pattern = await startupCleanupPattern(desktopDir);
-  const flag = `--t3code-dev-root=${desktopDir}`;
-  const argvCases = [
-    [flag],
-    [flag, "main.cjs"],
-    [flag.replace(".one", "Xone")],
-    [`${flag}-two`],
-    [`prefix${flag}`],
-    [`--t3code-dev-root=/other${desktopDir}`],
-  ];
-  const children = [];
-  try {
-    for (const args of argvCases) {
-      const child = NodeChildProcess.spawn(
-        process.execPath,
-        ["-e", "process.send('ready'); setInterval(() => {}, 1000)", "--", ...args],
-        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
-      );
-      children.push(child);
-      await Promise.race([
-        NodeEvents.once(child, "message"),
-        NodeEvents.once(child, "exit").then(() => {
-          throw new Error("Fixture exited before readiness");
-        }),
-      ]);
-    }
-    // Use the native ERE engine, but never execute the launcher's signal-producing command.
-    const result = NodeChildProcess.spawnSync(
-      "pgrep",
-      ["-P", String(process.pid), "-f", "--", pattern],
-      { encoding: "utf8" },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const matches = result.stdout.trim().split(/\s+/).map(Number);
-    assert.sameMembers(
-      matches,
-      children.slice(0, 2).map((child) => child.pid),
-    );
-  } finally {
-    await Promise.all(
-      children.map(async (child) => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        const exited = NodeEvents.once(child, "exit");
-        child.kill("SIGTERM");
-        await exited;
-      }),
-    );
-  }
+it("does not signal other development apps when starting", async () => {
+  const signals = [];
+  await runDevElectronStartup({
+    spawnSync: (command, args) => signals.push({ command, args }),
+  });
+  assert.isEmpty(signals);
+});
+
+it("waits for a new build if Electron exits unexpectedly", async () => {
+  const clock = makeFakeClock();
+  const apps = [];
+  const onChange = new Map();
+  await runDevElectronStartup({
+    ...clock,
+    spawn: () => {
+      const app = new NodeEvents.EventEmitter();
+      apps.push(app);
+      return app;
+    },
+    NodeFS: {
+      watch(directory, _options, listener) {
+        onChange.set(directory, listener);
+        return { close: () => undefined };
+      },
+    },
+    console: { error: () => undefined },
+  });
+
+  apps[0].emit("exit", 1, null);
+  await clock.advance(5_000);
+
+  assert.lengthOf(apps, 1);
+  onChange.get(NodePath.join("/repo/apps/desktop", "dist-electron"))("change", "main.cjs");
+  await clock.advance(5_000);
+  assert.lengthOf(apps, 2);
 });
