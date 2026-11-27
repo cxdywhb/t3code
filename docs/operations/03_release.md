@@ -12,6 +12,18 @@ vp exec node scripts/release-xcode-mac.ts 0.1.25 --publish --notes /path/to/rele
 
 第一次切换签名时，通过 DMG 手动替换现有临时签名版或缺少更新源的版本。发布后用上一个同团队签名的版本实际走一遍「检查更新 → 下载 → 安装 → 重启」，确认进入新版本。手动安装用的临时签名包可单独验证和分发，稳定更新通道由带更新源的签名包维护。
 
+## X Code macOS 和 Windows 预发布
+
+先将 Windows 构建产物中的 `latest-win-x64.yml` 复制为同目录下的 `latest.yml`。从现有 GitHub 预发布版本补充或更新安装包时，运行以下命令。
+
+```sh
+vp run release:xcode:prerelease-assets 0.1.27 \
+  --mac-dir /path/to/mac-artifacts --win-dir /path/to/windows-artifacts \
+  --publish
+```
+
+命令要求两个平台的更新清单以及各安装包的差分索引齐全，校验版本、文件名、大小和 SHA-512，并检查 GitHub 上的附件与本地 SHA-256 一致。省略 `--publish` 只校验本地产物。临时签名的 macOS 手动安装包可以传入 `--generate-mac-manifest`，从本次构建的 DMG 和 ZIP 生成 `latest-mac.yml`。
+
 ## 上游发布流程
 
 Unified release workflow: `.github/workflows/release.yml`. Beta is a product label, not a release channel—channels remain `stable` and `nightly` (plus `preview` for maintainer test builds).

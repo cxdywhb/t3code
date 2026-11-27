@@ -791,6 +791,7 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_ARCH: ${{ inputs.arch }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
         run: |
           set -euo pipefail
           mkdir -p release-publish
@@ -803,6 +804,22 @@ jobs:
               echo "::error::Expected exactly one Windows installer named $expected"
               exit 1
             fi
+          fi
+
+          if [[ "$RELEASE_CHANNEL" != "preview" ]]; then
+            channel=latest
+            [[ "$RELEASE_CHANNEL" != "nightly" ]] || channel=nightly
+            case "$PLATFORM" in
+              win) updater_files=("release/$channel.yml" "$expected.blockmap") ;;
+              mac) updater_files=("release/$channel-mac.yml" "release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.dmg.blockmap" "release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.zip.blockmap") ;;
+              *) updater_files=() ;;
+            esac
+            for file in "${updater_files[@]}"; do
+              if [[ ! -f "$file" || ! -s "$file" ]]; then
+                echo "::error::Required updater asset is missing or empty: $file"
+                exit 1
+              fi
+            done
           fi
 
           patterns=(
