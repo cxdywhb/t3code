@@ -1,0 +1,115 @@
+name: Build CLI linux-arm64 (isolated)
+
+# One-off isolated build of the t3 CLI archive for linux-arm64 at the pinned
+# v0.1.25 commit, so the desktop SSH launcher can be pre-seeded on a host.
+# Runs only when this file changes on the temporary build branch, or when dispatched manually.
+# No secrets are used; the token is read-only; the result is a short-lived
+# Actions artifact and is never published as a release.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/feat-ai-build-cli-linux-arm64]
+    paths: [".github/workflows/build-cli-linux-arm64.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-cli-linux-arm64
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build t3 0.1.25 linux-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      T3CODE_TELEMETRY_CHANNEL: dev
+      PINNED_REF: 2c52808b3bf0d9305aed2f19a047cfdb0db51251
+      T3_VERSION: "0.1.25"
+    steps:
+      - name: Checkout pinned commit
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$PINNED_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$PINNED_REF"
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+          save-pnpm-store: false
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "$T3_VERSION"
+
+      - name: Build JS bundle
+        run: vp run build:desktop:bundle
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Build resource monitor
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target aarch64-unknown-linux-gnu
+
+      - name: Build CLI single-executable
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Apply web client branding
+        run: node scripts/apply-web-brand-assets.ts code apps/server/dist/client
+
+      - name: Stage resource monitor for the CLI archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_dir="$RUNNER_TEMP/cli-resource-monitor/linux-arm64"
+          mkdir -p "$target_dir"
+          cp "native/resource-monitor/target/aarch64-unknown-linux-gnu/release/t3-resource-monitor" "$target_dir/t3-resource-monitor"
+
+      - name: Install patchelf and libatomic
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y patchelf libatomic1
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch arm64 \
+            --version "$T3_VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$T3_VERSION"
+
+      - name: Checksum CLI archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-cli
+          sha256sum t3-0.1.25-linux-arm64.tar.gz | tee t3-0.1.25-linux-arm64.tar.gz.sha256
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-linux-arm64-v0.1.25
+          path: |
+            release-cli/t3-0.1.25-linux-arm64.tar.gz
+            release-cli/t3-0.1.25-linux-arm64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
