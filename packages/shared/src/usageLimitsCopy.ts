@@ -10,8 +10,11 @@ import type { MFunctionType } from "gt-i18n/types";
 import {
   CHATGPT_USAGE_URL,
   collectExternalUsageLinks as collectExternalUsageLinksWith,
+  collectLimitPoolEnvironments,
   cursorUsageWindowDetails as cursorUsageWindowDetailsBase,
+  isPerAccountDashboardDriver,
   type LimitPool,
+  type LimitPoolWindow,
   type LimitPresentations,
   providersWithLimits,
   type ResetCreditChoice,
@@ -22,6 +25,49 @@ import {
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+
+export function dashboardLimitWindowLabel(pool: LimitPoolWindow, resolve: MFunctionType): string {
+  if (pool.kind === "weekly" && pool.label === "Weekly") {
+    return resolve(msg("Weekly", { $context: "weekly usage quota window" }));
+  }
+  if (
+    pool.kind === "session" &&
+    pool.label === "Session" &&
+    pool.members.every(({ account, window }) => {
+      const duration =
+        window.windowDurationMins ??
+        account.limits.windows.find(({ id }) => id === window.id)?.windowDurationMins;
+      return duration === 5 * 60;
+    })
+  ) {
+    return resolve(msg("Session", { $context: "five-hour usage quota window" }));
+  }
+  return pool.label;
+}
+
+export function limitDashboardHeading(
+  pool: LimitPool,
+  providerLabel: string,
+  accountNumber: number | undefined,
+  showEnvironments: boolean,
+): string {
+  const account = isPerAccountDashboardDriver(pool.driver) ? pool.accounts[0] : undefined;
+  const email = account?.email?.trim();
+  const emailPrefix = email?.match(/^([^@]+)@[^@]+$/)?.[1];
+  const displayName = account?.displayName;
+  const alias =
+    displayName === providerLabel || displayName === email || displayName === emailPrefix
+      ? undefined
+      : displayName;
+  const title =
+    !alias && !emailPrefix && accountNumber !== undefined
+      ? `${providerLabel} #${accountNumber}`
+      : providerLabel;
+  const environments = showEnvironments
+    ? collectLimitPoolEnvironments(pool).map(({ label }) => label)
+    : [];
+  return [title, alias, ...environments, emailPrefix].filter(Boolean).join(" · ");
+}
 
 const CURSOR_USAGE_WINDOW_COPY: Readonly<
   Record<string, { readonly label: string; readonly description: string }>

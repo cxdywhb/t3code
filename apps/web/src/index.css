@@ -252,6 +252,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-diff-addition-foreground: var(--diff-addition-foreground);
   --color-diff-deletion-foreground: var(--diff-deletion-foreground);
   --color-info-foreground: var(--info-foreground);
+  --color-sidebar-activity-foreground: light-dark(#743da6, #cba0f6);
+  --color-sidebar-running-foreground: #16803c;
   --color-info: var(--info);
   --color-guest: var(--guest);
   --color-guest-foreground: var(--guest-foreground);

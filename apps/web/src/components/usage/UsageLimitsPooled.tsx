@@ -43,8 +43,10 @@ import {
   collectDashboardUsageLinks,
   collectLimitNotices,
   cursorUsageWindowDetails,
+  dashboardLimitWindowLabel,
   formatDuration,
   formatResetsIn,
+  limitDashboardHeading,
   resetCreditChoices,
 } from "@t3tools/shared/usageLimitsCopy";
 
@@ -648,33 +650,29 @@ function PoolSection({
   pool,
   now,
   accountNumber,
+  showEnvironmentSources,
 }: {
   readonly pool: LimitPool;
   readonly now: number;
   readonly accountNumber?: number | undefined;
+  readonly showEnvironmentSources: boolean;
 }) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
-  const account = isPerAccountDashboardDriver(pool.driver) ? pool.accounts[0] : undefined;
-  const title =
-    account?.displayName && account.displayName !== label
-      ? `${label} · ${account.displayName}`
-      : accountNumber
-        ? `${label} #${accountNumber}`
-        : label;
   const windows = displayLimitWindows(pool);
+  const heading = limitDashboardHeading(pool, label, accountNumber, showEnvironmentSources);
   const m = useMessages();
   return (
-    <section aria-label={title} className="flex flex-col gap-3">
+    <section aria-label={heading} className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
         <ProviderInstanceIcon
           driverKind={pool.driver}
           displayName={label}
           indicatorBackground="var(--background)"
-          className="size-5"
+          className="size-5 shrink-0"
           iconClassName="size-4 text-foreground/80"
         />
-        {title}
+        <span className="wrap-anywhere">{heading}</span>
       </h2>
       {windows.map((window) => {
         const details =
@@ -685,7 +683,7 @@ function PoolSection({
             pool={window}
             color={color}
             now={now}
-            label={details?.label}
+            label={details ? details.label : dashboardLimitWindowLabel(window, m)}
             description={details?.description}
           />
         );
@@ -735,6 +733,7 @@ export function UsageLimitsPooled({
               key={split ? pool.accounts[0]!.key : pool.driver}
               pool={pool}
               now={now}
+              showEnvironmentSources={presentations.size > 1}
               accountNumber={
                 driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined
               }

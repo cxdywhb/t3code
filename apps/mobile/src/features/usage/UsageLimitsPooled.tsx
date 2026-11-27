@@ -19,6 +19,8 @@ import {
   collectDashboardUsageLinks,
   collectLimitNotices,
   cursorUsageWindowDetails,
+  dashboardLimitWindowLabel,
+  limitDashboardHeading,
 } from "@t3tools/shared/usageLimitsCopy";
 import { msg, T, useGT, useMessages, Var } from "gt-react-native";
 import { Fragment, type ReactNode, useId, useState } from "react";
@@ -542,19 +544,18 @@ export function UsageLimitsSection({
         const accountNumber =
           driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined;
         const providerLabel = providerClients.get(pool.driver)?.label ?? pool.driver;
-        const accountLabel = splitAccount ? accountName(splitAccount, m) : null;
-        const title =
-          accountLabel && accountLabel !== providerLabel
-            ? `${providerLabel} · ${accountLabel}`
-            : accountNumber
-              ? `${providerLabel} #${accountNumber}`
-              : providerLabel;
+        const heading = limitDashboardHeading(
+          pool,
+          providerLabel,
+          accountNumber,
+          selected.size > 1,
+        );
         return (
           <Fragment key={splitAccount?.key ?? pool.driver}>
             <View className="gap-3">
               <View className="flex-row items-center gap-2 px-1">
                 <ProviderIcon provider={pool.driver} size={18} />
-                <Text className="text-base font-t3-medium text-foreground">{title}</Text>
+                <Text className="shrink text-base font-t3-medium text-foreground">{heading}</Text>
               </View>
               {windows.map((window) => {
                 const details =
@@ -570,7 +571,7 @@ export function UsageLimitsSection({
                     environmentIds={
                       selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds]
                     }
-                    label={details?.label}
+                    label={details ? details.label : dashboardLimitWindowLabel(window, m)}
                     description={details?.description}
                     wide={wide}
                   />

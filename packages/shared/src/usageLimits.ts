@@ -315,6 +315,11 @@ function hubIdentity(environmentId: EnvironmentId, source: UsageLimitSourceSnaps
   return endpoint && !local ? endpoint : `${environmentId}:${source.id}`;
 }
 
+interface LimitEnvironment {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}
+
 export interface LimitAccount {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
@@ -322,10 +327,9 @@ export interface LimitAccount {
   readonly email: string | undefined;
   readonly plan: string | undefined;
   readonly accentColor: string | undefined;
-  readonly environments: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly label: string;
-  }>;
+  readonly environments: readonly LimitEnvironment[];
+  // Includes environments that report the account through a quota source.
+  readonly reportingEnvironments: readonly LimitEnvironment[];
   readonly sourceLabel: string | null;
   readonly redeem: {
     readonly environmentId: EnvironmentId;
@@ -414,6 +418,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       plan: planSources.get(key)?.plan ?? previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
+      reportingEnvironments: [
+        ...previous.reportingEnvironments,
+        ...next.reportingEnvironments.filter(
+          (candidate) =>
+            !previous.reportingEnvironments.some(
+              (seen) => seen.environmentId === candidate.environmentId,
+            ),
+        ),
+      ],
       sourceLabel: environments.length > 0 ? null : (previous.sourceLabel ?? next.sourceLabel),
       redeem:
         hubRedeems.get(key)?.redeem ??
@@ -428,7 +441,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
   };
   const resolveKey = limitAccountKeyResolver(presentations);
   for (const [environmentId, presentation] of presentations) {
-    const label = presentation.entry.target.label;
+    const environment = { environmentId, label: presentation.entry.target.label };
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
       if (!provider.usageLimits || limitsNotice(provider.usageLimits) !== null) continue;
       merge(nativeRowKey(resolveKey, environmentId, provider), {
@@ -438,7 +451,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         email: provider.auth.email,
         plan: provider.auth.label,
         accentColor: provider.accentColor,
-        environments: [{ environmentId, label }],
+        environments: [environment],
+        reportingEnvironments: [environment],
         sourceLabel: null,
         redeem: { environmentId, input: { instanceId: provider.instanceId } },
         limits: provider.usageLimits,
@@ -447,6 +461,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
   }
   const labelEnvironment = presentations.size > 1;
   for (const [environmentId, presentation] of presentations) {
+    const environment = { environmentId, label: presentation.entry.target.label };
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
       const sourceLabel = labelEnvironment
         ? `${presentation.entry.target.label} · ${source.label}`
@@ -465,6 +480,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
           plan: account.plan,
           accentColor: undefined,
           environments: [],
+          reportingEnvironments: [environment],
           sourceLabel,
           redeem: account.usageLimits.resetCredits?.nextCreditId
             ? {
@@ -545,6 +561,16 @@ export interface LimitPool {
   readonly driver: ServerProvider["driver"];
   readonly accounts: readonly LimitAccount[];
   readonly windows: readonly LimitPoolWindow[];
+}
+
+export function collectLimitPoolEnvironments(pool: LimitPool): readonly LimitEnvironment[] {
+  const environments = new Map<EnvironmentId, LimitEnvironment>();
+  for (const account of pool.accounts) {
+    for (const environment of account.reportingEnvironments) {
+      environments.set(environment.environmentId, environment);
+    }
+  }
+  return [...environments.values()];
 }
 
 function hasDuplicateCursorTotal(pool: LimitPool): boolean {

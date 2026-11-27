@@ -5085,6 +5085,8 @@
   "288ade531cfcf90c": "分段 {index}，{account}，剩余 {remaining}%，{resetsIn}",
   "d0d366d02d9fd98e": "分段 {index}，{account}，剩余 {remaining}%，{credits, plural, other {已存有 {credits} 个重置额度}}",
   "d2d071e45a2d6b89": "选择一个环境即可查看限制。",
+  "930b820667cff73e": "周额度",
+  "69ebd700d517638f": "5小时额度",
   "f411a8cef140a5ea": "选中的环境上没有提供方报告订阅限制。",
   "b29a752dd8ee9aa7": "账户",
   "55a38e69338c54ee": "隐藏账户邮箱",

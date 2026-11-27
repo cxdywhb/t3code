@@ -109,7 +109,7 @@ describe("UsageLimitsPooled next refill", () => {
   });
 });
 
-it("shows each Codex account's own remaining quota and reset time", async () => {
+it("identifies Codex quota groups by environment and email prefix", async () => {
   const presentations = new Map([
     [
       EnvironmentId.make("desk"),
@@ -117,8 +117,26 @@ it("shows each Codex account's own remaining quota and reset time", async () => 
         entry: { target: { label: "Desk" } },
         serverConfig: {
           providers: [
-            account("Work", 20, "2026-10-25T17:00:00.000Z"),
-            account("Personal", 60, "2026-10-25T18:00:00.000Z"),
+            {
+              ...account("work", 20, "2026-10-25T17:00:00.000Z"),
+              displayName: "Codex",
+              auth: { status: "authenticated" as const, email: "work.dev@example.test" },
+            },
+          ],
+        },
+      },
+    ],
+    [
+      EnvironmentId.make("laptop"),
+      {
+        entry: { target: { label: "Laptop" } },
+        serverConfig: {
+          providers: [
+            {
+              ...account("personal", 60, "2026-10-25T18:00:00.000Z"),
+              displayName: "Personal",
+              auth: { status: "authenticated" as const, email: "personal+codex@example.test" },
+            },
           ],
         },
       },
@@ -127,13 +145,32 @@ it("shows each Codex account's own remaining quota and reset time", async () => 
   await using screen = await render(
     <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
   );
-  const work = screen.getByRole("region", { name: "Codex · Work" });
-  const personal = screen.getByRole("region", { name: "Codex · Personal" });
+  const work = screen.getByRole("region", { name: "Codex · Desk · work.dev", exact: true });
+  const personal = screen.getByRole("region", {
+    name: "Codex · Personal · Laptop · personal+codex",
+    exact: true,
+  });
   await expect.element(work.getByRole("button", { name: /80% left.*1h/ })).toBeVisible();
   await expect.element(personal.getByRole("button", { name: /40% left.*2h/ })).toBeVisible();
+  await expect
+    .element(work.getByRole("heading", { name: "Codex · Desk · work.dev" }))
+    .toBeVisible();
+  await expect
+    .element(personal.getByRole("heading", { name: "Codex · Personal · Laptop · personal+codex" }))
+    .toBeVisible();
   expect(personal.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
     work.element().getBoundingClientRect().bottom,
   );
+
+  await screen.rerender(
+    <UsageLimitsPooled
+      presentations={new Map([...presentations].filter(([id]) => id === "desk"))}
+      now={Date.parse(checkedAt)}
+    />,
+  );
+  await expect
+    .element(screen.getByRole("heading", { name: "Codex · work.dev", exact: true }))
+    .toBeVisible();
 });
 
 function antigravityAccount(

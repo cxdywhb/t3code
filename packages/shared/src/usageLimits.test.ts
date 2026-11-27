@@ -8,6 +8,7 @@ import {
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { mFallback } from "gt-i18n";
 
 import {
   type LimitAccount,
@@ -18,6 +19,7 @@ import {
   withUsageLimitsCommands,
   collectLimitAccounts,
   collectExternalUsageLinks,
+  collectLimitPoolEnvironments,
   collectLimitPools,
   elapsedShare,
   exhaustedUsageWindow,
@@ -26,7 +28,7 @@ import {
   usesChatGptSharing,
   resolveNewThreadModelSelection,
 } from "./usageLimits.ts";
-import { collectLimitNotices } from "./usageLimitsCopy.ts";
+import { collectLimitNotices, dashboardLimitWindowLabel } from "./usageLimitsCopy.ts";
 
 const now = Date.parse("2026-09-03T12:00:00.000Z");
 
@@ -243,6 +245,18 @@ describe("pools", () => {
       auth: { status: "authenticated", email: "Same@example.com" },
       usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 40 }] },
     });
+    const hub = {
+      ...source,
+      accounts: [
+        {
+          id: "claude-same@example.com.json",
+          driver: claude,
+          email: "same@example.com",
+          plan: "Claude Subscription",
+          usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 10 }] },
+        },
+      ],
+    };
     const input = new Map([
       [EnvironmentId.make("env-a"), { ...laptop, serverConfig: { providers: [native] } }],
       [
@@ -259,21 +273,15 @@ describe("pools", () => {
                 },
               },
             ],
-            usageLimitSources: [
-              {
-                ...source,
-                accounts: [
-                  {
-                    id: "claude-same@example.com.json",
-                    driver: claude,
-                    email: "same@example.com",
-                    plan: "Claude Subscription",
-                    usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 10 }] },
-                  },
-                ],
-              },
-            ],
+            usageLimitSources: [hub],
           },
+        },
+      ],
+      [
+        EnvironmentId.make("env-c"),
+        {
+          entry: { target: { label: "Office" } },
+          serverConfig: { providers: [], usageLimitSources: [hub] },
         },
       ],
     ]);
@@ -289,6 +297,11 @@ describe("pools", () => {
       ],
     });
     expect(accounts[0]?.limits.windows[0]?.usedPercent).toBe(55);
+    expect(collectLimitPoolEnvironments(collectLimitPools(accounts, now)[0]!)).toEqual([
+      { environmentId: "env-a", label: "Laptop" },
+      { environmentId: "env-b", label: "Desktop" },
+      { environmentId: "env-c", label: "Office" },
+    ]);
   });
 
   it("uses the freshest reported plan even when the newest quota has no plan", () => {
@@ -582,12 +595,16 @@ describe("pools", () => {
         },
       ],
     ]);
-    expect(collectLimitAccounts(input).map((account) => account.redeem)).toEqual(
+    const accounts = collectLimitAccounts(input);
+    expect(accounts.map((account) => account.redeem)).toEqual(
       hubAccounts.map((account) => ({
         environmentId: "env-a",
         input: { sourceId: "hub", accountId: account.id, creditId: `${account.id}-credit` },
       })),
     );
+    expect(collectLimitPoolEnvironments(collectLimitPools(accounts, now)[0]!)).toEqual([
+      { environmentId: "env-a", label: "Laptop" },
+    ]);
   });
 
   it("does not give old credits the timestamp of a newer window-only read", () => {
@@ -1114,6 +1131,7 @@ describe("pools", () => {
           plan: undefined,
           accentColor: undefined,
           environments: [],
+          reportingEnvironments: [],
           sourceLabel: null,
           redeem: null,
           limits: {
@@ -1163,6 +1181,7 @@ describe("pools", () => {
             plan: undefined,
             accentColor: undefined,
             environments: [],
+            reportingEnvironments: [],
             sourceLabel: null,
             redeem: null,
             limits: { checkedAt, windows: [{ ...window, usedPercent, resetsAt: order[index] }] },
@@ -1191,6 +1210,7 @@ describe("pooled account columns", () => {
     plan: undefined,
     accentColor: undefined,
     environments: [],
+    reportingEnvironments: [],
     sourceLabel: "Hub",
     redeem: null,
     limits: { checkedAt: "2026-09-03T11:00:00.000Z", windows },
@@ -1199,6 +1219,26 @@ describe("pooled account columns", () => {
     pool.windows.map((row) =>
       row.columns.map((member) => (member.window ? member.account.key : null)),
     );
+
+  it("localizes standard quota labels without treating shorter sessions as five hours", () => {
+    const [standard] = collectLimitPools([account("standard", [window, weekly])], now);
+    const [short] = collectLimitPools(
+      [account("short", [{ ...window, windowDurationMins: 60 }])],
+      now,
+    );
+    const translated: string[] = [];
+    const resolve: typeof mFallback = (message) => {
+      const label = mFallback(message);
+      translated.push(String(label));
+      return label;
+    };
+    expect(standard!.windows.map((row) => dashboardLimitWindowLabel(row, resolve))).toEqual([
+      "Session",
+      "Weekly",
+    ]);
+    expect(dashboardLimitWindowLabel(short!.windows[0]!, resolve)).toBe("Session");
+    expect(translated).toEqual(["Session", "Weekly"]);
+  });
 
   it.each([
     {

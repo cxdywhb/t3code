@@ -157,12 +157,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-function compactSidebarTimeLabel(timestamp: string, nowMs: number, resolve: MessageResolver) {
-  const parts = formatRelativeTime(timestamp, nowMs, resolve);
-  if (parts === null) return "";
-  return parts.suffix === null ? resolve(msg("now", { $context: "relative time" })) : parts.value;
-}
-
 function PendingSyncLabel() {
   return (
     <SharedTooltipTrigger
@@ -183,9 +177,16 @@ function PendingSyncLabel() {
 function RelativeTimeLabel(props: { timestamp: string | null }) {
   const nowMinute = useNowMinute();
   const m = useMessages();
-  return props.timestamp === null
-    ? null
-    : compactSidebarTimeLabel(props.timestamp, Date.parse(`${nowMinute}:00.000Z`), m);
+  if (props.timestamp === null) return null;
+  const parts = formatRelativeTime(props.timestamp, Date.parse(`${nowMinute}:00.000Z`), m);
+  if (parts === null) return null;
+  return parts.suffix === null ? (
+    <span className="font-medium text-success-foreground">
+      {m(msg("now", { $context: "relative time" }))}
+    </span>
+  ) : (
+    parts.value
+  );
 }
 
 export function JumpHintBadge(props: { label: string }) {
@@ -828,13 +829,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 ? gt("Goal", { $context: "thread status: working on a goal" })
                 : gt("Working", { $context: "thread status" }),
           icon: "working" as const,
-          className: "text-zinc-500 dark:text-zinc-400",
+          className: "text-sidebar-activity-foreground light:text-sidebar-running-foreground",
         }
       : status === "waiting"
         ? {
             label: gt("Waiting", { $context: "thread status" }),
             icon: "waiting" as const,
-            className: "text-muted-foreground",
+            className: "text-warning-foreground",
           }
         : status === "approval"
           ? {
@@ -1057,9 +1058,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           : shouldRecede
             ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
-    shouldRecede &&
-      (status === "preparing" || status === "working") &&
-      "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
     props.sortable?.isDragging &&
@@ -1427,7 +1425,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       <PendingSyncLabel />
                     </span>
                   ) : variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-info-foreground tabular-nums">
+                    <span className="inline-flex items-center gap-1 text-xs text-sidebar-activity-foreground tabular-nums">
                       {/* The clock tells a wake time from an age at a glance. */}
                       <AlarmClockIcon aria-hidden className="size-3" />
                       {props.snoozeWakeLabelText}

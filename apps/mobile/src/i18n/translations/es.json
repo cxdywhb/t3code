@@ -5096,6 +5096,8 @@
   "288ade531cfcf90c": "Segmento {index}, {account}, queda un {remaining}%, {resetsIn}",
   "d0d366d02d9fd98e": "Segmento {index}, {account}, queda un {remaining}%, {credits, plural, one {{credits} crédito de restablecimiento acumulado} other {{credits} créditos de restablecimiento acumulados}}",
   "d2d071e45a2d6b89": "Selecciona un entorno para ver los límites.",
+  "930b820667cff73e": "Weekly",
+  "69ebd700d517638f": "Session",
   "f411a8cef140a5ea": "Ningún proveedor de los entornos seleccionados informa de límites de suscripción.",
   "b29a752dd8ee9aa7": "Cuenta",
   "55a38e69338c54ee": "Ocultar el correo de la cuenta",

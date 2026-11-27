@@ -5076,6 +5076,8 @@
   "288ade531cfcf90c": "セグメント {index}、{account}、残り {remaining}%、{resetsIn}",
   "d0d366d02d9fd98e": "セグメント {index}、{account}、残り {remaining}%、{credits, plural, other {リセットクレジット {credits} 件を保有}}",
   "d2d071e45a2d6b89": "上限を表示するには環境を選択してください。",
+  "930b820667cff73e": "Weekly",
+  "69ebd700d517638f": "Session",
   "f411a8cef140a5ea": "選択した環境には、サブスクリプションの上限を報告するプロバイダーがありません。",
   "b29a752dd8ee9aa7": "アカウント",
   "55a38e69338c54ee": "アカウントのメールアドレスを非表示",

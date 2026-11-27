@@ -5103,6 +5103,8 @@
   "288ade531cfcf90c": "Segment {index}, {account}, {remaining} % übrig, {resetsIn}",
   "d0d366d02d9fd98e": "Segment {index}, {account}, {remaining} % übrig, {credits, plural, one {{credits} Reset-Guthaben angespart} other {{credits} Reset-Guthaben angespart}}",
   "d2d071e45a2d6b89": "Wähle eine Umgebung, um Limits zu sehen.",
+  "930b820667cff73e": "Weekly",
+  "69ebd700d517638f": "Session",
   "f411a8cef140a5ea": "Kein Anbieter in den ausgewählten Umgebungen meldet Abo-Limits.",
   "b29a752dd8ee9aa7": "Konto",
   "55a38e69338c54ee": "Konto-E-Mail ausblenden",
