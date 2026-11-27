@@ -206,6 +206,11 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
+    const routedProject = {
+      ...project,
+      id: ProjectId.make("proj-routed"),
+      title: "routed-app",
+    };
     const webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook";
     const baseUrl = "https://zentao.example.com/zentao";
     const scope = { id: "5", name: "好轻 App" };
@@ -440,12 +445,13 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         issueKey === "2847"
           ? Deferred.succeed(cancellableTaskStarted, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.succeed(
-              issueKey === "2849" || (testRulePause && ["2851", "2852"].includes(issueKey))
+              issueKey === "2849" || (testRulePause && ["2851", "2852", "2856"].includes(issueKey))
                 ? {
                     ...detail,
                     key: issueKey,
                     displayKey: `#${issueKey}`,
                     status: "active",
+                    moduleName: issueKey === "2856" ? "Routed module" : detail.moduleName,
                     statusLabel: "激活",
                     availableBuilds: [{ id: "7", name: "v1.2.0" }],
                   }
@@ -468,7 +474,9 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issue-feishu-" })),
         Layer.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
       ),
-      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([project]) }),
+      Layer.mock(ProjectService.ProjectService)({
+        listShells: () => Effect.succeed([project, routedProject]),
+      }),
       Layer.mock(GitWorkflow.GitWorkflowService)({ currentBranch: () => Effect.succeed("main") }),
       Layer.mock(ThreadIssueService.ThreadIssueService)({
         link: () => Effect.succeed({ alreadyLinked: false }),
@@ -955,6 +963,28 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       yield* Deferred.succeed(confirmPause, undefined);
 
       const resumed = yield* whenSettled(runningPollTask.id);
+      const runningTask = resumed.tasks.find((task) => task.id === runningPollTask.id)!;
+      const pauseSnapshot = {
+        ...resumed,
+        tasks: (["pausing", "paused", "resuming"] as const).map((stage) => ({
+          ...runningTask,
+          stage,
+        })),
+      };
+      const legacy = IssueAutomationService.issueAutomationSnapshotForClient(
+        pauseSnapshot,
+        undefined,
+      );
+      expect(legacy.tasks.map((task) => task.stage)).toEqual([
+        "cancelling",
+        "diagnosing",
+        "diagnosing",
+      ]);
+      expect(legacy.tasks[0]!.steps.map((step) => step.stage)).not.toContain("paused");
+      expect(legacy.tasks[0]!.steps.map((step) => step.stage)).not.toContain("resuming");
+      expect(IssueAutomationService.issueAutomationSnapshotForClient(pauseSnapshot, true)).toBe(
+        pauseSnapshot,
+      );
       expect(resumed.tasks.filter((task) => task.issueKey === "2851")).toEqual([
         expect.objectContaining({
           id: runningPollTask.id,
@@ -993,6 +1023,60 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       });
       yield* service.setProfileEnabled({ profileId: rule.id, enabled: false });
       expect((yield* taskFor("2855")).stage).toBe("queued");
+
+      const beforeLaunch = {
+        ...queuedPollTask,
+        id: IssueAutomationTaskId.make("paused-before-launch"),
+        issueKey: "2856",
+        stage: "paused" as const,
+      };
+      yield* repository.upsertTask(beforeLaunch);
+      yield* service.saveProfile({
+        ...input,
+        id: pauseRule.id,
+        enabled: true,
+        repositories: {
+          primaryProjectId: project.id,
+          linkedProjectIds: [routedProject.id],
+          moduleMappings: [{ pattern: "Routed module", projectId: routedProject.id }],
+        },
+      });
+      const rerouted = yield* whenSettled(beforeLaunch.id);
+      expect
+        .soft(rerouted.tasks.find((task) => task.id === beforeLaunch.id)?.targetProjectId)
+        .toBe(routedProject.id);
+
+      const staleResumeId = IssueAutomationTaskId.make("stale-resuming");
+      const pauseSentinelId = IssueAutomationTaskId.make("stale-paused");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: staleResumeId,
+        stage: "resuming",
+        primaryRunId: newRunId,
+      });
+      yield* repository.upsertTask({ ...beforeLaunch, id: pauseSentinelId });
+      yield* service.deleteProfile({ profileId: pauseRule.id });
+      const reconciled = yield* Stream.fromQueue(snapshots).pipe(
+        Stream.filter((snapshot) =>
+          snapshot.tasks.some((task) => task.id === pauseSentinelId && task.stage === "cancelled"),
+        ),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect
+        .soft(reconciled.tasks.find((task) => task.id === staleResumeId)?.stage)
+        .toBe("cancelled");
+
+      const missingRunId = IssueAutomationTaskId.make("task-with-removed-run");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: missingRunId,
+        primaryRunId: RunId.make("missing-run"),
+      });
+      expect
+        .soft((yield* Effect.result(service.cancelTask({ taskId: missingRunId })))._tag)
+        .toBe("Success");
+      expect.soft((yield* repository.getTask(missingRunId))?.stage).toBe("cancelled");
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
   }),
 );

@@ -2071,8 +2071,24 @@ export const layerWsRpc = (
         [WS_METHODS.issueTrackersList]: () => issueTrackers.list,
         [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),
         [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
-        [WS_METHODS.issueAutomationGetState]: () => issueAutomation.getState,
-        [WS_METHODS.issueAutomationSubscribe]: () => issueAutomation.subscribe,
+        [WS_METHODS.issueAutomationGetState]: (input) =>
+          issueAutomation.getState.pipe(
+            Effect.map((snapshot) =>
+              IssueAutomationService.issueAutomationSnapshotForClient(
+                snapshot,
+                input.supportsPauseStages,
+              ),
+            ),
+          ),
+        [WS_METHODS.issueAutomationSubscribe]: (input) =>
+          issueAutomation.subscribe.pipe(
+            Stream.map((snapshot) =>
+              IssueAutomationService.issueAutomationSnapshotForClient(
+                snapshot,
+                input.supportsPauseStages,
+              ),
+            ),
+          ),
         [WS_METHODS.issueAutomationStartConnectorAuth]: (input) =>
           issueAutomation.startConnectorAuth(input),
         [WS_METHODS.issueAutomationFinishConnectorAuth]: (input) =>

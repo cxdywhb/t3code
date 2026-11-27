@@ -88,6 +88,7 @@ import { HttpClient } from "effect/http";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { ProjectionStoreThreadNotFoundError } from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -118,6 +119,7 @@ import * as PluginRegistry from "./plugin/PluginRegistry.ts";
 const THREAD_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
 const POLL_TICK_INTERVAL = Duration.seconds(30);
 const isIssueAutomationError = Schema.is(IssueAutomationError);
+const isThreadNotFound = Schema.is(ProjectionStoreThreadNotFoundError);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const encodeSecretJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -315,6 +317,33 @@ function hasRunBackgroundWork(projection: OrchestrationV2ThreadProjection, runId
       (task) => task.runId === runId && isOrchestrationV2WorkActive(task.status),
     )
   );
+}
+
+function legacyStage(stage: IssueAutomationStage): IssueAutomationStage {
+  switch (stage) {
+    case "pausing":
+      return "cancelling";
+    case "paused":
+    case "resuming":
+      return "diagnosing";
+    default:
+      return stage;
+  }
+}
+
+export function issueAutomationSnapshotForClient(
+  snapshot: IssueAutomationStateSnapshot,
+  supportsPauseStages: boolean | undefined,
+): IssueAutomationStateSnapshot {
+  if (supportsPauseStages === true) return snapshot;
+  return {
+    ...snapshot,
+    tasks: snapshot.tasks.map((task) => ({
+      ...task,
+      stage: legacyStage(task.stage),
+      steps: task.steps.map((step) => ({ ...step, stage: legacyStage(step.stage) })),
+    })),
+  };
 }
 
 export class IssueAutomationService extends Context.Service<
@@ -885,6 +914,18 @@ const make = Effect.gen(function* () {
       .pipe(Effect.ignore);
   });
 
+  const readBoundProfile = Effect.fn("IssueAutomationService.readBoundProfile")(function* (
+    task: IssueAutomationTask,
+  ) {
+    if (!task.profileId) return;
+    const profile = yield* repo
+      .getProfile(task.profileId)
+      .pipe(Effect.mapError(mapRepoErr("getProfile")));
+    if (profile?.connectorId === task.connectorId && profile.scopeId === task.scopeId) {
+      return profile;
+    }
+  });
+
   const startPausedTask = Effect.fn("IssueAutomationService.startPausedTask")(
     function* (task: IssueAutomationTask) {
       const latest = yield* repo.getTask(task.id).pipe(Effect.mapError(mapRepoErr("getTask")));
@@ -895,16 +936,8 @@ const make = Effect.gen(function* () {
         !latest.profileId
       )
         return;
-      const profile = yield* repo
-        .getProfile(latest.profileId)
-        .pipe(Effect.mapError(mapRepoErr("getProfile")));
-      if (
-        !profile?.enabled ||
-        !canPauseAutomaticDiagnosis(profile.policy) ||
-        profile.connectorId !== latest.connectorId ||
-        profile.scopeId !== latest.scopeId
-      )
-        return;
+      const profile = yield* readBoundProfile(latest);
+      if (!profile?.enabled || !canPauseAutomaticDiagnosis(profile.policy)) return;
 
       const {
         primaryThreadId: threadId,
@@ -1114,21 +1147,22 @@ const make = Effect.gen(function* () {
             .listShells()
             .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<OrchestrationProjectShell>));
 
-          const route = continuation
-            ? {
-                targetProjectId: binding.primaryProjectId,
-                referenceProjectIds: binding.linkedProjectIds.filter(
-                  (id) => id !== binding.primaryProjectId,
-                ),
-                matchedReason: "沿用上次诊断的代码库",
-              }
-            : resolveTargetRepositories({
-                binding,
-                availableProjects: allProjects,
-                moduleName: detail.moduleName,
-                issueTitle: detail.title,
-                stepsMarkdown: detail.stepsMarkdown,
-              });
+          const route =
+            retry || repair
+              ? {
+                  targetProjectId: binding.primaryProjectId,
+                  referenceProjectIds: binding.linkedProjectIds.filter(
+                    (id) => id !== binding.primaryProjectId,
+                  ),
+                  matchedReason: "沿用上次诊断的代码库",
+                }
+              : resolveTargetRepositories({
+                  binding,
+                  availableProjects: allProjects,
+                  moduleName: detail.moduleName,
+                  issueTitle: detail.title,
+                  stepsMarkdown: detail.stepsMarkdown,
+                });
 
           const targetProject = allProjects.find((p) => p.id === route.targetProjectId);
           if (!targetProject) {
@@ -2523,22 +2557,35 @@ const make = Effect.gen(function* () {
       sourceRunId: RunId,
       resumableTaskId?: IssueAutomationTaskId,
     ) {
-      const projection = yield* threadManagement.getThreadProjection(threadId);
+      const projection = yield* threadManagement
+        .getThreadProjection(threadId)
+        .pipe(
+          Effect.catchTag("OrchestratorProjectionError", (error) =>
+            isThreadNotFound(error.cause) ? Effect.succeed(null) : Effect.fail(error),
+          ),
+        );
+      if (projection === null) return null;
       const source = projection.runs.find((run) => run.id === sourceRunId);
-      if (!source)
-        return yield* new IssueAutomationError({
-          operation: "cancelTask",
-          detail: "找不到需要停止的模型轮次",
-        });
       const resumeMessageId =
         resumableTaskId === undefined
           ? undefined
-          : continuationMessageId(resumableTaskId, source.id);
-      const accepted = projection.runs.find((run) => run.userMessageId === resumeMessageId);
+          : continuationMessageId(resumableTaskId, sourceRunId);
+      const accepted =
+        resumeMessageId === undefined
+          ? undefined
+          : projection.runs.find((run) => run.userMessageId === resumeMessageId);
+      const target = accepted ?? source;
+      if (!target) {
+        if (!hasRunBackgroundWork(projection, sourceRunId)) return null;
+        return yield* new IssueAutomationError({
+          operation: "cancelTask",
+          detail: "找不到仍有关联后台工作的模型轮次",
+        });
+      }
       const run =
         resumableTaskId === undefined
-          ? source
-          : ThreadManagementService.latestRestartContinuation(projection.runs, accepted ?? source);
+          ? target
+          : ThreadManagementService.latestRestartContinuation(projection.runs, target);
       const runId = run.id;
       const commandId = CommandId.make(`issue-automation-cancel:${NodeCrypto.randomUUID()}`);
       const reason = "Cancelled from Issue Automation workbench";
@@ -2588,6 +2635,7 @@ const make = Effect.gen(function* () {
   const stopTask = Effect.fn("IssueAutomationService.stopTask")(function* (
     taskId: IssueAutomationTaskId,
     pause: boolean,
+    staleBindingOnly = false,
   ) {
     if (pendingCancellations.has(taskId)) return;
     pendingCancellations.add(taskId);
@@ -2596,6 +2644,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const task = yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")));
           if (!task || isTerminalStage(task.stage)) return;
+          if (staleBindingOnly && (yield* readBoundProfile(task))) return;
           if (pause) return task.stage === "pausing" ? task : undefined;
           if (task.stage === "pausing") return;
           return yield* updateTaskState(
@@ -2617,7 +2666,7 @@ const make = Effect.gen(function* () {
         (yield* repo.getTask(taskId).pipe(Effect.mapError(mapRepoErr("getTask")))) ?? stopping;
       const stop = yield* Effect.result(
         Effect.gen(function* () {
-          if (!linked.targetProjectId) return;
+          if (!linked.targetProjectId) return pause;
           if (linked.reviewThreadId && linked.reviewRunId) {
             yield* stopTaskRun(linked.targetProjectId, linked.reviewThreadId, linked.reviewRunId);
           }
@@ -2632,10 +2681,12 @@ const make = Effect.gen(function* () {
               linked.primaryRunId,
               resumableTaskId,
             );
+            if (stoppedRunId === null) return false;
             if (stoppedRunId !== linked.primaryRunId) {
               linked = yield* updateTaskState(linked, { primaryRunId: stoppedRunId });
             }
           }
+          return pause;
         }),
       );
       if (stop._tag === "Failure") {
@@ -2644,13 +2695,15 @@ const make = Effect.gen(function* () {
       }
       yield* updateTaskState(
         linked,
-        { stage: pause ? "paused" : "cancelled", lastError: null },
+        { stage: stop.success ? "paused" : "cancelled", lastError: null },
         {
-          message: pause
+          message: stop.success
             ? "已暂停诊断，重新开启自动轮询后可继续"
-            : linked.repairOfTaskId
-              ? "已确认停止本次修复"
-              : "已确认停止本次诊断",
+            : staleBindingOnly
+              ? "原规则已移除或监控对象已更改，已取消诊断"
+              : linked.repairOfTaskId
+                ? "已确认停止本次修复"
+                : "已确认停止本次诊断",
         },
         stoppingStage,
       );
@@ -2678,25 +2731,13 @@ const make = Effect.gen(function* () {
     );
     const paused = yield* repo.listPauseRelatedTasks;
     for (const task of paused) {
-      const profileId = task.profileId;
-      if ((task.stage !== "paused" && task.stage !== "resuming") || profileId === null) continue;
-      yield* taskStarts.withPermits(1)(
+      if (task.stage === "pausing" || task.profileId === null) continue;
+      const staleBinding = yield* taskStarts.withPermits(1)(
         Effect.gen(function* () {
-          const profile = yield* repo.getProfile(profileId);
+          const profile = yield* readBoundProfile(task);
+          if (!profile) return true;
           if (
-            !profile ||
-            profile.connectorId !== task.connectorId ||
-            profile.scopeId !== task.scopeId
-          ) {
-            yield* updateTaskState(
-              task,
-              { stage: "cancelled" },
-              { message: "原规则已移除或监控对象已更改，已取消暂停的诊断" },
-              "paused",
-            );
-            return;
-          }
-          if (
+            task.stage === "cancelling" ||
             !profile.enabled ||
             !canPauseAutomaticDiagnosis(profile.policy) ||
             task.lastError !== null ||
@@ -2713,6 +2754,7 @@ const make = Effect.gen(function* () {
           );
         }),
       );
+      if (staleBinding) yield* stopTask(task.id, false, true).pipe(Effect.ignore);
     }
   }).pipe(Effect.ignoreCause({ log: true }));
 

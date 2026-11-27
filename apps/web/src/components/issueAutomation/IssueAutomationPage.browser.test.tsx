@@ -47,7 +47,7 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   using _environment = installFakeEnvironment([], {
     capabilities: { issueAutomationRepair: true },
     providers: [
-      { ...CLAUDE_PROVIDER, supportsReadOnlyDiagnosis: true },
+      CLAUDE_PROVIDER,
       {
         ...CODEX_PROVIDER,
         supportsReadOnlyDiagnosis: true,
@@ -290,6 +290,8 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   const primary = profileDialog.getByRole("button", { name: /Primary model/ });
   await expect.element(primary).toHaveTextContent("Opus 4.6");
   await primary.click();
+  await page.getByPlaceholder("Search models...").fill("Opus");
+  await expect.element(page.getByRole("option", { name: /Opus 4.6/ })).toBeVisible();
   await page.getByPlaceholder("Search models...").fill("GPT-5");
   await expect.element(page.getByRole("option", { name: /GPT-5.5/ })).toBeVisible();
   await expect.element(page.getByRole("option", { name: /GPT-5.4/ })).not.toBeInTheDocument();

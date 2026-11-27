@@ -155,11 +155,12 @@ function startApp(bundleDigest) {
 
 async function stopApp() {
   const app = currentApp;
-  if (!app) {
-    return;
-  }
-
   currentApp = null;
+  await stopChild(app);
+}
+
+async function stopChild(app) {
+  if (!app || app.exitCode != null || app.signalCode != null) return;
 
   await new Promise((resolve) => {
     let settled = false;
@@ -174,8 +175,8 @@ async function stopApp() {
     };
 
     app.once("exit", finish);
-    app.kill("SIGTERM");
     killChildTreeByPid(app.pid, "TERM");
+    app.kill("SIGTERM");
 
     setTimeout(() => {
       if (settled) {
@@ -254,8 +255,7 @@ async function shutdown(exitCode) {
     watcher.close();
   }
 
-  await stopApp();
-  if (pack?.pid !== undefined) killChildTreeByPid(pack.pid, "TERM");
+  await Promise.all([stopApp(), stopChild(pack)]);
   killChildTree("TERM");
   await new Promise((resolve) => {
     setTimeout(resolve, childTreeGracePeriodMs);
@@ -287,47 +287,52 @@ if (hostPlatform !== "win32") {
   }, parentWatchIntervalMs).unref();
 }
 
-let updatedAfter;
-if (watchBuild) {
-  NodeChildProcess.execFileSync(
-    process.execPath,
-    [NodePath.join(desktopDir, "scripts/build-preview-annotation-css.mjs")],
-    { stdio: "inherit" },
-  );
-  const require = NodeModule.createRequire(NodePath.join(desktopDir, "package.json"));
-  const vp = NodePath.join(
-    NodePath.dirname(require.resolve("vite-plus/package.json")),
-    "bin",
-    "vp",
-  );
-  const startedAt = Date.now();
-  updatedAfter = new Map(
-    requiredFiles
-      .filter((file) => file.startsWith("dist-electron/"))
-      .map((file) => [file, startedAt]),
-  );
-  pack = NodeChildProcess.spawn(process.execPath, [vp, "pack", "--watch", "--no-clean"], {
-    cwd: desktopDir,
-    env: childEnv,
-    stdio: "inherit",
-  });
-  pack.once("error", (error) => {
-    console.error("[dev-electron] Could not start the bundle watcher.", error);
-    void shutdown(1);
-  });
-  pack.once("exit", (code) => void shutdown(code ?? 1));
-}
+try {
+  let updatedAfter;
+  if (watchBuild) {
+    NodeChildProcess.execFileSync(
+      process.execPath,
+      [NodePath.join(desktopDir, "scripts/build-preview-annotation-css.mjs")],
+      { stdio: "inherit" },
+    );
+    const require = NodeModule.createRequire(NodePath.join(desktopDir, "package.json"));
+    const vp = NodePath.join(
+      NodePath.dirname(require.resolve("vite-plus/package.json")),
+      "bin",
+      "vp",
+    );
+    const startedAt = Date.now();
+    updatedAfter = new Map(
+      requiredFiles
+        .filter((file) => file.startsWith("dist-electron/"))
+        .map((file) => [file, startedAt]),
+    );
+    pack = NodeChildProcess.spawn(process.execPath, [vp, "pack", "--watch", "--no-clean"], {
+      cwd: desktopDir,
+      env: childEnv,
+      stdio: "inherit",
+    });
+    pack.once("error", (error) => {
+      console.error("[dev-electron] Could not start the bundle watcher.", error);
+      void shutdown(1);
+    });
+    pack.once("exit", (code) => void shutdown(code ?? 1));
+  }
 
-await waitForResources({
-  baseDir: desktopDir,
-  files: requiredFiles,
-  updatedAfter,
-  tcpHost: devServer.hostname,
-  tcpPort: port,
-});
+  await waitForResources({
+    baseDir: desktopDir,
+    files: requiredFiles,
+    updatedAfter,
+    tcpHost: devServer.hostname,
+    tcpPort: port,
+  });
 
-if (!shuttingDown) {
-  startWatchers();
-  const digest = readBundleDigest();
-  if (digest !== null) startApp(digest);
+  if (!shuttingDown) {
+    startWatchers();
+    const digest = readBundleDigest();
+    if (digest !== null) startApp(digest);
+  }
+} catch (error) {
+  console.error("[dev-electron] Could not start desktop development.", error);
+  await shutdown(1);
 }

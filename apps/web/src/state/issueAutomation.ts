@@ -22,6 +22,8 @@ import { useServerConfigs } from "./entities";
 import { usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
 
+const stateInput = { supportsPauseStages: true };
+
 function createIssueAutomationAtoms() {
   const scheduler = createAtomCommandScheduler();
   const serialPerEnvironment = {
@@ -79,7 +81,8 @@ function createIssueAutomationAtoms() {
     }),
   });
 
-  const refreshState = (environmentId: EnvironmentId) => stateQuery({ environmentId, input: {} });
+  const refreshState = (environmentId: EnvironmentId) =>
+    stateQuery({ environmentId, input: stateInput });
 
   return {
     stateQuery,
@@ -205,7 +208,7 @@ const liveStreamSnapshotAtom = Atom.family((environmentId: EnvironmentId | null)
   Atom.make((get): IssueAutomationStateSnapshot | null => {
     if (environmentId === null) return null;
     return AsyncResult.getOrElse(
-      get(issueAutomationEnvironment.stateStream({ environmentId, input: {} })),
+      get(issueAutomationEnvironment.stateStream({ environmentId, input: stateInput })),
       () => null,
     );
   }).pipe(Atom.withLabel(`web:issue-automation:live-stream:${environmentId ?? "none"}`)),
@@ -231,7 +234,7 @@ export function useIssueAutomationLiveState(environmentId: EnvironmentId | null)
   const streamed = useAtomValue(liveStreamSnapshotAtom(targetEnvId));
   const queried = useEnvironmentQuery(
     targetEnvId !== null
-      ? issueAutomationEnvironment.stateQuery({ environmentId: targetEnvId, input: {} })
+      ? issueAutomationEnvironment.stateQuery({ environmentId: targetEnvId, input: stateInput })
       : null,
   );
 

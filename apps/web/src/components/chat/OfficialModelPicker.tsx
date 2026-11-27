@@ -53,7 +53,9 @@ export function useOfficialModelCatalog(
         .filter(
           (entry) =>
             entry.snapshot.supportsReadOnlyDiagnosis ??
-            legacyDiagnosisDrivers?.includes(entry.driverKind),
+            (legacyDiagnosisDrivers === undefined
+              ? entry.driverKind === "claudeAgent"
+              : legacyDiagnosisDrivers.includes(entry.driverKind)),
         )
         .map((entry) => {
           const configuredModels = new Set(

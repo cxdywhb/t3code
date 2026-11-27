@@ -259,6 +259,53 @@ it("dev supervisor stops Electron and exits once its parent process goes away", 
   assert.lengthOf(exitCodes, 1, "supervisor did not exit after its parent process went away");
 });
 
+it.each(["linux", "win32"])(
+  "releases the dev supervisor and stops its pack watcher after a startup timeout on %s",
+  async (platform) => {
+    const clock = makeFakeClock();
+    const signals = [];
+    const exitCodes = [];
+    let released = false;
+    const pack = new NodeEvents.EventEmitter();
+    pack.pid = 5151;
+    pack.kill = (signal) => {
+      signals.push(signal);
+      pack.emit("exit", null, signal);
+    };
+    const startup = runDevElectronStartup({
+      ...clock,
+      spawn: () => pack,
+      NodeOS: { platform: () => platform },
+      NodeModule: {
+        createRequire: () => ({ resolve: () => "/repo/node_modules/vite-plus/package.json" }),
+      },
+      tryAcquireDevSupervisor: () => ({
+        close: () => {
+          released = true;
+        },
+      }),
+      waitForResources: async () => {
+        throw new Error("Timed out waiting for desktop dev resources");
+      },
+      console: { error: () => undefined },
+      process: {
+        env: { VITE_DEV_SERVER_URL: "http://localhost:1234", T3CODE_DESKTOP_DEV: "1" },
+        execPath: "node",
+        pid: 4242,
+        ppid: 1,
+        once: () => undefined,
+        exit: (code) => exitCodes.push(code),
+      },
+    }).catch(() => undefined);
+    await clock.advance(5_000);
+    await startup;
+
+    assert.deepEqual(signals, ["SIGTERM"]);
+    assert.deepEqual(exitCodes, [1]);
+    assert.isTrue(released);
+  },
+);
+
 it("does not signal other development apps when starting", async () => {
   const signals = [];
   await runDevElectronStartup({

@@ -511,6 +511,8 @@ const make = Effect.gen(function* () {
   const listPauseRelatedTasks = sql<TaskRow>`
     SELECT * FROM issue_automation_tasks
     WHERE stage IN ('pausing', 'paused', 'resuming')
+      OR (stage = 'cancelling' AND profile_id IS NOT NULL
+          AND trigger_kind = 'poll' AND action_mode = 'diagnose_only')
     ORDER BY created_at, rowid
   `.pipe(
     Effect.flatMap((rows) => Effect.forEach(rows, rowToTask)),
