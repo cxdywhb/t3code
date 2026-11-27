@@ -86,6 +86,7 @@ import type {
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import * as SharedAgentResources from "./SharedAgentResources.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
@@ -2956,6 +2957,87 @@ it.layer(
         assert.deepEqual(yield* limitsOf(h.first.instance.instanceId), [
           { mode: "auto", reason: "project-settings" },
         ]);
+      }),
+    );
+
+    it.effect("includes shared skills in an on-demand workspace catalog", () =>
+      Effect.gen(function* () {
+        const shared = [
+          { name: "shared-review", path: "/codex/shared-review/SKILL.md", enabled: true },
+        ];
+        const h = yield* makeWorkspaceRescanHarness.pipe(
+          Effect.provideService(SharedAgentResources.SharedAgentResources, {
+            read: Effect.succeed({ skills: shared, mcpServers: {}, warnings: [] }),
+            skillsFor: () => Effect.succeed(shared),
+            changes: Stream.empty,
+          }),
+        );
+        yield* h.seed("/workspace");
+        const catalog = (yield* h.registry.getProviders)[0]?.workspaceSnapshots?.find(
+          (s) => s.cwd === "/workspace",
+        );
+        assert.deepEqual(
+          catalog && "sharedSkills" in catalog ? catalog.sharedSkills : undefined,
+          shared,
+        );
+        assert.deepEqual(
+          catalog?.skills.map((s) => s.name),
+          ["initial"],
+        );
+      }),
+    );
+
+    it.effect("invalidates shared skills on a toggle and discards scans started before it", () =>
+      Effect.gen(function* () {
+        const toggles = yield* Queue.unbounded<boolean>();
+        const enabled = yield* Ref.make(true);
+        const shared = [{ name: "shared-review", path: "/codex/SKILL.md", enabled: true }];
+        const h = yield* makeWorkspaceRescanHarness.pipe(
+          Effect.provideService(SharedAgentResources.SharedAgentResources, {
+            read: Effect.succeed({ skills: shared, mcpServers: {}, warnings: [] }),
+            skillsFor: () => Ref.get(enabled).pipe(Effect.map((value) => (value ? shared : []))),
+            changes: Stream.fromQueue(toggles),
+          }),
+        );
+        yield* h.seed("/workspace");
+        const scan = yield* h.refresh("/workspace", true).pipe(Effect.forkChild);
+        const complete = yield* h.nextScan("/workspace");
+        const invalidated = yield* h.registry.streamChanges.pipe(
+          Stream.filter((providers) => providers[0]?.workspaceSnapshots?.length === 0),
+          Stream.runHead,
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Ref.set(enabled, false);
+        yield* Queue.offer(toggles, false);
+        yield* Fiber.join(invalidated);
+        yield* complete("stale");
+        yield* Fiber.join(scan);
+        assert.isUndefined(yield* h.skillsOf("/workspace"));
+        yield* h.seed("/workspace");
+        assert.deepEqual(
+          (yield* h.registry.getProviders)[0]?.workspaceSnapshots?.[0]?.sharedSkills,
+          [],
+        );
+      }),
+    );
+
+    it.effect("offers shared skills when a provider has no workspace scanner", () =>
+      Effect.gen(function* () {
+        const shared = [{ name: "shared-review", path: "/codex/SKILL.md", enabled: true }];
+        const h = yield* makeWorkspaceRescanHarness.pipe(
+          Effect.provideService(SharedAgentResources.SharedAgentResources, {
+            read: Effect.succeed({ skills: shared, mcpServers: {}, warnings: [] }),
+            skillsFor: () => Effect.succeed(shared),
+            changes: Stream.empty,
+          }),
+        );
+        const { snapshotForCwd: _scanner, ...instance } = h.first.instance;
+        yield* Ref.set(h.instances, [instance]);
+        yield* h.refresh("/workspace");
+        assert.deepEqual(
+          (yield* h.registry.getProviders)[0]?.workspaceSnapshots?.[0]?.sharedSkills,
+          shared,
+        );
       }),
     );
 

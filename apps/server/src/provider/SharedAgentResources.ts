@@ -1,4 +1,10 @@
-import { CodexSettings, ProviderInstanceId, type ServerProviderSkill } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerProviderSkill,
+} from "@t3tools/contracts";
+import { OpenCodeSettings } from "@t3tools/provider-opencode/settings";
 import {
   sharedMcpStdio,
   type SharedAgentResources as Resources,
@@ -13,6 +19,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeCodexResourcesProbe } from "./CodexProvider.ts";
 
@@ -49,12 +56,17 @@ const decodePlugin = Schema.decodeUnknownEffect(PluginManifest);
 const decodeMcpFile = Schema.decodeUnknownEffect(McpFile);
 const decodeCodexConfig = Schema.decodeUnknownEffect(CodexConfig);
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
+const decodeOpenCodeSettings = Schema.decodeEffect(OpenCodeSettings);
 const empty: Resources = { skills: [], mcpServers: {}, warnings: [] };
 
 export class SharedAgentResources extends Context.Service<
   SharedAgentResources,
   {
     readonly read: Effect.Effect<Resources>;
+    readonly skillsFor: (
+      provider: Pick<ServerProvider, "instanceId" | "driver">,
+    ) => Effect.Effect<ReadonlyArray<ServerProviderSkill>>;
+    readonly changes: Stream.Stream<boolean>;
   }
 >()("t3/provider/SharedAgentResources") {}
 
@@ -191,88 +203,110 @@ export const layer = Layer.effect(
     const environment = yield* HostProcess.Environment;
     const probe = yield* makeCodexResourcesProbe(home);
     const self = yield* resolveSelfInvocation();
+    const read = Effect.gen(function* () {
+      const current = yield* settings.getSettings;
+      if (!current.shareCodexResources) return empty;
+      const configured = current.providerInstances[ProviderInstanceId.make("codex")];
+      const config = yield* decodeCodexSettings(configured?.config ?? {});
+      const codexHome = expandHomePath(
+        config.homePath?.trim() || environment.CODEX_HOME || path.join(home, ".codex"),
+        home,
+      );
+      // 用 home 作发现范围，避免把某个工作区的私有插件和凭据分享给其他项目。
+      const discovered = yield* probe({
+        binaryPath: config.binaryPath,
+        homePath: codexHome,
+        launchArgs: config.launchArgs,
+        cwd: home,
+      }).pipe(Effect.timeout("20 seconds"));
+      const roots = new Set<string>();
+      for (const marketplace of discovered.plugins) {
+        for (const plugin of marketplace.plugins) {
+          if (!plugin.installed || !plugin.enabled || plugin.availability === "DISABLED_BY_ADMIN")
+            continue;
+          if (plugin.localVersion) {
+            const root = path.join(
+              codexHome,
+              "plugins",
+              "cache",
+              marketplace.name,
+              plugin.name,
+              plugin.localVersion,
+            );
+            if (yield* fs.exists(path.join(root, ".codex-plugin", "plugin.json"))) roots.add(root);
+          }
+          if (
+            plugin.source.type === "local" &&
+            (yield* fs.exists(path.join(plugin.source.path, ".codex-plugin", "plugin.json")))
+          )
+            roots.add(plugin.source.path);
+        }
+      }
+      // 技能列表给出实际启用版本的路径，也覆盖以内容哈希命名的插件缓存。
+      const scanned = new Set<string>();
+      for (const skill of discovered.skills.filter((skill) => skill.enabled)) {
+        let directory = path.dirname(skill.path);
+        while (directory !== path.dirname(directory) && !scanned.has(directory)) {
+          scanned.add(directory);
+          if (yield* fs.exists(path.join(directory, ".codex-plugin", "plugin.json"))) {
+            roots.add(directory);
+            break;
+          }
+          directory = path.dirname(directory);
+        }
+      }
+      const resources = yield* readPortableResources({
+        ...discovered,
+        pluginRoots: [...roots],
+        environment: { ...environment, HOME: home, CODEX_HOME: codexHome },
+      });
+      return {
+        ...resources,
+        mcpServers: Object.fromEntries(
+          Object.entries(resources.mcpServers).map(([name, server]) => [
+            `shared_codex_${name}`,
+            server.type === "stdio" && server.cwd !== undefined
+              ? sharedMcpStdio(server, self)
+              : server,
+          ]),
+        ),
+      };
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.catch(() =>
+        Effect.logWarning("Shared Codex resources could not be read").pipe(
+          Effect.as({
+            ...empty,
+            warnings: [
+              "Shared Codex skills and MCP servers could not be loaded. Check the source Codex configuration.",
+            ],
+          }),
+        ),
+      ),
+    );
     return SharedAgentResources.of({
-      read: Effect.gen(function* () {
-        const current = yield* settings.getSettings;
-        if (!current.shareCodexResources) return empty;
-        const configured = current.providerInstances[ProviderInstanceId.make("codex")];
-        const config = yield* decodeCodexSettings(configured?.config ?? {});
-        const codexHome = expandHomePath(
-          config.homePath?.trim() || environment.CODEX_HOME || path.join(home, ".codex"),
-          home,
-        );
-        // 用 home 作发现范围，避免把某个工作区的私有插件和凭据分享给其他项目。
-        const discovered = yield* probe({
-          binaryPath: config.binaryPath,
-          homePath: codexHome,
-          launchArgs: config.launchArgs,
-          cwd: home,
-        }).pipe(Effect.timeout("20 seconds"));
-        const roots = new Set<string>();
-        for (const marketplace of discovered.plugins) {
-          for (const plugin of marketplace.plugins) {
-            if (!plugin.installed || !plugin.enabled || plugin.availability === "DISABLED_BY_ADMIN")
-              continue;
-            if (plugin.localVersion) {
-              const root = path.join(
-                codexHome,
-                "plugins",
-                "cache",
-                marketplace.name,
-                plugin.name,
-                plugin.localVersion,
-              );
-              if (yield* fs.exists(path.join(root, ".codex-plugin", "plugin.json")))
-                roots.add(root);
-            }
-            if (
-              plugin.source.type === "local" &&
-              (yield* fs.exists(path.join(plugin.source.path, ".codex-plugin", "plugin.json")))
-            )
-              roots.add(plugin.source.path);
+      read,
+      changes: settings.streamChanges.pipe(
+        Stream.map((settings) => settings.shareCodexResources),
+        Stream.changes,
+      ),
+      skillsFor: Effect.fn("SharedAgentResources.skillsFor")(
+        function* (provider) {
+          // Codex 保留原生发现；外部 OpenCode 服务无法读取本机技能路径。
+          if (provider.driver === "codex") return [];
+          const current = yield* settings.getSettings;
+          if (!current.shareCodexResources) return [];
+          if (provider.driver === "opencode") {
+            const config = yield* decodeOpenCodeSettings(
+              current.providerInstances[provider.instanceId]?.config ?? {},
+            );
+            if (config.serverUrl.trim()) return [];
           }
-        }
-        // 技能列表给出实际启用版本的路径，也覆盖以内容哈希命名的插件缓存。
-        const scanned = new Set<string>();
-        for (const skill of discovered.skills.filter((skill) => skill.enabled)) {
-          let directory = path.dirname(skill.path);
-          while (directory !== path.dirname(directory) && !scanned.has(directory)) {
-            scanned.add(directory);
-            if (yield* fs.exists(path.join(directory, ".codex-plugin", "plugin.json"))) {
-              roots.add(directory);
-              break;
-            }
-            directory = path.dirname(directory);
-          }
-        }
-        const resources = yield* readPortableResources({
-          ...discovered,
-          pluginRoots: [...roots],
-          environment: { ...environment, HOME: home, CODEX_HOME: codexHome },
-        });
-        return {
-          ...resources,
-          mcpServers: Object.fromEntries(
-            Object.entries(resources.mcpServers).map(([name, server]) => [
-              `shared_codex_${name}`,
-              server.type === "stdio" && server.cwd !== undefined
-                ? sharedMcpStdio(server, self)
-                : server,
-            ]),
-          ),
-        };
-      }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, path),
+          return (yield* read).skills;
+        },
         Effect.catch(() =>
-          Effect.logWarning("Shared Codex resources could not be read").pipe(
-            Effect.as({
-              ...empty,
-              warnings: [
-                "Shared Codex skills and MCP servers could not be loaded. Check the source Codex configuration.",
-              ],
-            }),
-          ),
+          Effect.logWarning("Shared Codex skill catalog could not be loaded").pipe(Effect.as([])),
         ),
       ),
     });

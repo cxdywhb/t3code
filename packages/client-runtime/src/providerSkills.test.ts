@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createProviderWorkspaceSnapshotRefreshAtomFamily,
   getProviderSkillsForSlashMenu,
+  getProviderSlashCommandsForSlashMenu,
   hasCompleteProviderWorkspaceSnapshot,
   isProviderWorkspaceSnapshotScanning,
   resolveProviderSkillsForCwd,
@@ -86,6 +87,36 @@ describe("getProviderSkillsForSlashMenu", () => {
 });
 
 describe("workspace provider snapshots", () => {
+  it("offers shared Codex skills to other agents in both pickers without replacing native skills", () => {
+    const native = { name: "review", path: "/claude/review/SKILL.md", enabled: true };
+    const shared = { name: "deploy", path: "/codex/deploy/SKILL.md", enabled: true };
+    const sharedProvider = {
+      ...provider,
+      instanceId: ProviderInstanceId.make("claudeCode"),
+      driver: ProviderDriverKind.make("claudeCode"),
+      workspaceSnapshots: [
+        {
+          ...provider.workspaceSnapshots[0]!,
+          slashCommands: [{ name: "review" }, { name: "deploy" }],
+          skills: [native],
+          sharedSkills: [shared, { ...shared, name: "review" }],
+        },
+      ],
+    };
+    const skills = resolveProviderSkillsForCwd(sharedProvider, "/workspace/project-a");
+    expect(skills).toEqual([native, shared]);
+    expect(getProviderSkillsForSlashMenu(skills, true)).toEqual([native, shared]);
+    expect(
+      getProviderSlashCommandsForSlashMenu(sharedProvider, "/workspace/project-a", true),
+    ).toEqual([{ name: "deploy" }]);
+    expect(
+      resolveProviderSkillsForCwd(
+        { ...sharedProvider, driver: ProviderDriverKind.make("codex") },
+        "/workspace/project-a",
+      ),
+    ).toEqual([native]);
+  });
+
   it("uses the cwd snapshot after a provider session has populated it", () => {
     expect(resolveProviderSkillsForCwd(provider, "/workspace/project-a")).toEqual([
       { name: "project", path: "/workspace/project-a/SKILL.md", enabled: true },

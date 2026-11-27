@@ -141,6 +141,7 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   slashCommands: Schema.Array(ServerProviderSlashCommand),
   slashCommandsPending: Schema.optional(Schema.Boolean),
   skills: Schema.Array(ServerProviderSkill),
+  sharedSkills: Schema.optionalKey(Schema.Array(ServerProviderSkill)),
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
   // Absent means the provider's machine `models`, which keeps most snapshots small.
   models: Schema.optional(Schema.Array(ServerProviderModel)),
