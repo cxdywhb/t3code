@@ -63,6 +63,32 @@ jobs:
       - name: Build resource monitor
         run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target aarch64-unknown-linux-gnu
 
+      - name: Bundle JavaScript dependencies into the Linux executable
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+
+          config = Path("apps/server/vite.config.ts")
+          source = config.read_text()
+          replacements = {
+              "const packExecutable = packBootstrap || packMode === \"bundle\";":
+                  "const packExecutable = packBootstrap || packMode === \"bundle\";\n"
+                  "const bundleSeaDependency = (id: string) =>\n"
+                  "  packMode === \"bundle\" && /^(undici|zod)(\\/|$)/.test(id);",
+              "alwaysBundle: shouldBundleCliDependency,":
+                  "alwaysBundle: (id: string) => bundleSeaDependency(id) || shouldBundleCliDependency(id),",
+              '(packBootstrap && id === "./binMain.ts") || isExternalCliDependency(id),':
+                  '(packBootstrap && id === "./binMain.ts") ||\n'
+                  '          (!bundleSeaDependency(id) && isExternalCliDependency(id)),',
+          }
+          for before, after in replacements.items():
+              if source.count(before) != 1:
+                  raise SystemExit(f"Expected one entry in the pinned config: {before}")
+              source = source.replace(before, after)
+          config.write_text(source)
+          PYTHON
+
       - name: Build CLI single-executable
         run: node apps/server/scripts/cli.ts build-exe --verbose
 
