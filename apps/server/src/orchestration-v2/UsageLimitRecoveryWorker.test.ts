@@ -1,14 +1,23 @@
 import { assert, describe, it } from "@effect/vitest";
-import { RunId, ThreadId, type OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2DomainEvent,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -22,13 +31,26 @@ it.effect("idle sweeps skip SQL until the next wake time or a relevant event", (
     const startMs = Date.parse("2026-07-01T09:00:00.000Z");
     const queries = yield* Queue.unbounded<number>();
     const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+    const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([]);
+    const checkedAt = "2026-07-01T09:01:36.000Z";
+    const instanceId = ProviderInstanceId.make("codex");
     const layer = UsageLimitRecoveryWorker.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
           Scheduler.layer,
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getLimitRecoveryCandidates: () =>
+            getLimitRecoveryCandidates: (options) =>
               Clock.currentTimeMillis.pipe(
+                Effect.tap((nowMs) =>
+                  Effect.sync(() => {
+                    if (nowMs - startMs === 100_000) {
+                      assert.deepEqual(options.codexAllowanceCheckedAt, {
+                        [instanceId]: checkedAt,
+                      });
+                    }
+                  }),
+                ),
                 Effect.flatMap((nowMs) => Queue.offer(queries, nowMs - startMs)),
                 Effect.as([]),
               ),
@@ -39,6 +61,10 @@ it.effect("idle sweeps skip SQL until the next wake time or a relevant event", (
               ),
           }),
           Layer.mock(ThreadManagement.ThreadManagementService)({}),
+          Layer.mock(ProviderRegistry)({
+            getProviders: Ref.get(providers),
+            streamChanges: Stream.fromQueue(providerChanges),
+          }),
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(events),
           }),
@@ -66,6 +92,27 @@ it.effect("idle sweeps skip SQL until the next wake time or a relevant event", (
       yield* TestClock.adjust("5 seconds");
       // A streaming item at 90s does not wake it; the failed run does on the 95s tick.
       assert.equal(yield* Queue.take(queries), 95_000);
+      const recovered: ServerProvider = {
+        instanceId,
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        status: "ready",
+        version: null,
+        auth: { status: "authenticated" },
+        checkedAt,
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt,
+          windows: [{ id: "secondary", kind: "weekly", label: "Weekly", usedPercent: 0 }],
+        },
+      };
+      yield* Ref.set(providers, [recovered]);
+      yield* Queue.offer(providerChanges, [recovered]);
+      yield* TestClock.adjust("5 seconds");
+      assert.equal(yield* Queue.take(queries), 100_000);
     }).pipe(Effect.provide(layer));
   }),
 );

@@ -5,7 +5,12 @@ import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { draftSupportedRuntimeModes } from "./chat/runtimeModeConfig";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+import {
+  CODEX_USAGE_LIMIT_CODE,
+  codexAvailableAllowanceCheckedAt,
+  resolveNewThreadModelSelection,
+} from "@t3tools/shared/usageLimits";
+import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
@@ -1110,13 +1115,6 @@ export default function ChatView(props: ChatViewProps) {
     serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
       ? (activeThreadShell?.latestRun ?? null)
       : null;
-  // The recovery banner offers Wake now for a snooze it set.
-  const limitRecoveryHoldsSnooze = limitRecoveryOwnsSnooze({
-    runId: limitRecoveryRun?.runId,
-    resetAt: serverRuntime?.usageLimitResetAt,
-    recovery: activeThreadShell?.limitRecovery,
-    snoozedUntil: activeThreadShell?.snoozedUntil,
-  });
   // The run whose limit rows client-runtime hides (deriveUsageLimitNoticeRows).
   const usageLimitRunId =
     serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
@@ -1356,6 +1354,48 @@ export default function ChatView(props: ChatViewProps) {
       : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS,
     gitCwd,
   );
+  const limitedInstanceId =
+    limitRecoveryRun !== null && serverRuntime?.lastErrorCode === CODEX_USAGE_LIMIT_CODE
+      ? serverProjection?.runs.find((run) => run.id === limitRecoveryRun.runId)?.providerInstanceId
+      : undefined;
+  const limitedProvider = useAtomValue(
+    serverEnvironment.providersValueAtom(environmentId),
+    (providers) => providers?.find((provider) => provider.instanceId === limitedInstanceId),
+  );
+  const limitedCodex =
+    limitedProvider?.driver === "codex" && limitedProvider.enabled ? limitedProvider : undefined;
+  const recoveredAllowanceAt = codexAvailableAllowanceCheckedAt(limitedCodex);
+  const allowanceRecovered =
+    recoveredAllowanceAt !== undefined &&
+    Date.parse(recoveredAllowanceAt) >
+      Date.parse(limitRecoveryRun?.completedAt ?? activeThreadShell?.updatedAt ?? "");
+  const refreshLimitedProvider = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  useLiveRefresh(
+    limitedCodex
+      ? () =>
+          void refreshLimitedProvider({
+            environmentId,
+            input: { instanceId: limitedCodex.instanceId },
+          })
+      : null,
+    {
+      enabled: limitedCodex !== undefined && !allowanceRecovered,
+      key: JSON.stringify(["usage-limit", environmentId, limitedCodex?.instanceId]),
+      refreshOnShow: true,
+      intervalMs: null,
+    },
+  );
+  // The recovery banner offers Wake now for a snooze it set.
+  const limitRecoveryHoldsSnooze =
+    !allowanceRecovered &&
+    limitRecoveryOwnsSnooze({
+      runId: limitRecoveryRun?.runId,
+      resetAt: serverRuntime?.usageLimitResetAt,
+      recovery: activeThreadShell?.limitRecovery,
+      snoozedUntil: activeThreadShell?.snoozedUntil,
+    });
   const composerModelSelectionApplies = draftModelSelectionApplies(
     { modelSelectionExplicit: composerModelSelectionExplicit },
     threadHasStarted(activeThread),
@@ -2747,8 +2787,29 @@ export default function ChatView(props: ChatViewProps) {
     );
     return item ? [item] : [];
   });
+  const { onResume, isResuming } = useComposerResume({
+    environmentId,
+    routeThreadKey,
+    currentRouteThreadKeyRef,
+    activeThread,
+    resumableRunId,
+    hasHeldQueuedRuns,
+    canResume,
+    isSendBusy,
+    isRevertingCheckpoint,
+    threadDetailLoading,
+    activeEnvironmentUnavailable,
+    runtimeMode,
+    localCheckoutBranchMismatch,
+    composerRef,
+    persistThreadSettingsForNextTurn,
+    clearUsageLimitsFor,
+    scrollToEnd,
+    setThreadError,
+  });
+  const onComposerResumeStable = useStableCallback(onResume);
   const limitRecoveryBanner = useUsageLimitRecoveryBannerItem(
-    limitRecoveryRun !== null && activeThreadShell !== null
+    !allowanceRecovered && limitRecoveryRun !== null && activeThreadShell !== null
       ? {
           runId: limitRecoveryRun.runId,
           errorCode: serverRuntime?.lastErrorCode ?? null,
@@ -2759,6 +2820,20 @@ export default function ChatView(props: ChatViewProps) {
           recovery: activeThreadShell.limitRecovery ?? null,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
+          ...(canOperateThread &&
+          canResume &&
+          resumableRunId === limitRecoveryRun.runId &&
+          activeThreadShell.settledOverride !== "settled"
+            ? {
+                onResumeNow: onComposerResumeStable,
+                resumePending:
+                  isSendBusy ||
+                  isResuming ||
+                  isRevertingCheckpoint ||
+                  threadDetailLoading ||
+                  activeEnvironmentUnavailable,
+              }
+            : {}),
           onChange: async (limitRecovery) => {
             const result = await updateThreadMetadata({
               environmentId,
@@ -3106,26 +3181,6 @@ export default function ChatView(props: ChatViewProps) {
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus: scheduleComposerFocusStable,
   });
-  const { onResume, isResuming } = useComposerResume({
-    environmentId,
-    routeThreadKey,
-    currentRouteThreadKeyRef,
-    activeThread,
-    resumableRunId,
-    hasHeldQueuedRuns,
-    canResume,
-    isSendBusy,
-    isRevertingCheckpoint,
-    threadDetailLoading,
-    activeEnvironmentUnavailable,
-    runtimeMode,
-    localCheckoutBranchMismatch,
-    composerRef,
-    persistThreadSettingsForNextTurn,
-    clearUsageLimitsFor,
-    scrollToEnd,
-    setThreadError,
-  });
   const { onSend, captureDetachedSend } = useComposerSend({
     environmentId,
     routeThreadKey,
@@ -3222,7 +3277,6 @@ export default function ChatView(props: ChatViewProps) {
     void onSend(undefined, "auto", "foreground", { annotation, image });
   };
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
-  const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
   // Read from the projection the footer renders, so the scroll below sees the new message.
   const pendingGuestMessageIds =

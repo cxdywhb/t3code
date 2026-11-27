@@ -182,6 +182,28 @@ const alternateProviderInstance = {
     ...orchestrationAdapter,
     instanceId: alternateInstanceId,
   },
+  snapshot: {
+    ...providerInstance.snapshot,
+    getSnapshot: DateTime.now.pipe(
+      Effect.map((now) => ({
+        instanceId: alternateInstanceId,
+        driver,
+        enabled: true,
+        installed: true,
+        status: "ready" as const,
+        version: null,
+        auth: { status: "authenticated" as const },
+        checkedAt: DateTime.formatIso(now),
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt: DateTime.formatIso(now),
+          windows: [{ id: "secondary", kind: "weekly" as const, label: "Weekly", usedPercent: 0 }],
+        },
+      })),
+    ),
+  },
 } satisfies ProviderInstance;
 const claudeInstanceId = ProviderInstanceId.make("claude_test");
 const claudeDriver = ProviderDriverKind.make("claudeAgent");
@@ -14002,17 +14024,22 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     "stop",
     "stop-before-arm",
     "stop-before-arm-mismatched-recovery",
+    "external-codex-reset",
   ] as const)("guards a scheduled usage-limit continuation against %s", (scenario) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const events = yield* EventSink.EventSinkV2;
       const threadId = ThreadId.make(`recovery:${scenario}`);
       const projectId = ProjectId.make(`recovery:project:${scenario}`);
+      const limitedModel =
+        scenario === "external-codex-reset"
+          ? { ...modelSelection, instanceId: alternateInstanceId }
+          : modelSelection;
       yield* seedProject({
         projectId,
         title: "Recovery project",
         workspaceRoot: process.cwd(),
-        defaultModelSelection: modelSelection,
+        defaultModelSelection: limitedModel,
         createdAt: DateTime.formatIso(yield* DateTime.now),
       });
       yield* orchestrator.dispatch({
@@ -14021,7 +14048,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         threadId,
         projectId,
         title: "Limited thread",
-        modelSelection,
+        modelSelection: limitedModel,
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,
@@ -14180,7 +14207,10 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         );
         return;
       }
-      const snooze = scenario === "wake" || scenario === "cancel-resume-keep-snooze";
+      const snooze =
+        scenario === "wake" ||
+        scenario === "cancel-resume-keep-snooze" ||
+        scenario === "external-codex-reset";
       const autoResume = scenario !== "wake";
       const arm = limitRecoveryCommand(shell, autoResume, DateTime.toEpochMillis(now), snooze);
       assert(arm?.type === "thread.metadata.update" && arm.limitRecovery != null);
@@ -14355,6 +14385,28 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.snoozedUntil);
       }
       assert.isNull(limitRecoveryCommand(armedShell, true, DateTime.toEpochMillis(now)));
+      if (scenario === "external-codex-reset") {
+        const earlyCommand = (checkedAt: DateTime.Utc) =>
+          limitRecoveryCommand(
+            { ...armedShell, earlyResumeCheckedAt: DateTime.formatIso(checkedAt) },
+            true,
+            DateTime.toEpochMillis(checkedAt),
+          )!;
+        yield* orchestrator.dispatch(earlyCommand(now));
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+        // A snooze rejection can rotate the delivery request id.
+        armedShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        yield* TestClock.adjust("1 second");
+        const command = earlyCommand(yield* DateTime.now);
+        yield* orchestrator.dispatch(command);
+        yield* orchestrator.dispatch(command);
+        const resumed = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(resumed.runs, 2);
+        assert.isNull(resumed.thread.snoozedUntil);
+        return;
+      }
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make(`recovery:early:${scenario}`),

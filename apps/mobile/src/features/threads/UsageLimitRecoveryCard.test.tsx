@@ -133,6 +133,28 @@ describe("UsageLimitRecoveryCard", () => {
     expect(container.textContent).toContain("Request copied");
   });
 
+  it("can resume manually without a reset date", async () => {
+    const onResumeNow = vi.fn(async () => {});
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+    act(() =>
+      root.render(
+        <UsageLimitRecoveryCard
+          thread={failedThread(null)}
+          environmentId={"env-1" as EnvironmentId}
+          onResumeNow={onResumeNow}
+        />,
+      ),
+    );
+    const resume = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Resume now",
+    );
+    expect(resume).toBeDefined();
+    await act(async () => resume!.click());
+    expect(onResumeNow).toHaveBeenCalledTimes(1);
+  });
+
   it("disables Snooze once a reset more than 24.8 days away passes", () => {
     using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
     vi.useFakeTimers({ now: 0 });

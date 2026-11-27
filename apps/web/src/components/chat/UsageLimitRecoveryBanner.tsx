@@ -37,6 +37,8 @@ type RecoveryProps = {
   resetPassed?: boolean;
   displayPassed?: boolean;
   onChange: (recovery: OrchestrationV2LimitRecoveryUpdate) => Promise<void>;
+  onResumeNow?: () => Promise<void>;
+  resumePending?: boolean;
 };
 
 function parseEpochMs(isoDate: string | null): number | null {
@@ -95,9 +97,10 @@ export function usageLimitRecoveryBannerItem(
   const displayPassed = props.displayPassed ?? (displayAtMs !== null && displayAtMs <= Date.now());
   const workspaceLimit = errorCode === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || errorCode === CHATGPT_USAGE_LIMIT_CODE;
-  const recoveryActions = canSchedule ? (
-    <RecoveryActions key={`${runId}:${resetAt}`} {...props} />
-  ) : null;
+  const recoveryActions =
+    canSchedule || props.onResumeNow ? (
+      <RecoveryActions key={`${runId}:${resetAt}`} {...props} canSchedule={canSchedule} />
+    ) : null;
   const resumesUpcoming = resumes && !displayPassed;
   const shownAt = resumesUpcoming ? displayAt : resetAt;
   const formattedTime = shownAt
@@ -149,7 +152,16 @@ export function usageLimitRecoveryBannerItem(
   };
 }
 
-function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: RecoveryProps) {
+function RecoveryActions({
+  runId,
+  resetAt,
+  recovery,
+  snoozedUntil,
+  onChange,
+  onResumeNow,
+  resumePending,
+  canSchedule,
+}: RecoveryProps & { canSchedule: boolean }) {
   const gt = useGT();
   const [pending, setPending] = useState(false);
 
@@ -194,22 +206,39 @@ function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: R
   // Inline errors would widen the actions column and crush the title.
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
-      <InlineButton touchTarget="padded" disabled={pending} onClick={() => void toggle("resume")}>
-        {pending
-          ? gt("Saving...")
-          : scheduled
-            ? gt("Cancel auto-resume")
-            : resetPassed
-              ? gt("Resume now")
-              : gt("Resume at reset")}
-      </InlineButton>
-      <InlineButton
-        touchTarget="padded"
-        disabled={pending || (!snoozed && resetPassed)}
-        onClick={() => void toggle("snooze")}
-      >
-        {pending ? gt("Saving...") : snoozed ? gt("Wake now") : gt("Snooze until reset")}
-      </InlineButton>
+      {onResumeNow ? (
+        <InlineButton
+          touchTarget="padded"
+          disabled={pending || resumePending}
+          onClick={() => void onResumeNow()}
+        >
+          {gt("Resume now")}
+        </InlineButton>
+      ) : null}
+      {canSchedule && (scheduled || !resetPassed || !onResumeNow) ? (
+        <InlineButton
+          touchTarget="padded"
+          disabled={pending || resumePending}
+          onClick={() => void toggle("resume")}
+        >
+          {pending
+            ? gt("Saving...")
+            : scheduled
+              ? gt("Cancel auto-resume")
+              : resetPassed
+                ? gt("Resume now")
+                : gt("Resume at reset")}
+        </InlineButton>
+      ) : null}
+      {canSchedule ? (
+        <InlineButton
+          touchTarget="padded"
+          disabled={pending || resumePending || (!snoozed && resetPassed)}
+          onClick={() => void toggle("snooze")}
+        >
+          {pending ? gt("Saving...") : snoozed ? gt("Wake now") : gt("Snooze until reset")}
+        </InlineButton>
+      ) : null}
     </span>
   );
 }

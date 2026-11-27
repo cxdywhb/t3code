@@ -287,9 +287,10 @@ thread** from its long-press menu on mobile.
 **Limited** means the provider stopped on a usage or rate limit. The conversation
 keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
-Press **Resume** in an empty composer to continue a limited or interrupted turn
-manually when the provider supports native continuation, or send a message to continue.
-Do this when the provider reports no reset time, because nothing continues the turn on its own.
+If your allowance returned early, choose **Resume now** on the usage-limit notice.
+You can also press **Resume** in an empty composer to continue a limited or
+interrupted turn. These actions appear when the turn can be continued. You can
+also send a message to continue.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
@@ -299,6 +300,9 @@ usage limits** in **Settings → Threads** to schedule limit stops by default.
 The environment must be running when the reset arrives; it resumes overdue
 continuations after a restart. Stopping the thread, sending a new message,
 archiving, or settling it prevents a pending continuation from starting.
+If you reset your allowance in Codex, return to the thread. T3 Code checks
+the same Codex account, clears the warning when it sees available allowance,
+and starts a scheduled continuation early.
 
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without
