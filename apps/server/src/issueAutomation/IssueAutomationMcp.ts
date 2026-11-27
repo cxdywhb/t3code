@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalFetchInEffect:off
 import * as NodeDns from "node:dns";
+import * as NodeModule from "node:module";
 import * as NodeNet from "node:net";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -22,8 +23,10 @@ import {
   normalizeHostname,
 } from "@t3tools/shared/hostClassification";
 import { oauthCallbackUrl } from "@t3tools/shared/oauthCallback";
-import { Agent } from "undici";
+import type * as Undici from "undici";
 import * as Schema from "effect/Schema";
+
+const { Agent } = NodeModule.createRequire(import.meta.url)("undici") as typeof Undici;
 
 const manualCallbackUri = "http://127.0.0.1:37139/issue-automation/oauth/callback";
 const timeoutMs = 20_000;

@@ -16,7 +16,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git fetch --no-tags --depth=1 origin 2c52808b3bf0d9305aed2f19a047cfdb0db51251
+          git fetch --no-tags --depth=1 origin 767f9393cc329db90b2d8482fd810bf0627ee36b
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git checkout --detach FETCH_HEAD
       - uses: ./.github/actions/setup-ci-deps
@@ -62,7 +62,7 @@ jobs:
     uses: ./.github/workflows/release-desktop.yml
     with:
       version: "0.1.26"
-      ref: 2c52808b3bf0d9305aed2f19a047cfdb0db51251
+      ref: 767f9393cc329db90b2d8482fd810bf0627ee36b
       release_channel: stable
       clerk_publishable_key: ""
       clerk_jwt_template: ""
