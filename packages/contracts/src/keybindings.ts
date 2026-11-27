@@ -62,6 +62,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "navigation.back",
   "navigation.forward",
   "terminal.toggle",
+  "globalTerminal.open",
   "terminal.split",
   "terminal.splitVertical",
   "terminal.new",

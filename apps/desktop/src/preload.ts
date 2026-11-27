@@ -104,6 +104,10 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  openGlobalTerminal: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_GLOBAL_TERMINAL_CHANNEL, input),
+  setGlobalTerminalPinned: (pinned) =>
+    ipcRenderer.invoke(IpcChannels.SET_GLOBAL_TERMINAL_PINNED_CHANNEL, pinned),
   getDatabaseMigrationProgress: () =>
     ipcRenderer.invoke(IpcChannels.GET_DATABASE_MIGRATION_PROGRESS_CHANNEL),
   getAppBranding: () => {

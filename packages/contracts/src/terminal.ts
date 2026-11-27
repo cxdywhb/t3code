@@ -3,6 +3,8 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const DEFAULT_TERMINAL_ID = "term-1";
+// Environment-owned terminals never participate in a conversation's cleanup.
+export const GLOBAL_TERMINAL_THREAD_ID = "global-terminals";
 export const DEFAULT_MAX_TERMINAL_BUFFER_BYTES = 512 * 1024;
 
 const historyEncoder = new TextEncoder();
@@ -214,6 +216,18 @@ const TerminalRowsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).ch
   Schema.isLessThanOrEqualTo(500),
 );
 const TerminalIdSchema = TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(128));
+
+export const GlobalTerminalOpenInput = Schema.Struct({
+  terminalId: Schema.optional(TerminalIdSchema),
+  cwd: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type GlobalTerminalOpenInput = typeof GlobalTerminalOpenInput.Type;
+
+export const GlobalTerminalReadInput = Schema.Struct({
+  terminalId: TerminalIdSchema,
+  maxChars: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 }))),
+});
+export type GlobalTerminalReadInput = typeof GlobalTerminalReadInput.Type;
 const TerminalEnvKeySchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
 ).check(Schema.isMaxLength(128));
@@ -376,6 +390,13 @@ export const TerminalSummary = Schema.Struct({
 });
 export type TerminalSummary = typeof TerminalSummary.Type;
 
+export const GlobalTerminalReadResult = Schema.Struct({
+  terminal: TerminalSummary,
+  text: Schema.String,
+  truncated: Schema.Boolean,
+});
+export type GlobalTerminalReadResult = typeof GlobalTerminalReadResult.Type;
+
 const TerminalMetadataSnapshotEvent = Schema.Struct({
   type: Schema.Literal("snapshot"),
   terminals: Schema.Array(TerminalSummary),
@@ -385,6 +406,7 @@ const TerminalMetadataSnapshotEvent = Schema.Struct({
 const TerminalMetadataUpsertEvent = Schema.Struct({
   type: Schema.Literal("upsert"),
   terminal: TerminalSummary,
+  revealRequestId: Schema.optional(Schema.String),
 });
 
 const TerminalMetadataRemoveEvent = Schema.Struct({
@@ -453,6 +475,7 @@ const TerminalActivityEvent = Schema.Struct({
   type: Schema.Literal("activity"),
   hasRunningSubprocess: Schema.Boolean,
   label: Schema.String.check(Schema.isMaxLength(128)),
+  revealRequestId: Schema.optional(Schema.String),
   // Shared PTY grid changes ride on activity because older clients reject unknown event types.
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),

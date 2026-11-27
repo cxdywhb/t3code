@@ -6,6 +6,7 @@ import * as NodeChildProcess from "node:child_process";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   DEFAULT_TERMINAL_ID,
+  GLOBAL_TERMINAL_THREAD_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
   retainTerminalSnapshotHistory,
   TERMINAL_SEQUENCE_GROUND,
@@ -40,6 +41,9 @@ import {
   type TerminalSessionStatus,
   type TerminalSummary,
   type TerminalWriteInput,
+  type GlobalTerminalOpenInput,
+  type GlobalTerminalReadInput,
+  type GlobalTerminalReadResult,
   ClaudeSettings,
   CodexSettings,
   ProviderInstanceId,
@@ -53,6 +57,7 @@ import { SpawnExecutableResolution, mergePathEntries } from "@t3tools/shared/she
 
 import { acpRegistryManagedBinaryDirectories } from "@t3tools/provider-acp-registry/server";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import { normalizeTerminalOutput, terminalOutputPlainText } from "@t3tools/shared/terminalOutput";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -190,6 +195,13 @@ export class TerminalCwdRecovery extends Context.Reference<
 export class TerminalManager extends Context.Service<
   TerminalManager,
   {
+    readonly openGlobal: (
+      input: GlobalTerminalOpenInput,
+    ) => Effect.Effect<TerminalSummary, TerminalError>;
+    readonly listGlobal: Effect.Effect<ReadonlyArray<TerminalSummary>>;
+    readonly readGlobal: (
+      input: GlobalTerminalReadInput,
+    ) => Effect.Effect<GlobalTerminalReadResult, TerminalError>;
     readonly open: (
       input: TerminalOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
@@ -1917,6 +1929,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
   const historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
   const platform = yield* HostProcess.Platform;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
   const architecture = yield* HostProcess.Architecture;
   const agentScope = yield* AgentScope;
   const resolveExecutable = yield* SpawnExecutableResolution;
@@ -3907,6 +3920,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           ? {
               type: "upsert" as const,
               terminal,
+              ...(event.type === "activity" && event.revealRequestId !== undefined
+                ? { revealRequestId: event.revealRequestId }
+                : {}),
             }
           : null,
       ),
@@ -4281,7 +4297,71 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     return Option.isSome(yield* Effect.findFirst(running, isActive));
   });
 
+  const listGlobal = readManagerState.pipe(
+    Effect.map((state) =>
+      [...state.sessions.values()]
+        .filter((session) => session.threadId === GLOBAL_TERMINAL_THREAD_ID)
+        .map(summary),
+    ),
+  );
+
+  const openGlobal = Effect.fn("TerminalManager.openGlobal")((input: GlobalTerminalOpenInput) =>
+    withThreadLock(
+      GLOBAL_TERMINAL_THREAD_ID,
+      Effect.gen(function* () {
+        const sessions = yield* sessionsForThread(GLOBAL_TERMINAL_THREAD_ID);
+        let nextId = 1;
+        const ids = new Set(sessions.map((session) => session.terminalId));
+        while (ids.has(`terminal-${nextId}`)) nextId += 1;
+        const terminalId = input.terminalId ?? `terminal-${nextId}`;
+        const existing = yield* getSession(GLOBAL_TERMINAL_THREAD_ID, terminalId);
+        // Revealing a shared tab must never restart its shell or change another user's working directory.
+        const cwd = input.cwd ?? homeDirectory;
+        const session = Option.isSome(existing)
+          ? existing.value
+          : yield* withWorkspaceLease(
+              path.resolve(cwd),
+              openWithWorkspaceLease({
+                threadId: GLOBAL_TERMINAL_THREAD_ID,
+                terminalId,
+                cwd,
+              }),
+            );
+        yield* publishEvent({
+          type: "activity",
+          threadId: GLOBAL_TERMINAL_THREAD_ID,
+          terminalId,
+          hasRunningSubprocess: session.hasRunningSubprocess,
+          label: terminalWireLabel(session),
+          revealRequestId: NodeCrypto.randomUUID(),
+        });
+        return summary(session);
+      }),
+    ),
+  );
+
+  const readGlobal = Effect.fn("TerminalManager.readGlobal")(function* (
+    input: GlobalTerminalReadInput,
+  ) {
+    const session = yield* requireSession(GLOBAL_TERMINAL_THREAD_ID, input.terminalId);
+    const history = session.history.value();
+    // Parse only a bounded tail on demand; terminal output never becomes a continuously updated agent prompt.
+    const retained = retainTerminalSnapshotHistory(
+      history,
+      DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
+    ).history;
+    const output = normalizeTerminalOutput(retained, input.maxChars ?? 16_384);
+    return {
+      terminal: summary(session),
+      text: terminalOutputPlainText(output.text),
+      truncated: retained.length < history.length || output.truncated,
+    };
+  });
+
   return TerminalManager.of({
+    openGlobal,
+    listGlobal,
+    readGlobal,
     open,
     getShell,
     attachStream,

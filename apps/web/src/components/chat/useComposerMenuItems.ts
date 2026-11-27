@@ -78,7 +78,7 @@ export function useComposerMenuItems({
   compactSlashCommandAvailable,
   selectedProvider,
   selectedProviderSkills,
-  selectedProviderSlashCommands,
+  selectedProviderStatus,
   showSkillsInSlashMenu,
   workspaceSkillsScanning,
   questionAttachmentTarget,
@@ -98,7 +98,7 @@ export function useComposerMenuItems({
   readonly compactSlashCommandAvailable: boolean;
   readonly selectedProvider: ProviderDriverKind;
   readonly selectedProviderSkills: ServerProvider["skills"];
-  readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
+  readonly selectedProviderStatus: ServerProvider | null;
   readonly showSkillsInSlashMenu: boolean;
   readonly workspaceSkillsScanning: boolean;
   readonly questionAttachmentTarget: DraftId | null;
@@ -297,8 +297,9 @@ export function useComposerMenuItems({
         showSkillsInSlashMenu,
       );
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        selectedProviderSlashCommands,
-        slashMenuSkills,
+        selectedProviderStatus,
+        gitCwd,
+        showSkillsInSlashMenu,
       ).map((command) => ({
         id: `provider-slash-command:${selectedProvider}:${command.name}`,
         type: "provider-slash-command" as const,

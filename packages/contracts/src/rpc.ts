@@ -357,6 +357,8 @@ import {
   ProjectWriteFileResult,
 } from "./project.ts";
 import {
+  GlobalTerminalOpenInput,
+  TerminalSummary,
   TerminalAttachInput,
   TerminalObserveInput,
   TerminalAttachStreamEvent,
@@ -606,6 +608,7 @@ export const WS_METHODS = {
   reviewGetDiffFileContents: "review.getDiffFileContents",
 
   terminalOpen: "terminal.open",
+  terminalOpenGlobal: "terminal.openGlobal",
   terminalAttach: "terminal.attach",
   terminalObserve: "terminal.observe",
   terminalWrite: "terminal.write",
@@ -2228,6 +2231,12 @@ const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   error: Schema.Union([TerminalError, EnvironmentAuthorizationError]),
 });
 
+const WsTerminalOpenGlobalRpc = Rpc.make(WS_METHODS.terminalOpenGlobal, {
+  payload: GlobalTerminalOpenInput,
+  success: TerminalSummary,
+  error: Schema.Union([TerminalError, EnvironmentAuthorizationError]),
+});
+
 const WsTerminalAttachRpc = Rpc.make(WS_METHODS.terminalAttach, {
   payload: TerminalAttachInput,
   success: TerminalAttachStreamEvent,
@@ -2966,6 +2975,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,
   WsTerminalOpenRpc,
+  WsTerminalOpenGlobalRpc,
   WsTerminalAttachRpc,
   WsTerminalObserveRpc,
   WsTerminalWriteRpc,

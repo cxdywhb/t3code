@@ -3559,6 +3559,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               hasT3Mcp ? sharedSkillsContext(mcpSession.sharedResources) : undefined,
               buildRuntimeInstructions({
                 harness: "OpenCode",
+                globalAgentInstructions: input.globalAgentInstructions,
                 model: turn.modelSelection.model,
                 agentFeedback: hasT3Mcp ? turn.agentFeedback : "off",
                 runtimePolicy: turn.runtimePolicy,

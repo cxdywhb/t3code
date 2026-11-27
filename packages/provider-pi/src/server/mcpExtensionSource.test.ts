@@ -31,6 +31,7 @@ type InputHook = (
 async function loadHooks(
   commands: ReadonlyArray<SkillCommand> = [],
   argv: ReadonlyArray<string> = [],
+  environment: Record<string, string> = {},
 ) {
   const handlers = new Map<string, unknown>();
   const source = NodeModule.stripTypeScriptTypes(
@@ -40,7 +41,7 @@ async function loadHooks(
     ),
   );
   await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
-    process: { env: {}, argv },
+    process: { env: environment, argv },
     NodeFSP,
     NodePath,
     stripFrontmatter: (content: string) => content,
@@ -85,7 +86,7 @@ describe("Pi orchestration prompt section", () => {
   });
 
   it("sets the guidance section on Pi builds with prompt sections", async () => {
-    const bridge = await loadMcpBridge();
+    const bridge = await loadMcpBridge({ globalAgentInstructions: "Follow shared rules." });
     const sections: Record<string, string> = {};
     const result = await bridge.handlers.get("before_agent_start")!(
       { systemPrompt: "base", systemPromptOptions: { sections } },
@@ -94,6 +95,7 @@ describe("Pi orchestration prompt section", () => {
     assert.isUndefined(result);
     assert.include(sections.t3_code_orchestration, "orchestrator_capabilities");
     assert.include(sections.t3_code_orchestration, PULL_REQUEST_LINKING_INSTRUCTIONS);
+    assert.include(sections.t3_code_orchestration, "Follow shared rules.");
   });
 });
 
@@ -750,4 +752,15 @@ describe("Pi skill references", () => {
       await NodeFSP.rm(directory, { recursive: true });
     }
   });
+});
+
+it("keeps global instructions when MCP is unavailable", async () => {
+  const hooks = await loadHooks([], [], { T3_GLOBAL_AGENT_INSTRUCTIONS: "Shared rules." });
+  const hook = hooks.get("before_agent_start") as (event: { systemPrompt: string }) => {
+    systemPrompt: string;
+  };
+  assert.equal(
+    hook({ systemPrompt: "Native project rules." }).systemPrompt,
+    "Native project rules.\n\nShared rules.",
+  );
 });

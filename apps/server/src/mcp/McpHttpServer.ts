@@ -71,6 +71,8 @@ import * as Feedback from "../feedback/FeedbackService.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
 import { ThemeToolkit } from "./toolkits/theme/tools.ts";
+import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
+import * as TerminalHandlers from "./toolkits/terminal/handlers.ts";
 import * as ThemeHandlers from "./toolkits/theme/handlers.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
@@ -1545,6 +1547,7 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
 
 /** Every tool the T3 MCP server advertises. AgentContextBudget.test.ts measures this set. */
 export const layerTools = Layer.mergeAll(
+  toolkitRegistration(TerminalToolkit, TerminalHandlers.layer),
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

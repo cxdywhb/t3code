@@ -51,6 +51,10 @@ const fixture = vi.hoisted(() => ({
   surfaceOptions: [] as GhosttyTerminalSurfaceOptions[],
   reportedSize: null as { cols: number; rows: number } | null,
   resizeCommand: {},
+  clearCommand: {},
+  clears: [] as unknown[],
+  menuItems: [] as Array<{ id: string; disabled?: boolean }>,
+  menuReply: null as string | null,
   runWrite: (): Promise<{ _tag: "Success" } | AsyncResult.Failure<void, unknown>> =>
     Promise.resolve({ _tag: "Success" }),
   runResize: (_input: unknown): Promise<AsyncResult.AsyncResult<unknown, unknown>> =>
@@ -190,6 +194,7 @@ vi.mock("../state/use-atom-command", () => ({
     (command: object) =>
     async (args: { input: { threadId: string; data?: string; expectedPid?: number } }) => {
       if (command === fixture.resizeCommand) return fixture.runResize(args);
+      if (command === fixture.clearCommand) fixture.clears.push(args);
       if (args.input.data !== undefined) {
         const { threadId, data, expectedPid } = args.input;
         fixture.writes.push({
@@ -212,6 +217,7 @@ vi.mock("../state/terminal", () => ({
   terminalEnvironment: {
     write: {},
     resize: fixture.resizeCommand,
+    clear: fixture.clearCommand,
     metadata: ({ environmentId }: { environmentId: EnvironmentId }) =>
       fixture.terminalMetadata(environmentId),
   },
@@ -243,7 +249,16 @@ vi.mock("../state/projects", async () => {
 });
 vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => () => {} }));
 vi.mock("./preview/openTerminalLinkInPreview", () => ({ openTerminalLinkInPreview: () => {} }));
-vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
+vi.mock("~/localApi", () => ({
+  readLocalApi: () => ({
+    contextMenu: {
+      show: async (items: Array<{ id: string; disabled?: boolean }>) => {
+        fixture.menuItems = items;
+        return fixture.menuReply;
+      },
+    },
+  }),
+}));
 vi.mock("../hooks/useSettings", async () => {
   const { DEFAULT_CLIENT_SETTINGS } = await import("@t3tools/contracts/settings");
   return {
@@ -300,6 +315,9 @@ function setup(originalStatus: "starting" | "exited" = "exited") {
   fixture.typeIntoSurface = null;
   fixture.pressKey = null;
   fixture.writes = [];
+  fixture.clears = [];
+  fixture.menuItems = [];
+  fixture.menuReply = null;
   fixture.messages = [];
   fixture.surfaceOptions = [];
   fixture.reportedSize = null;
@@ -311,6 +329,28 @@ function setup(originalStatus: "starting" | "exited" = "exited") {
   useTerminalUiStateStore.setState(useTerminalUiStateStore.getInitialState());
   return { original, other };
 }
+
+it("clears only the current terminal tab through its context menu", async () => {
+  const { original } = setup("starting");
+  await using _screen = await render(<Drawer threadRef={original} onCloseTerminal={() => {}} />);
+  await act(async () => {
+    fixture.pendingSurfaces.shift()?.();
+  });
+  fixture.menuReply = "clear-all";
+  await act(async () => {
+    fixture.surfaceOptions.at(-1)!.onContextMenu?.(new MouseEvent("contextmenu"));
+  });
+  expect(fixture.menuItems).toContainEqual(
+    expect.objectContaining({ id: "clear-all", disabled: false }),
+  );
+  expect(fixture.clears).toEqual([
+    {
+      environmentId: original.environmentId,
+      input: { threadId: original.threadId, terminalId: "term-1" },
+    },
+  ]);
+  expect(fixture.writes).toEqual([]);
+});
 
 it("drops input until the shell runs instead of failing a write for every key", async () => {
   const { original } = setup("starting");

@@ -53,10 +53,18 @@ export function getProviderSkillsForSlashMenu(
 }
 
 export function getProviderSlashCommandsForSlashMenu(
-  slashCommands: ReadonlyArray<ServerProviderSlashCommand>,
-  visibleSkills: ReadonlyArray<ServerProviderSkill>,
-): ServerProviderSlashCommand[] {
-  const skillNames = new Set(visibleSkills.map((skill) => skill.name.trim().toLowerCase()));
+  provider: ServerProvider | null,
+  cwd: string | null | undefined,
+  showSkillsInSlashMenu: boolean,
+): ReadonlyArray<ServerProviderSlashCommand> {
+  if (!provider) return [];
+  const slashCommands = resolveProviderSlashCommandsForCwd(provider, cwd);
+  const nativeSkills = resolveProviderWorkspaceSnapshot(provider, cwd)?.skills ?? provider.skills;
+  const skillNames = new Set(
+    getProviderSkillsForSlashMenu(nativeSkills, showSkillsInSlashMenu).map((skill) =>
+      skill.name.trim().toLowerCase(),
+    ),
+  );
   return slashCommands.filter((command) => !skillNames.has(command.name.trim().toLowerCase()));
 }
 
@@ -123,7 +131,10 @@ export function resolveProviderSkillsForCwd(
   provider: ServerProvider,
   cwd: string | null | undefined,
 ): ServerProvider["skills"] {
-  return resolveProviderWorkspaceSnapshot(provider, cwd)?.skills ?? provider.skills;
+  const snapshot = resolveProviderWorkspaceSnapshot(provider, cwd);
+  const native = snapshot?.skills ?? provider.skills;
+  if (provider.driver === "codex" || !snapshot?.sharedSkills?.length) return native;
+  return dedupeProviderSkillsByName([...native, ...snapshot.sharedSkills]);
 }
 
 export function resolveProviderSlashCommandsForCwd(

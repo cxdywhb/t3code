@@ -381,9 +381,14 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     }
   });
 
+  const globalInstructions = env("T3_GLOBAL_AGENT_INSTRUCTIONS");
   const endpoint = env(URL_ENV);
   const token = env(TOKEN_ENV);
   if (endpoint === undefined || token === undefined) {
+    // Global rules also apply without an MCP connection.
+    if (globalInstructions) pi.on("before_agent_start", (event) => ({
+      systemPrompt: event.systemPrompt + "\\n\\n" + globalInstructions,
+    }));
     pi.on("session_start", async (_event, ctx) => {
       ctx.ui.notify(
         "t3-code MCP unavailable: T3_MCP_URL or T3_MCP_BEARER_TOKEN is missing.",
@@ -552,7 +557,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // Keep guidance in the system prompt so leading slash commands still expand.
   pi.on("before_agent_start", (event, ctx) => {
     reconcileDiscovery(ctx);
-    const instructions = ORCHESTRATION_INSTRUCTIONS + "\\n\\n" + PULL_REQUEST_LINKING_INSTRUCTIONS;
+    const instructions = [ORCHESTRATION_INSTRUCTIONS, PULL_REQUEST_LINKING_INSTRUCTIONS, globalInstructions].filter(Boolean).join("\\n\\n");
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.

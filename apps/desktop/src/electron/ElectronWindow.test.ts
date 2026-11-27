@@ -111,6 +111,28 @@ describe("ElectronWindow", () => {
     windowsForegroundCloseMock.mockReset();
   });
 
+  it.effect("trusts only the live top frame of an explicitly trusted app window", () =>
+    Effect.gen(function* () {
+      const frame = {};
+      const closed = vi.fn<(event: string, callback: () => void) => void>();
+      const window = {
+        isDestroyed: () => false,
+        webContents: { id: 7, mainFrame: frame },
+        once: closed,
+      };
+      browserWindowMock.mockImplementationOnce(function TerminalWindowMock() {
+        return window;
+      });
+      const service = yield* ElectronWindow.ElectronWindow;
+      yield* service.create({}, { auxiliary: true, trustedApp: true });
+      assert.isTrue(yield* service.trustedAppFrame(7, frame));
+      assert.isFalse(yield* service.trustedAppFrame(7, {}));
+      assert.isFalse(yield* service.trustedAppFrame(8, frame));
+      closed.mock.calls.find(([event]) => event === "closed")![1]();
+      assert.isFalse(yield* service.trustedAppFrame(7, frame));
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("cancels native focus when destroyed during the foreground query", () =>
     Effect.gen(function* () {
       const window = makeWindowsRevealWindow();

@@ -86,8 +86,11 @@ import {
   TextSearchIcon,
   UserPlusIcon,
   WorkflowIcon,
+  TerminalIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
+import { showGlobalTerminal } from "./terminal/globalTerminalStore";
+import { useGlobalTerminalEnvironmentId } from "./terminal/globalTerminalTarget";
 import { dispatchPreviewAction } from "./preview/previewActionBus";
 import { previewBridge } from "./preview/previewBridge";
 import {
@@ -1830,6 +1833,19 @@ function OpenCommandPaletteDialog(props: {
       run: async () => {
         await navigate({ to: "/workflows" });
       },
+    });
+  }
+
+  const globalTerminalEnvironmentId = useGlobalTerminalEnvironmentId();
+  if (globalTerminalEnvironmentId !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:global-terminal",
+      searchTerms: ["global terminal", "floating terminal", "全局终端", "浮窗"],
+      title: gt("Global terminal"),
+      icon: <TerminalIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "globalTerminal.open",
+      run: () => showGlobalTerminal(globalTerminalEnvironmentId),
     });
   }
 

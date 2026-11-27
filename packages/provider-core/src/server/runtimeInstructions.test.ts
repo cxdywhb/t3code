@@ -155,3 +155,22 @@ describe("buildRuntimeInstructions", () => {
     assert.isBelow(new TextEncoder().encode(block).length, 4000);
   });
 });
+
+it("includes user-authored global rules without replacing native instructions", () => {
+  const base = buildRuntimeInstructions({ harness: "Test" });
+  const content = "# Rules\n\n  中文 🦊\n";
+  const instructions = buildRuntimeInstructions({
+    harness: "Test",
+    globalAgentInstructions: content,
+  });
+  assert.isTrue(instructions.startsWith(base));
+  assert.include(instructions, content);
+  assert.include(
+    instructions,
+    "More specific project instructions and explicit user requests take precedence.",
+  );
+  assert.include(
+    buildRuntimeInstructions({ harness: "Test", globalAgentInstructions: " \n" }),
+    "Ignore earlier global_agents_md blocks; project instructions still apply.",
+  );
+});

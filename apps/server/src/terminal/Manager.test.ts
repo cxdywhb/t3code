@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
   DEFAULT_TERMINAL_ID,
+  GLOBAL_TERMINAL_THREAD_ID,
   TERMINAL_BRACKETED_PASTE_START,
   TERMINAL_BRACKETED_PASTE_END,
   type TerminalWriteInput,
@@ -592,6 +593,59 @@ it.layer(
   ),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
+  it.effect("shares global tabs without restarting or clearing other terminals", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, baseDir } = yield* createManager();
+      const first = yield* manager.openGlobal({ terminalId: "build", cwd: baseDir });
+      const second = yield* manager.openGlobal({ terminalId: "server", cwd: baseDir });
+      yield* manager.open(openInput({ cwd: baseDir, terminalId: "build" }));
+      const buildOutput = yield* Deferred.make<void>();
+      const output = yield* Deferred.make<void>();
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "output" && event.terminalId === "build"
+          ? Deferred.succeed(buildOutput, undefined).pipe(Effect.asVoid)
+          : event.type === "output" && event.data === "server ready\r\n"
+            ? Deferred.succeed(output, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+      );
+      ptyAdapter.processes[0]!.emitData("\u001b[31mbuild ready\u001b[0m\r\n");
+      ptyAdapter.processes[1]!.emitData("server ready\r\n");
+      yield* Deferred.await(buildOutput);
+      yield* Deferred.await(output);
+      unsubscribe();
+      const reveal = yield* Deferred.make<string>();
+      const unsubscribeMetadata = yield* manager.subscribeMetadata((event) =>
+        event.type === "upsert" && event.revealRequestId !== undefined
+          ? Deferred.succeed(reveal, event.terminal.terminalId).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      const revealed = yield* manager.openGlobal({ terminalId: "build", cwd: "/does-not-exist" });
+      expect(yield* Deferred.await(reveal)).toBe("build");
+      unsubscribeMetadata();
+      expect(revealed.pid).toBe(first.pid);
+      expect(revealed.cwd).toBe(baseDir);
+      expect(ptyAdapter.spawnInputs).toHaveLength(3);
+      expect((yield* manager.listGlobal).map((tab) => tab.terminalId)).toEqual(["build", "server"]);
+      expect((yield* manager.readGlobal({ terminalId: "build" })).text).toContain("build ready");
+      expect((yield* manager.readGlobal({ terminalId: "build" })).text).not.toContain("\u001b");
+      const short = yield* manager.readGlobal({ terminalId: "build", maxChars: 4 });
+      expect(short.text.length).toBeLessThanOrEqual(4);
+      expect(short.truncated).toBe(true);
+      yield* manager.close({ threadId: "thread-1", deleteHistory: true });
+      expect(yield* manager.listGlobal).toHaveLength(2);
+      yield* manager.clear({ threadId: GLOBAL_TERMINAL_THREAD_ID, terminalId: "build" });
+      expect((yield* manager.readGlobal({ terminalId: "build" })).text).toBe("");
+      expect((yield* manager.readGlobal({ terminalId: "server" })).text).toContain("server ready");
+      expect((yield* manager.readGlobal({ terminalId: "server" })).terminal.pid).toBe(second.pid);
+      expect(ptyAdapter.processes[0]!.killed).toBe(false);
+      yield* manager.close({
+        threadId: GLOBAL_TERMINAL_THREAD_ID,
+        terminalId: "build",
+        deleteHistory: true,
+      });
+      expect((yield* manager.listGlobal).map((tab) => tab.terminalId)).toEqual(["server"]);
+    }),
+  );
   it.effect.each([
     { method: "open", location: "managed" },
     { method: "attach", location: "managed" },

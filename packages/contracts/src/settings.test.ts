@@ -13,11 +13,13 @@ import {
   ClientServerSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  GLOBAL_AGENT_INSTRUCTIONS_MAX_LENGTH,
   globalIdleCompaction,
   idleCompactionPatch,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   ProjectSettingsOverrides,
   requiredScopesForProjectMutation,
+  requiredScopesForServerSettingsPatch,
   resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
@@ -579,4 +581,32 @@ describe("pullRequestOriginOnly setting", () => {
       pullRequestOriginOnly: false,
     });
   });
+});
+
+it("preserves global AGENTS.md formatting and rejects oversized patches", () => {
+  const globalAgentInstructions = "# Rules\n\n  保留缩进。 🦊\n";
+  expect(decodeServerSettings({}).globalAgentInstructions).toBe("");
+  expect(encodeServerSettings(decodeServerSettings({ globalAgentInstructions }))).toMatchObject({
+    globalAgentInstructions,
+  });
+  expect(decodeClientServerSettingsPatch({ globalAgentInstructions })).toEqual({
+    globalAgentInstructions,
+  });
+  expect(decodeServerSettingsPatch({ globalAgentInstructions: "" })).toEqual({
+    globalAgentInstructions: "",
+  });
+  expect(() =>
+    decodeServerSettingsPatch({
+      globalAgentInstructions: "a".repeat(GLOBAL_AGENT_INSTRUCTIONS_MAX_LENGTH + 1),
+    }),
+  ).toThrow();
+});
+
+it("requires agent operation authority to change or clear global rules", () => {
+  for (const globalAgentInstructions of ["Run project tests.", ""]) {
+    expect(requiredScopesForServerSettingsPatch({ globalAgentInstructions })).toEqual([
+      "settings:write",
+      "orchestration:operate",
+    ]);
+  }
 });

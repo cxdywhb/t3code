@@ -36,6 +36,7 @@ import { terminalOutputText } from "./terminalOutput.ts";
 interface TerminalMetadataFeed {
   readonly terminals: ReadonlyArray<TerminalSummary>;
   readonly snapshotId: string | symbol;
+  readonly revealRequest?: { readonly id: string; readonly terminalId: string };
 }
 
 export function createTerminalEnvironmentAtoms<R, E>(
@@ -67,6 +68,14 @@ export function createTerminalEnvironmentAtoms<R, E>(
           (feed, event): TerminalMetadataFeed => ({
             terminals: applyTerminalMetadataStreamEvent(feed.terminals, event),
             snapshotId: event.type === "snapshot" ? (event.managerId ?? Symbol()) : feed.snapshotId,
+            ...(event.type === "snapshot"
+              ? {}
+              : {
+                  revealRequest:
+                    event.type === "upsert" && event.revealRequestId !== undefined
+                      ? { id: event.revealRequestId, terminalId: event.terminal.terminalId }
+                      : feed.revealRequest,
+                }),
           }),
         ),
         // The scan seed is not an authoritative empty server snapshot.
@@ -119,6 +128,10 @@ export function createTerminalEnvironmentAtoms<R, E>(
       tag: WS_METHODS.terminalOpen,
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
+    }),
+    openGlobal: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:terminal:open-global",
+      tag: WS_METHODS.terminalOpenGlobal,
     }),
     write: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:terminal:write",

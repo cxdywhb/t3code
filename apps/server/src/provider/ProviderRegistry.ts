@@ -32,6 +32,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ModelManifest from "./ModelManifest.ts";
+import * as SharedAgentResources from "./SharedAgentResources.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ServerConfig from "../config.ts";
 import { refreshPathFromLoginShell, refreshWindowsPath } from "../os-jank.ts";
@@ -198,6 +199,9 @@ export function upsertProviderWorkspaceSnapshot(
       : scopedSnapshot.slashCommands,
     ...(scopedSnapshot.slashCommandsPending ? { slashCommandsPending: true } : {}),
     skills: scopedSnapshot.skills,
+    ...(scopedSnapshot.sharedSkills === undefined
+      ? {}
+      : { sharedSkills: scopedSnapshot.sharedSkills }),
     ...(optionDescriptors === undefined ? {} : { optionDescriptors }),
     ...(models === undefined ? {} : { models }),
     ...(scopedSnapshot.workspaceModelsPending ? { modelsPending: true } : {}),
@@ -482,6 +486,8 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const sharedResources = yield* Effect.serviceOption(SharedAgentResources.SharedAgentResources);
+    const sharingRevision = yield* Ref.make(0);
 
     const changesPubSub = yield* Effect.acquireRelease(
       PubSub.unbounded<ReadonlyArray<ServerProvider>>(),
@@ -1273,12 +1279,13 @@ export const layer = Layer.effect(
       const scannedAt = DateTime.formatIso(now);
       const instance = yield* instanceRegistry.getInstance(input.instanceId);
       const snapshotForCwd = instance?.snapshotForCwd;
-      if (!instance || !snapshotForCwd) return providers;
+      if (!instance || (!snapshotForCwd && Option.isNone(sharedResources))) return providers;
       // A report never enrolls a cwd nobody requested, nor outlives the instance that made it.
       if (input.rescan && (input.rescan !== instance || (!runningScan && !scannedFrom))) {
         return providers;
       }
       const token = yield* Deferred.make<void>();
+      const revision = yield* Ref.get(sharingRevision);
       // A machine refresh can change this cwd's snapshot, so the scan publishes against the result.
       const refreshMachineSnapshot = input.fresh
         ? (instance.invalidateCaches ?? Effect.void).pipe(
@@ -1293,10 +1300,28 @@ export const layer = Layer.effect(
         : Effect.succeed(scannedFrom);
       const runScan = refreshMachineSnapshot.pipe(
         Effect.flatMap((scanBase) =>
-          Effect.map(snapshotForCwd(input.scanCwd ?? input.cwd), (scopedSnapshot) => ({
-            scanBase,
-            scopedSnapshot,
-          })),
+          Effect.all(
+            {
+              scopedSnapshot: snapshotForCwd
+                ? snapshotForCwd(input.scanCwd ?? input.cwd)
+                : instance.snapshot.getSnapshot.pipe(
+                    Effect.map((snapshot): ProviderWorkspaceSnapshot => snapshot),
+                  ),
+              sharedSkills:
+                provider.driver === "codex" || Option.isNone(sharedResources)
+                  ? Effect.undefined
+                  : sharedResources.value.skillsFor(provider),
+            },
+            { concurrency: 2 },
+          ).pipe(
+            Effect.map(({ scopedSnapshot, sharedSkills }) => ({
+              scanBase,
+              scopedSnapshot: {
+                ...scopedSnapshot,
+                ...(sharedSkills === undefined ? {} : { sharedSkills }),
+              },
+            })),
+          ),
         ),
         // Scans fail on error; returned inventory remains valid even when provider health reports an error.
         Effect.flatMap(({ scanBase, scopedSnapshot }) =>
@@ -1305,7 +1330,10 @@ export const layer = Layer.effect(
               if (currentInstance !== instance) return Ref.get(providersRef);
               return updateProviders((currentProviders) => {
                 // Read ownership inside the update so a newer claim cannot race publication.
-                if (Ref.getUnsafe(workspaceRefreshesRef).get(instance)?.get(input.cwd) !== token) {
+                if (
+                  Ref.getUnsafe(workspaceRefreshesRef).get(instance)?.get(input.cwd) !== token ||
+                  (provider.driver !== "codex" && revision !== Ref.getUnsafe(sharingRevision))
+                ) {
                   return currentProviders;
                 }
                 return currentProviders.map((candidate) => {
@@ -1328,6 +1356,7 @@ export const layer = Layer.effect(
                   return input.rescan &&
                     !(
                       Equal.equals(rescanned?.skills, held?.skills) &&
+                      Equal.equals(rescanned?.sharedSkills, held?.sharedSkills) &&
                       Equal.equals(rescanned?.models, held?.models) &&
                       Equal.equals(rescanned?.slashCommands, held?.slashCommands)
                     )
@@ -1381,6 +1410,26 @@ export const layer = Layer.effect(
         Effect.ignoreCause({ log: true }),
       ),
     ).pipe(Effect.forkScoped);
+
+    if (Option.isSome(sharedResources)) {
+      yield* Stream.runForEach(sharedResources.value.changes, () =>
+        Effect.gen(function* () {
+          yield* Ref.update(sharingRevision, (revision) => revision + 1);
+          const now = DateTime.formatIso(yield* DateTime.now);
+          yield* updateProviders((providers) =>
+            providers.map((provider) =>
+              provider.driver === "codex"
+                ? provider
+                : {
+                    ...provider,
+                    workspaceSnapshots: [],
+                    workspaceRescannedAt: now,
+                  },
+            ),
+          );
+        }),
+      ).pipe(Effect.forkScoped);
+    }
 
     const runtimeModeLimits = Effect.fn("ProviderRegistry.runtimeModeLimits")(function* (input: {
       readonly instanceId: ProviderInstanceId;

@@ -1410,7 +1410,15 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+export const GLOBAL_AGENT_INSTRUCTIONS_MAX_LENGTH = 16_000;
+const GlobalAgentInstructions = Schema.String.check(
+  Schema.isMaxLength(GLOBAL_AGENT_INSTRUCTIONS_MAX_LENGTH),
+);
+
 export const ServerSettings = Schema.Struct({
+  globalAgentInstructions: GlobalAgentInstructions.pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1862,6 +1870,7 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  globalAgentInstructions: Schema.optionalKey(GlobalAgentInstructions),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),
@@ -2107,8 +2116,10 @@ export function requiredScopesForServerSettingsPatch(
     ...(changesSettings || (!changesProviders && !changesAccess) ? [AuthSettingsWriteScope] : []),
     ...(changesProviders ? [AuthProvidersManageScope] : []),
     ...(changesAccess ? [AuthAccessWriteScope] : []),
-    // Saving a script is choosing a command for the host to run, wherever the patch carries it.
-    ...(carriesProjectScripts(patch) ? [AuthOrchestrationOperateScope] : []),
+    // Scripts and global agent instructions can cause host commands, so settings-write alone is insufficient.
+    ...(carriesProjectScripts(patch) || patch.globalAgentInstructions !== undefined
+      ? [AuthOrchestrationOperateScope]
+      : []),
   ];
 }
 
