@@ -80,7 +80,10 @@ export function AgentSettingsPanel() {
                       onSaved: () => {
                         setSaving(false);
                         setDraft(null);
-                        toastManager.add({ type: "success", title: gt("Saved") });
+                        toastManager.add({
+                          type: "success",
+                          title: gt("Saved", { $context: "settings save confirmation" }),
+                        });
                       },
                     },
                   );
