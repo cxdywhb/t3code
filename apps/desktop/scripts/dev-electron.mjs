@@ -1,5 +1,7 @@
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -55,6 +57,7 @@ const remoteDebuggingPort = process.env.T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT?.tr
 const hostPlatform = NodeOS.platform();
 const parentPid = process.ppid;
 const parentWatchIntervalMs = 1_000;
+const watchBuild = process.env.T3CODE_DESKTOP_DEV === "1";
 
 const owner = tryAcquireDevSupervisor();
 if (!owner) {
@@ -73,13 +76,6 @@ NodeChildProcess.execFileSync(
   { stdio: "inherit" },
 );
 
-await waitForResources({
-  baseDir: desktopDir,
-  files: requiredFiles,
-  tcpHost: devServer.hostname,
-  tcpPort: port,
-});
-
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
 const devProtocolClient = resolveDevProtocolClient();
@@ -91,8 +87,27 @@ if (devProtocolClient) {
 let shuttingDown = false;
 let restartTimer = null;
 let currentApp = null;
+let appBundleDigest = null;
 let restartQueue = Promise.resolve();
 const watchers = [];
+let pack = null;
+
+function readBundleDigest() {
+  const hash = NodeCrypto.createHash("sha256");
+  try {
+    for (const file of requiredFiles) {
+      hash.update(
+        NodeCrypto.createHash("sha256")
+          .update(NodeFS.readFileSync(NodePath.join(desktopDir, file)))
+          .digest(),
+      );
+    }
+  } catch (cause) {
+    if (cause?.code === "ENOENT") return null;
+    throw cause;
+  }
+  return hash.digest("hex");
+}
 
 function killChildTreeByPid(pid, signal) {
   if (hostPlatform === "win32" || typeof pid !== "number") {
@@ -102,7 +117,7 @@ function killChildTreeByPid(pid, signal) {
   NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
 }
 
-function startApp() {
+function startApp(bundleDigest) {
   if (shuttingDown || currentApp !== null) {
     return;
   }
@@ -121,6 +136,7 @@ function startApp() {
   });
 
   currentApp = app;
+  appBundleDigest = bundleDigest;
 
   app.once("error", (error) => {
     if (currentApp !== app) return;
@@ -187,9 +203,11 @@ function scheduleRestart() {
     restartQueue = restartQueue
       .catch(() => undefined)
       .then(async () => {
+        const digest = readBundleDigest();
+        if (digest === null || (currentApp !== null && digest === appBundleDigest)) return;
         await stopApp();
         if (!shuttingDown) {
-          startApp();
+          startApp(digest);
         }
       });
   }, restartDebounceMs);
@@ -237,6 +255,7 @@ async function shutdown(exitCode) {
   }
 
   await stopApp();
+  if (pack?.pid !== undefined) killChildTreeByPid(pack.pid, "TERM");
   killChildTree("TERM");
   await new Promise((resolve) => {
     setTimeout(resolve, childTreeGracePeriodMs);
@@ -246,9 +265,6 @@ async function shutdown(exitCode) {
   owner.close();
   process.exit(exitCode);
 }
-
-startWatchers();
-startApp();
 
 process.once("SIGINT", () => {
   void shutdown(130);
@@ -269,4 +285,49 @@ if (hostPlatform !== "win32") {
       void shutdown(129);
     }
   }, parentWatchIntervalMs).unref();
+}
+
+let updatedAfter;
+if (watchBuild) {
+  NodeChildProcess.execFileSync(
+    process.execPath,
+    [NodePath.join(desktopDir, "scripts/build-preview-annotation-css.mjs")],
+    { stdio: "inherit" },
+  );
+  const require = NodeModule.createRequire(NodePath.join(desktopDir, "package.json"));
+  const vp = NodePath.join(
+    NodePath.dirname(require.resolve("vite-plus/package.json")),
+    "bin",
+    "vp",
+  );
+  const startedAt = Date.now();
+  updatedAfter = new Map(
+    requiredFiles
+      .filter((file) => file.startsWith("dist-electron/"))
+      .map((file) => [file, startedAt]),
+  );
+  pack = NodeChildProcess.spawn(process.execPath, [vp, "pack", "--watch", "--no-clean"], {
+    cwd: desktopDir,
+    env: childEnv,
+    stdio: "inherit",
+  });
+  pack.once("error", (error) => {
+    console.error("[dev-electron] Could not start the bundle watcher.", error);
+    void shutdown(1);
+  });
+  pack.once("exit", (code) => void shutdown(code ?? 1));
+}
+
+await waitForResources({
+  baseDir: desktopDir,
+  files: requiredFiles,
+  updatedAfter,
+  tcpHost: devServer.hostname,
+  tcpPort: port,
+});
+
+if (!shuttingDown) {
+  startWatchers();
+  const digest = readBundleDigest();
+  if (digest !== null) startApp(digest);
 }

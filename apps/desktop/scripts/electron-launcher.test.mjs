@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -152,7 +153,8 @@ async function runDevElectronStartup({
         spawnSync: spawnSync ?? (() => undefined),
         spawn: spawn ?? (() => new NodeEvents.EventEmitter()),
       },
-      NodeFS: { watch: () => ({ close: () => undefined }) },
+      NodeCrypto,
+      NodeFS: { readFileSync: () => "", watch: () => ({ close: () => undefined }) },
       NodeOS: { platform: () => "linux" },
       NodePath,
       desktopDir,
@@ -277,6 +279,7 @@ it("waits for a new build if Electron exits unexpectedly", async () => {
       return app;
     },
     NodeFS: {
+      readFileSync: () => "",
       watch(directory, _options, listener) {
         onChange.set(directory, listener);
         return { close: () => undefined };
@@ -292,4 +295,38 @@ it("waits for a new build if Electron exits unexpectedly", async () => {
   onChange.get(NodePath.join("/repo/apps/desktop", "dist-electron"))("change", "main.cjs");
   await clock.advance(5_000);
   assert.lengthOf(apps, 2);
+});
+
+it("restarts Electron only when the built files change", async () => {
+  const clock = makeFakeClock();
+  const onChange = new Map();
+  const apps = [];
+  let main = "original";
+  await runDevElectronStartup({
+    ...clock,
+    spawn: () => {
+      const app = new NodeEvents.EventEmitter();
+      app.kill = () => app.emit("exit", 0, null);
+      apps.push(app);
+      return app;
+    },
+    NodeFS: {
+      readFileSync: (file) => (file.endsWith("main.cjs") ? main : file),
+      watch(directory, _options, listener) {
+        onChange.set(directory, listener);
+        return { close: () => undefined };
+      },
+    },
+  });
+  const notifyMain = () =>
+    onChange.get(NodePath.join("/repo/apps/desktop", "dist-electron"))("change", "main.cjs");
+
+  notifyMain();
+  await clock.advance(5_000);
+  assert.lengthOf(apps, 1, "rewriting identical output stopped the running app");
+
+  main = "updated";
+  notifyMain();
+  await clock.advance(5_000);
+  assert.lengthOf(apps, 2, "a changed output did not reload the app");
 });
