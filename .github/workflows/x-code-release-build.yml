@@ -1,0 +1,103 @@
+name: X Code 0.1.27 Windows x64 packaging
+on:
+  push:
+    branches: [release-build/x-code-0.1.27]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  bundle_and_wsl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin 725ecfff7cb4bcc877c8b31728a73928d3b16d62
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - name: Build desktop bundle
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          node scripts/update-release-package-versions.ts 0.1.27
+          vp run build:desktop:bundle
+          manifest=apps/server/dist/client/.vite/manifest.json
+          if [[ -f "$manifest" ]]; then
+            cp "$manifest" apps/server/dist/client/vite-manifest.release.json
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+      - name: Build and test matching Linux x64 WSL runtime
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/resource-monitor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+          node scripts/apply-web-brand-assets.ts code apps/server/dist/client
+          T3CODE_TELEMETRY_CHANNEL=dev node apps/server/scripts/cli.ts build-exe --verbose
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version 0.1.27 --resource-monitor-dir "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release" --output-dir release-cli
+          node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version 0.1.27
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cli-linux-x64
+          path: release-cli/*
+          if-no-files-found: error
+          compression-level: 0
+  native_resource_monitor:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Check out release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/cxdywhb/t3code.git"
+          git fetch --no-tags --depth=1 origin 725ecfff7cb4bcc877c8b31728a73928d3b16d62
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: Build native Windows x64 resource monitor
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-windows-resource-monitor
+          path: native/resource-monitor/target/x86_64-pc-windows-msvc/release/t3-resource-monitor.exe
+          if-no-files-found: error
+  desktop_win_x64:
+    needs: [bundle_and_wsl, native_resource_monitor]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: "0.1.27"
+      ref: 725ecfff7cb4bcc877c8b31728a73928d3b16d62
+      release_channel: stable
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      relay_client_tracing: false
+      label: Windows x64
+      runner: ubuntu-24.04
+      verify_runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
