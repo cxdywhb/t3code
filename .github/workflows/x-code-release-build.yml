@@ -47,6 +47,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y patchelf
           cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+          node scripts/apply-web-brand-assets.ts code apps/server/dist/client
+          T3CODE_TELEMETRY_CHANNEL=dev node apps/server/scripts/cli.ts build-exe --verbose
           node scripts/build-cli-archive.ts --platform linux --arch x64 --version 0.1.26 --resource-monitor-dir "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release" --output-dir release-cli
           node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version 0.1.26
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
