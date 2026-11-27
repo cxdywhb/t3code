@@ -61,6 +61,7 @@ import {
 } from "@t3tools/shared/issueAutomationScan";
 import {
   formatIssueAutomationWriteBackComment,
+  ISSUE_AUTOMATION_COMMENT_INSTRUCTIONS,
   ISSUE_AUTOMATION_COMMENT_MARKER,
 } from "@t3tools/shared/issueAutomationWriteBack";
 import * as Cause from "effect/Cause";
@@ -239,12 +240,14 @@ function buildDiagnosisPrompt(input: {
       ? ["", "### 团队附加规范要求", input.customInstructions.trim()]
       : []),
     "",
-    "## 6. 最终输出报告格式（必须严格输出以下结构化章节，系统将自动提取回写至禅道备注）",
+    "## 6. 最终输出报告格式",
     "请在完成全部分析（及修复验证）后的最后一条回复中，输出清晰的中文结构化报告：",
     "1. `## 问题根因分析`：说明导致该问题的准确代码位置（文件路径 + 函数/行号）与触发机理；",
     "2. `## 影响范围评估`：说明是否影响其他模块或上下游仓库；",
     "3. `## 修复方案与改动说明`：列出实际修改的文件及核心逻辑变更（只读模式下给出具体修改建议代码）；",
     "4. `## 验证结果`：说明编译、类型检查或单元测试的执行情况与结论。",
+    "",
+    ISSUE_AUTOMATION_COMMENT_INSTRUCTIONS,
   ]
     .filter((line) => line !== undefined)
     .join("\n");
@@ -1160,15 +1163,10 @@ const make = Effect.gen(function* () {
             current = yield* updateTaskState(
               current,
               { stage: "writing_back" },
-              { stage: "writing_back", message: "正在将结构化诊断报告写回问题平台..." },
+              { stage: "writing_back", message: "正在将诊断摘要写回问题平台..." },
             );
 
-            const formattedComment = formatIssueAutomationWriteBackComment({
-              assignedModelLabel: current.assignedModelLabel,
-              worktreeBranch: current.worktreeBranch,
-              diagnosisReport: solved.reportText,
-              reviewReport,
-            });
+            const formattedComment = formatIssueAutomationWriteBackComment(solved.reportText);
 
             if (policy.actionMode === "auto_resolve" && !needsHumanReview) {
               const wbResult = yield* Effect.result(
@@ -1195,7 +1193,7 @@ const make = Effect.gen(function* () {
                   },
                   {
                     stage: "completed",
-                    message: "已自动回写诊断报告并将平台问题状态标记为「已解决」",
+                    message: "已自动回写诊断摘要并将平台问题状态标记为「已解决」",
                   },
                 );
               }
@@ -1222,8 +1220,8 @@ const make = Effect.gen(function* () {
                 {
                   stage: finalStage,
                   message: needsHumanReview
-                    ? "已将诊断报告写回平台备注（交叉审查建议人工复核代码修改）"
-                    : "已成功将诊断分析报告自动写回平台评论",
+                    ? "已将诊断摘要写回平台备注（交叉审查建议人工复核代码修改）"
+                    : "已将诊断摘要自动写回平台评论",
                 },
               );
             }
@@ -2438,9 +2436,7 @@ const make = Effect.gen(function* () {
       }
     }
 
-    const comment = writeComment
-      ? formatIssueAutomationWriteBackComment({ ...task, diagnosisReport: task.diagnosisReport })
-      : "";
+    const comment = writeComment ? formatIssueAutomationWriteBackComment(task.diagnosisReport) : "";
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const result = yield* plugin.writeBack({
@@ -2495,30 +2491,30 @@ const make = Effect.gen(function* () {
         detail: "请在修复报告中同步修复结果",
       });
     }
-    const result = yield* plugin.writeBack({
-      credentials,
-      action: input.action,
-    });
-
-    if (
-      result.ok &&
-      found &&
+    const linkedTask =
       input.action.kind !== "create" &&
-      found.connectorId === input.connectorId &&
+      found?.connectorId === input.connectorId &&
       found.issueKey === input.action.issueKey
-    ) {
+        ? found
+        : undefined;
+    const report = linkedTask?.diagnosisReport?.trim();
+    const action =
+      input.action.kind !== "create" && report && input.action.comment?.trim() === report
+        ? { ...input.action, comment: formatIssueAutomationWriteBackComment(report) }
+        : input.action;
+    const result = yield* plugin.writeBack({ credentials, action });
+
+    if (result.ok && linkedTask && action.kind !== "create") {
       const syncedAt = yield* nowIso;
       yield* updateTaskState(
-        found,
+        linkedTask,
         {
-          ...(input.action.kind === "comment" || input.action.comment
-            ? { commentSyncedAt: syncedAt }
-            : {}),
-          ...(input.action.kind !== "comment" ? { stateSyncedAt: syncedAt } : {}),
+          ...(action.kind === "comment" || action.comment ? { commentSyncedAt: syncedAt } : {}),
+          ...(action.kind !== "comment" ? { stateSyncedAt: syncedAt } : {}),
         },
         {
-          stage: found.stage,
-          message: `已向平台执行写入动作: ${input.action.kind}`,
+          stage: linkedTask.stage,
+          message: `已向平台执行写入动作: ${action.kind}`,
         },
       );
     }

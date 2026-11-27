@@ -183,7 +183,13 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
     actionMode: "fix_worktree_review",
     stage: "needs_human",
     createdAt: "2026-11-24T01:00:00.000Z",
-    diagnosisReport: "Applied and tested the repair",
+    diagnosisReport: [
+      "Applied and tested the repair",
+      "",
+      "## 禅道评论",
+      "问题原因：保存记录后，列表仍显示旧数据。",
+      "解决方案：保存成功后会刷新列表。",
+    ].join("\n"),
     worktreeBranch: "fix/zentao-312",
   } satisfies IssueAutomationTask;
   let current = snapshot;
@@ -363,6 +369,8 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await page.getByRole("option", { name: "v1.2.0" }).click();
   await comment.click();
   await expect.element(dialog.getByText("Comment preview")).toBeVisible();
+  await expect.element(dialog.getByText(/解决方案：保存成功后会刷新列表。/)).toBeVisible();
+  await expect.element(dialog.getByText("Applied and tested the repair")).not.toBeInTheDocument();
   await submit.click();
   await expect.element(dialog).not.toBeInTheDocument();
   expect(writeBack).toHaveBeenCalledExactlyOnceWith({
