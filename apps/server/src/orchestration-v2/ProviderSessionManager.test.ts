@@ -794,6 +794,8 @@ function layerTest(input: {
             : [
                 Layer.succeed(SharedAgentResources.SharedAgentResources, {
                   read: Effect.succeed(input.sharedResources),
+                  skillsFor: () => Effect.succeed(input.sharedResources!.skills),
+                  changes: Stream.empty,
                 }),
               ]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
