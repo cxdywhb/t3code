@@ -7,6 +7,7 @@ import {
   WS_METHODS,
   type IssueAutomationAnalyzeIssuesInput,
   type IssueAutomationListRemoteIssuesInput,
+  type IssueAutomationSaveProfileInput,
   type IssueAutomationRemoteIssue,
   type IssueAutomationStateSnapshot,
   type IssueAutomationTask,
@@ -24,6 +25,8 @@ import { AppRoot } from "~/AppRoot";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
   PROJECT_ID,
   answerRpc,
   installFakeEnvironment,
@@ -42,7 +45,11 @@ vi.mock("../../../../../packages/client-runtime/src/connection/driver.ts", async
 
 it("scans without dispatching and opens diagnosis, repair and ZenTao sync from the task report", async () => {
   using _environment = installFakeEnvironment([], {
-    capabilities: { issueAutomationRepair: true },
+    capabilities: {
+      issueAutomationRepair: true,
+      issueAutomationDiagnosisDrivers: ["claudeAgent", "codex"],
+    },
+    providers: [CODEX_PROVIDER, CLAUDE_PROVIDER],
   });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
@@ -117,7 +124,10 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
         scopeName: scope.name,
         repositories: { primaryProjectId: PROJECT_ID, linkedProjectIds: [], moduleMappings: [] },
         models: {
-          primaryModel: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          primaryModel: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-4-6",
+          },
           triageModel: null,
           highSeverityModel: null,
           reviewModel: null,
@@ -155,6 +165,10 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
     ],
     activeRunCount: 0,
   };
+  const savedModels = vi.fn((input: IssueAutomationSaveProfileInput) =>
+    Effect.succeed({ ...snapshot.profiles[0]!, models: input.models }),
+  );
+  using _saveProfile = answerRpc(WS_METHODS.issueAutomationSaveProfile, savedModels);
   const diagnosis = snapshot.tasks[1]!;
   const repair = {
     ...diagnosis,
@@ -256,6 +270,26 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await expect
     .element(page.getByRole("switch", { name: /Unconfirmed mobile issues/ }))
     .not.toBeChecked();
+  await page.getByRole("button", { name: "Edit", exact: true }).last().click();
+  const profileDialog = page.getByRole("dialog", { name: "Edit unattended rule" });
+  await expect
+    .element(profileDialog.getByRole("combobox", { name: "Execution mode" }))
+    .toHaveTextContent("Diagnose the root cause only");
+  const primary = profileDialog.getByRole("button", { name: /Primary model/ });
+  await expect.element(primary).toHaveTextContent("Opus 4.6");
+  await primary.click();
+  await page.getByPlaceholder("Search models...").fill("GPT-5.5");
+  await page.getByRole("option", { name: /GPT-5.5/ }).click();
+  await expect
+    .element(profileDialog.getByRole("button", { name: /Cross-review model/ }))
+    .toBeDisabled();
+  await profileDialog.getByRole("button", { name: "Save rule" }).click();
+  await expect.element(profileDialog).not.toBeInTheDocument();
+  expect(savedModels).toHaveBeenCalledWith(
+    expect.objectContaining({
+      models: expect.objectContaining({ primaryModel: { instanceId: "codex", model: "gpt-5.5" } }),
+    }),
+  );
   await page.getByRole("button", { name: "Scan now" }).click();
   await expect.element(page.getByText("Pairing screen stays blank")).toBeVisible();
   await expect.element(page.getByText("Pairing already confirmed")).not.toBeInTheDocument();

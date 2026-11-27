@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
@@ -236,6 +237,7 @@ export const make = Effect.gen(function* () {
       issueAutomationRuleScan: true,
       issueAutomationRetry: true,
       issueAutomationRepair: true,
+      issueAutomationDiagnosisDrivers: ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS,
       prReview: true,
       issueTrackerAccounts: true,
       sideChats: true,

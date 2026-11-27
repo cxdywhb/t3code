@@ -75,7 +75,12 @@ const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArra
 ]);
 const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   ({
-    driverKind: instanceId === ProviderInstanceId.make("fixture-claude") ? "claudeAgent" : "codex",
+    driverKind:
+      instanceId === ProviderInstanceId.make("fixture-claude")
+        ? "claudeAgent"
+        : instanceId === antigravityInstanceId
+          ? "antigravity"
+          : "codex",
     snapshot: {
       getSnapshot: Effect.succeed({
         supportedRuntimeModes: supportedRuntimeModesByInstance.get(instanceId),
@@ -167,7 +172,7 @@ const layerTaskFolderPolicy = layerWithPolicy(
 ).pipe(Layer.provideMerge(layerTaskFolderStore));
 
 it.layer(layerTest)("RuntimePolicyV2", (it) => {
-  it.effect("locks diagnosis threads to the read-only Claude driver on every resolution", () =>
+  it.effect("requires read-only diagnosis on supported drivers on every resolution", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;
       const thread = {
@@ -182,11 +187,18 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         ...modelSelection,
         instanceId: ProviderInstanceId.make("fixture-claude"),
       };
-      const resolved = yield* policy.resolve({ thread, modelSelection: selection });
-      assert.deepEqual(resolved.sandboxPolicy, { type: "readOnly" });
-      assert.equal(resolved.approvalPolicy, "never");
+      for (const supported of [selection, modelSelection]) {
+        const resolved = yield* policy.resolve({ thread, modelSelection: supported });
+        assert.deepEqual(resolved.sandboxPolicy, { type: "readOnly" });
+        assert.equal(resolved.approvalPolicy, "never");
+      }
       assert.equal(
-        (yield* Effect.result(policy.resolve({ thread, modelSelection })))._tag,
+        (yield* Effect.result(
+          policy.resolve({
+            thread,
+            modelSelection: { ...modelSelection, instanceId: antigravityInstanceId },
+          }),
+        ))._tag,
         "Failure",
       );
       assert.equal(

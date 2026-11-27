@@ -118,6 +118,7 @@ import {
   formatCompactDuration,
   groupIssueAutomationTasks,
   isStageRunning,
+  issueAutomationDriverKinds,
   IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
   resolvePersistedModelSelection,
@@ -329,14 +330,17 @@ export function IssueAutomationPage() {
     validModelKeys: [],
   });
 
-  const driverKind = resolvedTargets.actionMode === "diagnose_only" ? "claudeAgent" : undefined;
-  const catalog = useOfficialModelCatalog(environmentId, driverKind);
+  const driverKinds = issueAutomationDriverKinds(
+    resolvedTargets.actionMode,
+    capabilities?.issueAutomationDiagnosisDrivers,
+  );
+  const catalog = useOfficialModelCatalog(environmentId, driverKinds);
   const resolvedProjectId = resolvedTargets.projectId;
   const resolvedModelSelection = resolvePersistedModelSelection({
     prefs,
     scopeKey: scopePrefKey,
     profilePrimaryModel: matchedScopeProfile?.models.primaryModel,
-    ...(driverKind || catalog.pickableEntries.length > 0
+    ...(driverKinds || catalog.pickableEntries.length > 0
       ? { isSelectionAvailable: catalog.isSelectionAvailable }
       : {}),
     fallbackSelection: catalog.firstAvailableSelection,
@@ -687,7 +691,7 @@ export function IssueAutomationPage() {
     const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
       resolvedModelSelection ??
-      (driverKind ? null : matchedScopeProfile?.models.primaryModel) ??
+      (driverKinds ? null : matchedScopeProfile?.models.primaryModel) ??
       catalog.firstAvailableSelection ??
       null;
 
@@ -705,6 +709,9 @@ export function IssueAutomationPage() {
     const mergedLinkedIds = baseLinkedIds.includes(chosenProjectId)
       ? baseLinkedIds
       : [chosenProjectId, ...baseLinkedIds];
+    const profileModels = matchedScopeProfile?.models;
+    const availableOverride = (selection: ModelSelection | null | undefined) =>
+      driverKinds && !catalog.isSelectionAvailable(selection) ? null : (selection ?? null);
 
     setDispatching(true);
     const res = await analyzeIssuesCmd({
@@ -722,10 +729,10 @@ export function IssueAutomationPage() {
         },
         overrideModels: {
           primaryModel: chosenModel,
-          highSeverityModel: matchedScopeProfile?.models.highSeverityModel ?? null,
-          triageModel: matchedScopeProfile?.models.triageModel ?? null,
-          reviewModel: matchedScopeProfile?.models.reviewModel ?? null,
-          fallbackModel: matchedScopeProfile?.models.fallbackModel ?? null,
+          highSeverityModel: availableOverride(profileModels?.highSeverityModel),
+          triageModel: profileModels?.triageModel ?? null,
+          reviewModel: profileModels?.reviewModel ?? null,
+          fallbackModel: availableOverride(profileModels?.fallbackModel),
         },
         overridePolicy: {
           actionMode: resolvedActionMode,
@@ -914,6 +921,7 @@ export function IssueAutomationPage() {
         adhocModelSelection={resolvedModelSelection}
         onAdhocModelSelectionChange={handleSelectModel}
         adhocMode={resolvedActionMode}
+        driverKinds={driverKinds}
         onAdhocModeChange={handleSelectActionMode}
         dispatching={dispatching}
         onDispatchIssue={(key) => void handleDispatchIssues([key])}
@@ -1264,7 +1272,7 @@ export function IssueAutomationPage() {
 
                   {environmentId && catalog.pickableEntries.length > 0 ? (
                     <OfficialModelPicker
-                      driverKind={driverKind}
+                      driverKinds={driverKinds}
                       environmentId={environmentId}
                       value={resolvedModelSelection}
                       onChange={(next) => {
@@ -2000,7 +2008,7 @@ export function IssueAutomationPage() {
 
                       {environmentId ? (
                         <OfficialModelPicker
-                          driverKind={driverKind}
+                          driverKinds={driverKinds}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {

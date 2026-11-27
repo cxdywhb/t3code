@@ -43,7 +43,7 @@ export interface OfficialModelCatalog {
 
 export function useOfficialModelCatalog(
   environmentId: EnvironmentId | null,
-  driverKind?: string,
+  driverKinds?: ReadonlyArray<string>,
 ): OfficialModelCatalog {
   const providersByEnvironment = useEnvironmentProviders();
   const providers =
@@ -56,8 +56,8 @@ export function useOfficialModelCatalog(
     mergeEnvironmentSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, clientSettings),
   );
   const entries = providerInstanceEntriesFor(providers, settings, null);
-  const instanceEntries = driverKind
-    ? entries.filter((entry) => entry.driverKind === driverKind)
+  const instanceEntries = driverKinds
+    ? entries.filter((entry) => driverKinds.includes(entry.driverKind))
     : entries;
   const pickableEntries = instanceEntries.filter(
     (entry) => isProviderInstancePickerVisible(entry) && entry.models.length > 0,
@@ -99,7 +99,7 @@ export function OfficialModelPicker({
   triggerClassName,
   disabled = false,
   workspaceCwd = null,
-  driverKind,
+  driverKinds,
 }: {
   readonly environmentId: EnvironmentId;
   readonly value: ModelSelection | null;
@@ -112,7 +112,7 @@ export function OfficialModelPicker({
   readonly triggerClassName?: string;
   readonly disabled?: boolean;
   readonly workspaceCwd?: string | null;
-  readonly driverKind?: string | undefined;
+  readonly driverKinds?: ReadonlyArray<string> | undefined;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -126,8 +126,8 @@ export function OfficialModelPicker({
     mergeEnvironmentSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, clientSettings),
   );
   const entries = providerInstanceEntriesFor(providers, settings, null);
-  const instanceEntries = driverKind
-    ? entries.filter((entry) => entry.driverKind === driverKind)
+  const instanceEntries = driverKinds
+    ? entries.filter((entry) => driverKinds.includes(entry.driverKind))
     : entries;
   const pickableEntries = instanceEntries.filter(
     (entry) => isProviderInstancePickerVisible(entry) && entry.models.length > 0,
@@ -144,7 +144,7 @@ export function OfficialModelPicker({
       : null;
 
   const selected =
-    driverKind && !pickableEntries.some((entry) => entry.instanceId === value?.instanceId)
+    driverKinds && !pickableEntries.some((entry) => entry.instanceId === value?.instanceId)
       ? null
       : value;
   const effectiveSelection = selected ?? fallbackSelection;

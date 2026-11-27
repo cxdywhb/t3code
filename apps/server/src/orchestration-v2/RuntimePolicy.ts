@@ -1,4 +1,5 @@
 import {
+  ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS,
   isRuntimeModeAbove,
   managedRuntimeModeCeilingMessage,
   ModelSelection,
@@ -152,13 +153,14 @@ export const layerFromProjectStore: Layer.Layer<
         const diagnosis = isDiagnosisThread(input.thread.id);
         if (
           diagnosis &&
-          (instance?.driverKind !== "claudeAgent" ||
+          (instance === undefined ||
+            !ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS.includes(instance.driverKind) ||
             input.thread.runtimeMode !== "approval-required")
         ) {
           return yield* new RuntimePolicyResolveError({
             projectId: input.thread.projectId,
             providerInstanceId: input.modelSelection.instanceId,
-            cause: "只读诊断仅支持 Claude Code，只允许读取、查找和搜索文件。",
+            cause: "仅诊断需要支持只读执行的模型，并且必须保持审批模式。",
           });
         }
         const supportedRuntimeModes =

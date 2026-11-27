@@ -8,6 +8,17 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+const LEGACY_DIAGNOSIS_DRIVERS = ["claudeAgent"];
+
+export function issueAutomationDriverKinds(
+  actionMode: IssueAutomationActionMode,
+  diagnosisDrivers: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> | undefined {
+  return actionMode === "diagnose_only"
+    ? (diagnosisDrivers ?? LEGACY_DIAGNOSIS_DRIVERS)
+    : undefined;
+}
+
 export const WorkbenchTabSchema = Schema.Literals(["issues", "runs", "analytics", "rules"]);
 export type WorkbenchTab = typeof WorkbenchTabSchema.Type;
 

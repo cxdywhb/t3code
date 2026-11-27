@@ -167,6 +167,7 @@ export function IssueAutomationInspectorContent({
   adhocModelSelection,
   onAdhocModelSelectionChange,
   adhocMode,
+  driverKinds,
   onAdhocModeChange,
   dispatching,
   onDispatchIssue,
@@ -197,6 +198,7 @@ export function IssueAutomationInspectorContent({
   readonly adhocModelSelection: ModelSelection | null;
   readonly onAdhocModelSelectionChange: (next: ModelSelection) => void;
   readonly adhocMode: IssueAutomationActionMode;
+  readonly driverKinds?: ReadonlyArray<string> | undefined;
   readonly onAdhocModeChange: (next: IssueAutomationActionMode) => void;
   readonly dispatching: boolean;
   readonly onDispatchIssue: (issueKey: string) => void;
@@ -593,7 +595,7 @@ export function IssueAutomationInspectorContent({
                         />
 
                         <OfficialModelPicker
-                          driverKind={adhocMode === "diagnose_only" ? "claudeAgent" : undefined}
+                          driverKinds={driverKinds}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {
