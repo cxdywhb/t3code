@@ -888,6 +888,8 @@ export class ProviderAdapterV2 extends Context.Service<
   {
     readonly instanceId: ProviderInstanceId;
     readonly driver: ProviderDriverKind;
+    /** Enforces restricted tools, no approval escalation, and read-only workspace access in diagnosis threads. */
+    readonly supportsReadOnlyDiagnosis?: boolean;
     /**
      * Set when `openSession` rates the version the runtime reports at its handshake. The host then
      * skips its own check, which only knows the version from the last status probe.

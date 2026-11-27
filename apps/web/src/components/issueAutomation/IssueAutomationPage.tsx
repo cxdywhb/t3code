@@ -118,7 +118,6 @@ import {
   formatCompactDuration,
   groupIssueAutomationTasks,
   isStageRunning,
-  issueAutomationDriverKinds,
   IssueAutomationWorkbenchPrefsSchema,
   makeScopePrefKey,
   resolvePersistedModelSelection,
@@ -330,17 +329,14 @@ export function IssueAutomationPage() {
     validModelKeys: [],
   });
 
-  const driverKinds = issueAutomationDriverKinds(
-    resolvedTargets.actionMode,
-    capabilities?.issueAutomationDiagnosisDrivers,
-  );
-  const catalog = useOfficialModelCatalog(environmentId, driverKinds);
+  const diagnosisOnly = resolvedTargets.actionMode === "diagnose_only";
+  const catalog = useOfficialModelCatalog(environmentId, diagnosisOnly);
   const resolvedProjectId = resolvedTargets.projectId;
   const resolvedModelSelection = resolvePersistedModelSelection({
     prefs,
     scopeKey: scopePrefKey,
     profilePrimaryModel: matchedScopeProfile?.models.primaryModel,
-    ...(driverKinds || catalog.pickableEntries.length > 0
+    ...(diagnosisOnly || catalog.pickableEntries.length > 0
       ? { isSelectionAvailable: catalog.isSelectionAvailable }
       : {}),
     fallbackSelection: catalog.firstAvailableSelection,
@@ -691,7 +687,7 @@ export function IssueAutomationPage() {
     const chosenProjectId = (resolvedProjectId as ProjectId) || envProjects[0]?.id;
     const chosenModel =
       resolvedModelSelection ??
-      (driverKinds ? null : matchedScopeProfile?.models.primaryModel) ??
+      (diagnosisOnly ? null : matchedScopeProfile?.models.primaryModel) ??
       catalog.firstAvailableSelection ??
       null;
 
@@ -711,7 +707,7 @@ export function IssueAutomationPage() {
       : [chosenProjectId, ...baseLinkedIds];
     const profileModels = matchedScopeProfile?.models;
     const availableOverride = (selection: ModelSelection | null | undefined) =>
-      driverKinds && !catalog.isSelectionAvailable(selection) ? null : (selection ?? null);
+      diagnosisOnly && !catalog.isSelectionAvailable(selection) ? null : (selection ?? null);
 
     setDispatching(true);
     const res = await analyzeIssuesCmd({
@@ -921,7 +917,6 @@ export function IssueAutomationPage() {
         adhocModelSelection={resolvedModelSelection}
         onAdhocModelSelectionChange={handleSelectModel}
         adhocMode={resolvedActionMode}
-        driverKinds={driverKinds}
         onAdhocModeChange={handleSelectActionMode}
         dispatching={dispatching}
         onDispatchIssue={(key) => void handleDispatchIssues([key])}
@@ -1272,7 +1267,7 @@ export function IssueAutomationPage() {
 
                   {environmentId && catalog.pickableEntries.length > 0 ? (
                     <OfficialModelPicker
-                      driverKinds={driverKinds}
+                      diagnosisOnly={diagnosisOnly}
                       environmentId={environmentId}
                       value={resolvedModelSelection}
                       onChange={(next) => {
@@ -2008,7 +2003,7 @@ export function IssueAutomationPage() {
 
                       {environmentId ? (
                         <OfficialModelPicker
-                          driverKinds={driverKinds}
+                          diagnosisOnly={diagnosisOnly}
                           environmentId={environmentId}
                           value={resolvedModelSelection}
                           onChange={(next) => {

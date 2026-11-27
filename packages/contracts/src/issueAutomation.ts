@@ -13,8 +13,6 @@ import {
 } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
-export const ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS: ReadonlyArray<string> = ["claudeAgent", "codex"];
-
 /**
  * Pluggable enterprise issue platform kind. `zentao` ships active first; `jira` and future
  * connectors share the exact same contract and automation engine without changing core schemas.

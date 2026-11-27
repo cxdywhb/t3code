@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   type OrchestrationV2AppThread,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   type RuntimeMode,
   type ServerProvider,
@@ -69,24 +70,51 @@ function makeThread(input: {
 
 const grokInstanceId = ProviderInstanceId.make("grok");
 const antigravityInstanceId = ProviderInstanceId.make("antigravity");
+const diagnosisInstanceId = ProviderInstanceId.make("fixture-read-only");
 const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArray<RuntimeMode>>([
   [grokInstanceId, ["approval-required", "auto", "full-access"]],
   [antigravityInstanceId, ["approval-required", "auto-accept-edits", "full-access"]],
 ]);
-const providerInstanceFor = (instanceId: ProviderInstanceId) =>
-  ({
-    driverKind:
-      instanceId === ProviderInstanceId.make("fixture-claude")
-        ? "claudeAgent"
-        : instanceId === antigravityInstanceId
-          ? "antigravity"
-          : "codex",
+const providerInstanceFor = (instanceId: ProviderInstanceId) => {
+  const driver = ProviderDriverKind.make(
+    instanceId === diagnosisInstanceId ? "fixture-driver" : instanceId,
+  );
+  return {
+    driverKind: driver,
     snapshot: {
       getSnapshot: Effect.succeed({
+        driver,
+        instanceId,
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-24T00:00:00.000Z",
+        slashCommands: [],
+        skills: [],
         supportedRuntimeModes: supportedRuntimeModesByInstance.get(instanceId),
-      } as ServerProvider),
+        supportsReadOnlyDiagnosis: instanceId === diagnosisInstanceId,
+        models: [
+          {
+            slug: modelSelection.model,
+            name: "Read-only model",
+            isCustom: false,
+            capabilities: null,
+          },
+          {
+            slug: "excluded-model",
+            name: "Excluded model",
+            aliases: ["excluded-alias"],
+            isCustom: false,
+            capabilities: null,
+            supportsReadOnlyDiagnosis: false,
+          },
+        ],
+      } satisfies ServerProvider),
     },
-  }) as ProviderInstance;
+  } as unknown as ProviderInstance;
+};
 
 const noWorkspace = { folders: [], extraRoots: [] };
 const trackedWorkspace = {
@@ -172,7 +200,7 @@ const layerTaskFolderPolicy = layerWithPolicy(
 ).pipe(Layer.provideMerge(layerTaskFolderStore));
 
 it.layer(layerTest)("RuntimePolicyV2", (it) => {
-  it.effect("requires read-only diagnosis on supported drivers on every resolution", () =>
+  it.effect("requires the selected model to support read-only diagnosis", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;
       const thread = {
@@ -185,22 +213,22 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
       };
       const selection = {
         ...modelSelection,
-        instanceId: ProviderInstanceId.make("fixture-claude"),
+        instanceId: diagnosisInstanceId,
       };
-      for (const supported of [selection, modelSelection]) {
-        const resolved = yield* policy.resolve({ thread, modelSelection: supported });
-        assert.deepEqual(resolved.sandboxPolicy, { type: "readOnly" });
-        assert.equal(resolved.approvalPolicy, "never");
+      const resolved = yield* policy.resolve({ thread, modelSelection: selection });
+      assert.deepEqual(resolved.sandboxPolicy, { type: "readOnly" });
+      assert.equal(resolved.approvalPolicy, "never");
+      for (const unsupported of [
+        modelSelection,
+        { ...selection, model: "excluded-model" },
+        { ...selection, model: "excluded-alias" },
+        { ...selection, model: "unknown-model" },
+      ]) {
+        assert.equal(
+          (yield* Effect.result(policy.resolve({ thread, modelSelection: unsupported })))._tag,
+          "Failure",
+        );
       }
-      assert.equal(
-        (yield* Effect.result(
-          policy.resolve({
-            thread,
-            modelSelection: { ...modelSelection, instanceId: antigravityInstanceId },
-          }),
-        ))._tag,
-        "Failure",
-      );
       assert.equal(
         (yield* Effect.result(
           policy.resolve({

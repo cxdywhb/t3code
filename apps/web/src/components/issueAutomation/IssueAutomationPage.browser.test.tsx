@@ -45,11 +45,17 @@ vi.mock("../../../../../packages/client-runtime/src/connection/driver.ts", async
 
 it("scans without dispatching and opens diagnosis, repair and ZenTao sync from the task report", async () => {
   using _environment = installFakeEnvironment([], {
-    capabilities: {
-      issueAutomationRepair: true,
-      issueAutomationDiagnosisDrivers: ["claudeAgent", "codex"],
-    },
-    providers: [CODEX_PROVIDER, CLAUDE_PROVIDER],
+    capabilities: { issueAutomationRepair: true },
+    providers: [
+      { ...CLAUDE_PROVIDER, supportsReadOnlyDiagnosis: true },
+      {
+        ...CODEX_PROVIDER,
+        supportsReadOnlyDiagnosis: true,
+        models: CODEX_PROVIDER.models.map((model) =>
+          model.slug === "gpt-5.4" ? { ...model, supportsReadOnlyDiagnosis: false } : model,
+        ),
+      },
+    ],
   });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
@@ -278,7 +284,9 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   const primary = profileDialog.getByRole("button", { name: /Primary model/ });
   await expect.element(primary).toHaveTextContent("Opus 4.6");
   await primary.click();
-  await page.getByPlaceholder("Search models...").fill("GPT-5.5");
+  await page.getByPlaceholder("Search models...").fill("GPT-5");
+  await expect.element(page.getByRole("option", { name: /GPT-5.5/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /GPT-5.4/ })).not.toBeInTheDocument();
   await page.getByRole("option", { name: /GPT-5.5/ }).click();
   await expect
     .element(profileDialog.getByRole("button", { name: /Cross-review model/ }))

@@ -1,5 +1,4 @@
 import {
-  ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS,
   isRuntimeModeAbove,
   managedRuntimeModeCeilingMessage,
   ModelSelection,
@@ -150,11 +149,18 @@ export const layerFromProjectStore: Layer.Layer<
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         yield* refuseAboveCeiling(managedPolicy, input.thread);
         const instance = yield* providerInstances.getInstance(input.modelSelection.instanceId);
+        const snapshot = instance === undefined ? undefined : yield* instance.snapshot.getSnapshot;
         const diagnosis = isDiagnosisThread(input.thread.id);
+        const selectedModel = input.modelSelection.model;
+        const diagnosisModel = diagnosis
+          ? (snapshot?.models.find((model) => model.slug === selectedModel) ??
+            snapshot?.models.find((model) => model.aliases?.includes(selectedModel)))
+          : undefined;
         if (
           diagnosis &&
-          (instance === undefined ||
-            !ISSUE_AUTOMATION_DIAGNOSIS_DRIVERS.includes(instance.driverKind) ||
+          (snapshot?.supportsReadOnlyDiagnosis !== true ||
+            diagnosisModel === undefined ||
+            diagnosisModel.supportsReadOnlyDiagnosis === false ||
             input.thread.runtimeMode !== "approval-required")
         ) {
           return yield* new RuntimePolicyResolveError({
@@ -163,10 +169,7 @@ export const layerFromProjectStore: Layer.Layer<
             cause: "仅诊断需要支持只读执行的模型，并且必须保持审批模式。",
           });
         }
-        const supportedRuntimeModes =
-          instance === undefined
-            ? undefined
-            : (yield* instance.snapshot.getSnapshot).supportedRuntimeModes;
+        const supportedRuntimeModes = snapshot?.supportedRuntimeModes;
         const cwd =
           input.thread.worktreePath ??
           (yield* projects.get(input.thread.projectId).pipe(

@@ -88,6 +88,8 @@ export const ServerProviderModel = Schema.Struct({
   // False when the provider can run this model in sessions but not for
   // application text generation. Absent means supported.
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  /** A model can opt out of its adapter's read-only diagnosis capability. */
+  supportsReadOnlyDiagnosis: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -242,6 +244,7 @@ export const ServerProvider = Schema.Struct({
   supportedRuntimeModes: Schema.optional(ForwardCompatibleArray(RuntimeMode)),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  supportsReadOnlyDiagnosis: Schema.optional(Schema.Boolean),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
