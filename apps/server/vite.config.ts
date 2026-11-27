@@ -41,6 +41,8 @@ if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
 const packMode = process.env.T3CODE_PACK_EXE;
 const packBootstrap = packMode === "1" || packMode === "bootstrap";
 const packExecutable = packBootstrap || packMode === "bundle";
+const bundleZodForExecutable = (id: string) =>
+  packExecutable && (id === "zod" || id.startsWith("zod/"));
 const cliAssetDir = process.env.T3CODE_CLI_ASSET_DIR ?? "";
 if (packExecutable && !cliAssetDir) throw new Error("Build the executable with build:exe.");
 // TEMPORARY one-time Node fix. Remove when fixed: https://github.com/nodejs/node/issues/67048
@@ -141,9 +143,10 @@ export default mergeConfig(
       alias: { "jsonc-parser": "jsonc-parser/lib/esm/main.js" },
       deps: {
         // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
-        alwaysBundle: shouldBundleCliDependency,
+        alwaysBundle: (id: string) => bundleZodForExecutable(id) || shouldBundleCliDependency(id),
         neverBundle: (id: string) =>
-          (packBootstrap && id === "./binMain.ts") || isExternalCliDependency(id),
+          (packBootstrap && id === "./binMain.ts") ||
+          (isExternalCliDependency(id) && !bundleZodForExecutable(id)),
         onlyBundle: false,
       },
       banner: {
