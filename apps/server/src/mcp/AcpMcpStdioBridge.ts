@@ -9,6 +9,12 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { discardResponseBody, responsePayloads } from "@t3tools/shared/mcpResponsePayloads";
 
+import {
+  MCP_TOOL_EXPOSURE_HEADER,
+  type McpToolExposureMode,
+  parseMcpToolExposureMode,
+} from "@t3tools/provider-core/server/mcpSession";
+
 /** ACP mandates stdio MCP support; HTTP/SSE support varies. */
 
 const JsonRpcError = Schema.Struct({ code: Schema.Number, message: Schema.String });
@@ -50,6 +56,7 @@ export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
   readonly authorization: string;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly toolExposure?: McpToolExposureMode | undefined;
   readonly input: NodeJS.ReadableStream;
   readonly output: { write(chunk: string): unknown };
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -252,6 +259,9 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
                 accept: "application/json, text/event-stream",
                 ...(options.authorization ? { authorization: options.authorization } : {}),
                 ...options.headers,
+                ...(options.toolExposure === undefined
+                  ? {}
+                  : { [MCP_TOOL_EXPOSURE_HEADER]: options.toolExposure }),
                 ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
               },
@@ -389,10 +399,12 @@ export async function runAcpMcpCliFastPath(
       process.exitCode = 2;
       return;
     }
+    const toolExposure = parseMcpToolExposureMode(process.env.T3_ACP_MCP_TOOL_EXPOSURE);
     await Effect.runPromise(
       runAcpMcpStdioBridge({
         endpoint,
         authorization,
+        ...(toolExposure === undefined ? {} : { toolExposure }),
         input: process.stdin,
         output: process.stdout,
         headers: headers.value,

@@ -20,9 +20,9 @@ import {
   getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
-  normalizeModelSlug,
   withImplicitReasoningEffortDefault,
   withMediumReasoningDefault,
+  resolveSelectableModel,
 } from "@t3tools/shared/model";
 import { msg, T, useMessages } from "gt-react";
 import { memo } from "react";
@@ -176,7 +176,7 @@ function getSelectedTraits(
   );
   const modelIsUnavailable =
     keepsUnavailableModelOptions(provider, model) &&
-    !models.some((candidate) => candidate.slug === normalizeModelSlug(model, provider));
+    resolveSelectableModel(provider, model, models) === null;
   const selections = modelIsUnavailable
     ? modelOptions
     : withImplicitReasoningEffortDefault(caps, modelOptions);
