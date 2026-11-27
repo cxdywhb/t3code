@@ -1,0 +1,77 @@
+name: X Code 0.1.26 Windows x64 packaging
+on:
+  push:
+    branches: [release-build/x-code-0.1.26]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  bundle_and_wsl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin 2c52808b3bf0d9305aed2f19a047cfdb0db51251
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - name: Build desktop bundle
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          node scripts/update-release-package-versions.ts 0.1.26
+          vp run build:desktop:bundle
+          manifest=apps/server/dist/client/.vite/manifest.json
+          if [[ -f "$manifest" ]]; then
+            cp "$manifest" apps/server/dist/client/vite-manifest.release.json
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+      - name: Build and test matching Linux x64 WSL runtime
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/resource-monitor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version 0.1.26 --resource-monitor-dir "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release" --output-dir release-cli
+          node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version 0.1.26
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cli-linux-x64
+          path: release-cli/*
+          if-no-files-found: error
+          compression-level: 0
+  desktop_win_x64:
+    needs: bundle_and_wsl
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: "0.1.26"
+      ref: 2c52808b3bf0d9305aed2f19a047cfdb0db51251
+      release_channel: stable
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      relay_client_tracing: false
+      label: Windows x64
+      runner: ubuntu-24.04
+      verify_runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
