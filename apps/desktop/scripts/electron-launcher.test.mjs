@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
 
+import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 import { assert, describe, it } from "vite-plus/test";
 
 import {
@@ -157,6 +158,7 @@ async function runDevElectronStartup({
       NodeFS: { readFileSync: () => "", watch: () => ({ close: () => undefined }) },
       NodeOS: { platform: () => "linux" },
       NodePath,
+      windowsSystem32Path,
       desktopDir,
       resolveDevProtocolClient: () => null,
       resolveElectronLaunchCommand: (args) => ({ electronPath: "electron", args }),
@@ -259,11 +261,16 @@ it("dev supervisor stops Electron and exits once its parent process goes away", 
   assert.lengthOf(exitCodes, 1, "supervisor did not exit after its parent process went away");
 });
 
-it.each(["linux", "win32"])(
-  "releases the dev supervisor and stops its pack watcher after a startup timeout on %s",
-  async (platform) => {
+it.each([
+  ["linux", false],
+  ["win32", false],
+  ["win32", true],
+])(
+  "releases the dev supervisor and stops its pack watcher after a startup timeout on %s (tree kill fails: %s)",
+  async (platform, treeKillFails) => {
     const clock = makeFakeClock();
     const signals = [];
+    const treeKills = [];
     const exitCodes = [];
     let released = false;
     const pack = new NodeEvents.EventEmitter();
@@ -275,6 +282,11 @@ it.each(["linux", "win32"])(
     const startup = runDevElectronStartup({
       ...clock,
       spawn: () => pack,
+      spawnSync: (command, args) => {
+        treeKills.push({ command, args: [...args] });
+        if (platform === "win32" && !treeKillFails) pack.emit("exit", null, "SIGTERM");
+        return { status: treeKillFails ? 1 : 0 };
+      },
       NodeOS: { platform: () => platform },
       NodeModule: {
         createRequire: () => ({ resolve: () => "/repo/node_modules/vite-plus/package.json" }),
@@ -300,7 +312,13 @@ it.each(["linux", "win32"])(
     await clock.advance(5_000);
     await startup;
 
-    assert.deepEqual(signals, ["SIGTERM"]);
+    assert.deepEqual(
+      treeKills[0],
+      platform === "win32"
+        ? { command: windowsSystem32Path({}, "taskkill.exe"), args: ["/PID", "5151", "/T", "/F"] }
+        : { command: "pkill", args: ["-TERM", "-P", "5151"] },
+    );
+    assert.deepEqual(signals, platform === "win32" && !treeKillFails ? [] : ["SIGTERM"]);
     assert.deepEqual(exitCodes, [1]);
     assert.isTrue(released);
   },

@@ -5,6 +5,8 @@ import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
+
 import {
   desktopDir,
   resolveDevProtocolClient,
@@ -110,11 +112,20 @@ function readBundleDigest() {
 }
 
 function killChildTreeByPid(pid, signal) {
-  if (hostPlatform === "win32" || typeof pid !== "number") {
-    return;
+  if (typeof pid !== "number") return false;
+  if (hostPlatform === "win32") {
+    return (
+      NodeChildProcess.spawnSync(
+        windowsSystem32Path(process.env, "taskkill.exe"),
+        ["/PID", String(pid), "/T", "/F"],
+        { stdio: "ignore", windowsHide: true, timeout: forcedShutdownTimeoutMs },
+      ).status === 0
+    );
   }
 
   NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
+  // pkill with a parent PID signals its children only.
+  return false;
 }
 
 function startApp(bundleDigest) {
@@ -160,7 +171,7 @@ async function stopApp() {
 }
 
 async function stopChild(app) {
-  if (!app || app.exitCode != null || app.signalCode != null) return;
+  if (app?.pid === undefined || app.exitCode != null || app.signalCode != null) return;
 
   await new Promise((resolve) => {
     let settled = false;
@@ -175,16 +186,14 @@ async function stopChild(app) {
     };
 
     app.once("exit", finish);
-    killChildTreeByPid(app.pid, "TERM");
-    app.kill("SIGTERM");
+    if (!killChildTreeByPid(app.pid, "TERM")) app.kill("SIGTERM");
 
     setTimeout(() => {
       if (settled) {
         return;
       }
 
-      app.kill("SIGKILL");
-      killChildTreeByPid(app.pid, "KILL");
+      if (!killChildTreeByPid(app.pid, "KILL")) app.kill("SIGKILL");
       finish();
     }, forcedShutdownTimeoutMs).unref();
   });

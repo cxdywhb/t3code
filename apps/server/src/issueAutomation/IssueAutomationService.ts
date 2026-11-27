@@ -1565,6 +1565,7 @@ const make = Effect.gen(function* () {
     platform: IssueAutomationConnector["platform"],
     items: ReadonlyArray<PlatformIssueSummary>,
     existingTasks: ReadonlyArray<IssueAutomationTask>,
+    supportsPauseStages: boolean | undefined,
   ): IssueAutomationRemoteIssue[] => {
     const latestByKey = new Map<string, IssueAutomationTask>();
     for (const task of existingTasks) {
@@ -1596,7 +1597,11 @@ const make = Effect.gen(function* () {
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
         latestTaskId: matched?.id ?? null,
-        latestStage: matched?.stage ?? null,
+        latestStage: matched
+          ? supportsPauseStages === true
+            ? matched.stage
+            : legacyStage(matched.stage)
+          : null,
       };
     });
   };
@@ -2126,7 +2131,13 @@ const make = Effect.gen(function* () {
     });
     const tasks = yield* repo.listTasks(250).pipe(Effect.orElseSucceed(() => []));
     return {
-      issues: enrichRemoteIssuesWithTasks(connector.id, connector.platform, page.items, tasks),
+      issues: enrichRemoteIssuesWithTasks(
+        connector.id,
+        connector.platform,
+        page.items,
+        tasks,
+        input.supportsPauseStages,
+      ),
       total: page.total,
       page: page.page,
       pageSize: page.pageSize,
@@ -2161,7 +2172,13 @@ const make = Effect.gen(function* () {
     );
     const tasks = yield* repo.listTasks(250).pipe(Effect.orElseSucceed(() => []));
     return {
-      issues: enrichRemoteIssuesWithTasks(connector.id, connector.platform, items, tasks),
+      issues: enrichRemoteIssuesWithTasks(
+        connector.id,
+        connector.platform,
+        items,
+        tasks,
+        input.supportsPauseStages,
+      ),
       hasNextPage,
     };
   });
@@ -2181,6 +2198,7 @@ const make = Effect.gen(function* () {
       connector.platform,
       [detail],
       tasks,
+      input.supportsPauseStages,
     );
     return {
       ...enriched!,
@@ -2586,9 +2604,16 @@ const make = Effect.gen(function* () {
           ? target
           : ThreadManagementService.latestRestartContinuation(projection.runs, target);
       const runId = run.id;
+      const pendingWork = hasRunBackgroundWork(projection, runId);
+      if (projection.thread.deletedAt !== null) {
+        if (ThreadManagementService.isTerminalRunStatus(run.status) && !pendingWork) return null;
+        return yield* new IssueAutomationError({
+          operation: "cancelTask",
+          detail: "原会话正在清理，请重试取消",
+        });
+      }
       const commandId = CommandId.make(`issue-automation-cancel:${NodeCrypto.randomUUID()}`);
       const reason = "Cancelled from Issue Automation workbench";
-      const pendingWork = hasRunBackgroundWork(projection, runId);
       if (run.status === "queued") {
         yield* threadManagement.dispatch({ type: "queued-run.cancel", commandId, threadId, runId });
       } else if (!ThreadManagementService.isTerminalRunStatus(run.status)) {

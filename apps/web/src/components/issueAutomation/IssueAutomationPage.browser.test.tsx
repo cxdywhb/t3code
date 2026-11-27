@@ -317,6 +317,7 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await expect.element(page.getByText("Pairing screen stays blank")).toBeVisible();
   await expect.element(page.getByText("Pairing already confirmed")).not.toBeInTheDocument();
   const scanInput = {
+    supportsPauseStages: true,
     connectorId,
     scopeId: scope.id,
     browseType: "unresolved",

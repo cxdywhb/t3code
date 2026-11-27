@@ -221,6 +221,7 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
     const platform = IssueAutomationPlatformKind.make("zentao");
     const threadId = ThreadId.make("thread:issue-diagnosis:2849");
     const missingThreadId = ThreadId.make("thread:issue-diagnosis:removed");
+    const deletedThreadId = ThreadId.make("thread:issue-diagnosis:deleted");
     const oldRunId = RunId.make("run:issue-2849:1");
     const newRunId = RunId.make("run:issue-2849:2");
     const repairThreadId = ThreadId.make("thread:repair-2849");
@@ -524,15 +525,29 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
         },
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadProjection: (id) =>
-          id === missingThreadId
-            ? Effect.fail(
-                new OrchestratorProjectionError({
+        getThreadProjection: (id) => {
+          if (id === missingThreadId) {
+            return Effect.fail(
+              new OrchestratorProjectionError({
+                threadId: id,
+                cause: new ProjectionStoreThreadNotFoundError({ threadId: id }),
+              }),
+            );
+          }
+          if (id === deletedThreadId) {
+            return Effect.sync(() => ({
+              ...baseProjection,
+              thread: { ...baseProjection.thread, id, deletedAt: at },
+              runs: [
+                {
+                  ...makeRun(oldRunId, MessageId.make("retained-message"), "cancelled"),
                   threadId: id,
-                  cause: new ProjectionStoreThreadNotFoundError({ threadId: id }),
-                }),
-              )
-            : Effect.sync(id === repairThreadId ? repairProjection : projection),
+                },
+              ],
+            }));
+          }
+          return Effect.sync(id === repairThreadId ? repairProjection : projection);
+        },
         interruptThread: (input) =>
           Effect.gen(function* () {
             expect(input).toMatchObject({ threadId, runId: oldRunId });
@@ -545,6 +560,12 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
           }),
         waitForThread: (input) =>
           Effect.gen(function* () {
+            if (input.threadId === deletedThreadId) {
+              return yield* new ThreadManagementService.ThreadManagementThreadNotFoundError({
+                projectId: input.projectId,
+                threadId: input.threadId,
+              });
+            }
             if (input.threadId === repairThreadId) {
               expect(input.runId).toBe(repairRunId);
               return { threadId: repairThreadId, run: repairRun(), timedOut: false };
@@ -968,6 +989,24 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       yield* service.cancelTask({ taskId: manual.id });
       yield* Deferred.await(pauseRequested);
       expect((yield* taskFor("2851")).stage).toBe("pausing");
+      holdPoll = false;
+      for (const [capability, expectedStage] of [
+        [{}, "cancelling"],
+        [{ supportsPauseStages: true }, "pausing"],
+      ] as const) {
+        const remoteInput = { connectorId: connector.id, scopeId: scope.id, ...capability };
+        const list = yield* service.listRemoteIssues(remoteInput);
+        const scan = yield* service.scanProfileIssues({ profileId: pauseRule.id, ...capability });
+        const detail = yield* service.getRemoteIssueDetail({ ...remoteInput, issueKey: "2851" });
+        expect
+          .soft(list.issues.find((issue) => issue.key === "2851")?.latestStage)
+          .toBe(expectedStage);
+        expect
+          .soft(scan.issues.find((issue) => issue.key === "2851")?.latestStage)
+          .toBe(expectedStage);
+        expect.soft(detail.latestStage).toBe(expectedStage);
+      }
+      holdPoll = true;
       yield* service.saveProfile({ ...input, id: pauseRule.id, enabled: true });
       expect(runs).toHaveLength(1);
       yield* Deferred.succeed(releaseStalePoll, undefined);
@@ -1097,6 +1136,15 @@ it.effect("handles diagnosis retries, repair review and write-back, and Feishu n
       });
       yield* service.cancelTask({ taskId: missingThreadTaskId });
       expect((yield* repository.getTask(missingThreadTaskId))?.stage).toBe("cancelled");
+      const deletedThreadTaskId = IssueAutomationTaskId.make("task-with-deleted-thread");
+      yield* repository.upsertTask({
+        ...runningPollTask,
+        id: deletedThreadTaskId,
+        primaryThreadId: deletedThreadId,
+        primaryRunId: oldRunId,
+      });
+      yield* service.cancelTask({ taskId: deletedThreadTaskId });
+      expect((yield* repository.getTask(deletedThreadTaskId))?.stage).toBe("cancelled");
     }).pipe(Effect.provide(IssueAutomationService.layer.pipe(Layer.provideMerge(dependencies))));
   }),
 );
