@@ -28,6 +28,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
+  | "/settings/agents"
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
@@ -106,6 +107,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
+  "/settings/agents": msg("Agent global settings"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
@@ -155,6 +157,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
     heading: msg("Agents"),
     paths: [
+      "/settings/agents",
       "/settings/providers",
       "/settings/threads",
       "/settings/browser",
@@ -253,6 +256,14 @@ const SOURCE_CONTROL_HOST_TERMS = sourceControlClients.definitions
   .join(" ");
 
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "global-agents-md",
+    title: msg("Global AGENTS.md"),
+    to: "/settings/agents",
+    scope: "environment-defaults",
+    environmentOnly: true,
+    searchTerms: ["AGENTS.md global agent instructions rules markdown"],
+  },
   {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
@@ -1562,6 +1573,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
+  "/settings/agents": "environment",
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,

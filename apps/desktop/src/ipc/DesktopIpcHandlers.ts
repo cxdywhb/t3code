@@ -41,6 +41,8 @@ import {
   setUpdateChannel,
 } from "./methods/updates.ts";
 import {
+  openGlobalTerminal,
+  setGlobalTerminalPinned,
   getAppBranding,
   getDatabaseMigrationProgress,
   getLocalEnvironmentBootstraps,
@@ -97,6 +99,8 @@ import {
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* ipc.handle(openGlobalTerminal);
+  yield* ipc.handle(setGlobalTerminalPinned);
   yield* installNotificationBadge();
   yield* PreviewIpc.installPreviewEventForwarding();
 

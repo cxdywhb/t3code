@@ -29,6 +29,7 @@ import {
   AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
+  GLOBAL_TERMINAL_THREAD_ID,
   TerminalProcessChangedError,
   type TerminalWriteInput,
   type ContextMenuItem,
@@ -421,6 +422,7 @@ export type TerminalContextMenuAction =
   | "copy"
   | "paste"
   | "select-all"
+  | "clear-all"
   | "scroll-to-bottom";
 
 function terminalSelectionMenuItems(options?: {
@@ -450,6 +452,7 @@ function terminalContextMenuItems(options: {
     { id: "paste", label: m(msg("Paste")), ...(options.readOnly ? { disabled: true } : {}) },
     { id: "select-all", label: m(msg("Select all", { $context: "select all terminal text" })) },
     { id: "scroll-to-bottom", label: m(msg("Jump to latest")) },
+    { id: "clear-all", label: m(msg("Clear all")), disabled: options.readOnly === true },
   ];
 }
 
@@ -614,6 +617,11 @@ function TerminalSessionViewport({
   const runTerminalResize = useAtomCommand(terminalEnvironment.resize, {
     reportFailure: false,
   });
+  const runTerminalClear = useAtomCommand(terminalEnvironment.clear);
+  const clearCurrentTerminal = useEffectEvent(() => {
+    if (!hasTerminalWriteAccess()) return;
+    return runTerminalClear({ environmentId, input: { threadId, terminalId } });
+  });
   const hasHandledExitRef = useRef(false);
   const selectionActionRequestIdRef = useRef(0);
   const readKeybindings = useEffectEvent(() => keybindings);
@@ -701,7 +709,13 @@ function TerminalSessionViewport({
   );
   const openLinkInPreview = useEffectEvent(
     (url: string, forceBrowser: boolean, fallbackToBrowser: () => void) =>
-      openTerminalLinkInPreview({ url, threadRef, openPreview, fallbackToBrowser, forceBrowser }),
+      openTerminalLinkInPreview({
+        url,
+        threadRef,
+        openPreview,
+        fallbackToBrowser,
+        forceBrowser: forceBrowser || threadId === GLOBAL_TERMINAL_THREAD_ID,
+      }),
   );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sets the terminal input's readOnly from the operate grant and consumes a pending focus request
@@ -976,6 +990,10 @@ function TerminalSessionViewport({
             return;
           case "scroll-to-bottom":
             terminalRef.current?.scrollToBottom();
+            focusIfCurrent(requestId);
+            return;
+          case "clear-all":
+            await clearCurrentTerminal();
             focusIfCurrent(requestId);
             return;
         }

@@ -16,6 +16,8 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { type CommandHandler, type CommandScopeOptions, registerCommands } from "./dispatcher";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
+import { showGlobalTerminal } from "../components/terminal/globalTerminalStore";
+import { readPrimaryEnvironmentId } from "../state/environments";
 
 function consume(event: KeyboardEvent): void {
   event.preventDefault();
@@ -65,6 +67,18 @@ export function installCommandPaletteCommands(
 
   const disposeCommands = registerCommands(
     {
+      "globalTerminal.open": (event) => {
+        const environmentId = readRouteThreadRef()?.environmentId ?? readPrimaryEnvironmentId();
+        if (environmentId === null) return false;
+        consume(event);
+        if (!event.repeat)
+          void showGlobalTerminal(environmentId).catch(() =>
+            toastManager.add({
+              type: "error",
+              title: m(msg("Could not open the global terminal")),
+            }),
+          );
+      },
       "appearance.cycle": (event) => {
         consume(event);
         if (event.repeat) return;

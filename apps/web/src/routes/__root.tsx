@@ -37,6 +37,7 @@ import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoo
 import { ConnectDeviceApprovalCoordinator } from "../components/ConnectDeviceApprovalCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
+import { GlobalTerminalHost } from "../components/terminal/GlobalTerminal";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { Button } from "../components/ui/button";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
@@ -101,6 +102,7 @@ export const Route = createRootRoute({
       authGateState.status === "authenticated" &&
       getDesktopSnapShotBridge() &&
       shouldResumeSnapShotSetupOnStartup() &&
+      !location.pathname.startsWith("/global-terminal/") &&
       location.pathname !== "/settings/snap-shot"
     ) {
       throw redirect({ to: "/settings/snap-shot", replace: true });
@@ -188,6 +190,14 @@ function RootRouteBranch() {
     return <Outlet />;
   }
 
+  if (pathname.startsWith("/global-terminal/"))
+    return (
+      <>
+        <Outlet />
+        <ConfirmDialogHost />
+      </>
+    );
+
   // Settings can reopen /welcome mid-session, so it mounts everything the app does except the
   // first-run gate and the event router, whose first navigation would leave the page.
   const appHosts = (
@@ -246,6 +256,7 @@ function RootRouteBranch() {
       )}
       {/* Above both shells and the router, so drafts survive navigation, including to /welcome. */}
       <ThemeEditorHost />
+      <GlobalTerminalHost />
     </>
   );
 }

@@ -204,6 +204,8 @@ function layerPool(
         } satisfies ElectronDialog.ElectronDialog["Service"]),
         ElectronApp.layer,
         Layer.succeed(DesktopWindow.DesktopWindow, {
+          openGlobalTerminal: () => Effect.die("unexpected terminal window"),
+          setGlobalTerminalPinned: () => Effect.void,
           createMain: Effect.die("unexpected window create"),
           ensureMain: Effect.die("unexpected window ensure"),
           revealOrCreateMain: Effect.die("unexpected window reveal"),

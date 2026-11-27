@@ -113,9 +113,10 @@ export class ElectronWindow extends Context.Service<
     /** Auxiliary windows are never returned as the main-or-first fallback. */
     readonly create: (
       options: Electron.BrowserWindowConstructorOptions,
-      behavior?: { readonly auxiliary?: boolean },
+      behavior?: { readonly auxiliary?: boolean; readonly trustedApp?: boolean },
     ) => Effect.Effect<Electron.BrowserWindow, ElectronWindowCreateError>;
     readonly main: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
+    readonly trustedAppFrame: (senderId: number, frame: unknown) => Effect.Effect<boolean>;
     readonly currentMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly focusedMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly setMain: (window: Electron.BrowserWindow) => Effect.Effect<void>;
@@ -148,6 +149,7 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus?.close()));
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const auxiliaryWindows = new WeakSet<Electron.BrowserWindow>();
+  const trustedAppWindows = new Map<number, Electron.BrowserWindow>();
   const titleBarOverlayWindows = new WeakSet<Electron.BrowserWindow>();
 
   const listWindows = Effect.try({
@@ -245,6 +247,11 @@ export const make = Effect.gen(function* () {
         try: () => {
           const window = new Electron.BrowserWindow(options);
           if (behavior?.auxiliary === true) auxiliaryWindows.add(window);
+          if (behavior?.trustedApp === true) {
+            trustedAppWindows.set(window.webContents.id, window);
+            const contentsId = window.webContents.id;
+            window.once("closed", () => trustedAppWindows.delete(contentsId));
+          }
           if (options.titleBarOverlay !== undefined && options.titleBarOverlay !== false) {
             titleBarOverlayWindows.add(window);
           }
@@ -254,6 +261,14 @@ export const make = Effect.gen(function* () {
       });
     }),
     main: liveMain,
+    trustedAppFrame: Effect.fn("ElectronWindow.trustedAppFrame")((senderId, frame) =>
+      Effect.sync(() => {
+        const window = trustedAppWindows.get(senderId);
+        return (
+          window !== undefined && !window.isDestroyed() && window.webContents.mainFrame === frame
+        );
+      }),
+    ),
     currentMainOrFirst,
     focusedMainOrFirst,
     setMain: Effect.fn("ElectronWindow.setMain")(function (window) {

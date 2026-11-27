@@ -565,6 +565,8 @@ export const ProviderAdapterV2Error = Schema.Union([
 export type ProviderAdapterV2Error = typeof ProviderAdapterV2Error.Type;
 
 export interface ProviderAdapterV2OpenSessionInput {
+  /** Snapshot of this environment's user-authored AGENTS.md; stable for the session lifetime. */
+  readonly globalAgentInstructions?: string;
   readonly threadId: ThreadId;
   readonly providerSessionId: ProviderSessionId;
   readonly modelSelection: ModelSelection;

@@ -3518,6 +3518,7 @@ export const layerWsRpc = (
                 .pipe(Effect.provideService(TerminalManager.TerminalCwdRecovery, launch.recover)),
             ),
           ),
+        [WS_METHODS.terminalOpenGlobal]: (input) => terminalManager.openGlobal(input),
         [WS_METHODS.terminalAttach]: (input, metadata) =>
           Stream.unwrap(
             prepareTerminalLaunch(input).pipe(

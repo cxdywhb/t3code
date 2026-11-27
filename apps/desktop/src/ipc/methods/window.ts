@@ -47,6 +47,7 @@ import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as Electron from "electron";
+import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import { msg } from "gt-i18n";
 import * as MacPermissions from "../../permissions/MacPermissions.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
@@ -62,6 +63,29 @@ import {
 const ContextMenuPosition = Schema.Struct({
   x: Schema.Number,
   y: Schema.Number,
+});
+
+export const openGlobalTerminal = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPEN_GLOBAL_TERMINAL_CHANNEL,
+  payload: Schema.Struct({
+    environmentId: Schema.String.check(Schema.isNonEmpty()),
+    terminalId: Schema.optionalKey(Schema.String.check(Schema.isNonEmpty())),
+  }),
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.openGlobalTerminal")((input) =>
+    Effect.flatMap(DesktopWindow.DesktopWindow, (windows) => windows.openGlobalTerminal(input)),
+  ),
+});
+
+export const setGlobalTerminalPinned = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_GLOBAL_TERMINAL_PINNED_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.setGlobalTerminalPinned")((pinned) =>
+    Effect.flatMap(DesktopWindow.DesktopWindow, (windows) =>
+      windows.setGlobalTerminalPinned(pinned),
+    ),
+  ),
 });
 
 const ContextMenuInput = Schema.Struct({
@@ -356,10 +380,12 @@ export const showContextMenu = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CONTEXT_MENU_CHANNEL,
   payload: ContextMenuInput,
   result: Schema.NullOr(Schema.String),
-  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input) {
+  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input, event) {
     const electronMenu = yield* ElectronMenu.ElectronMenu;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const window = yield* electronWindow.focusedMainOrFirst;
+    const contents = event === undefined ? null : Electron.webContents.fromId(event.sender.id);
+    const owner = contents == null ? null : Electron.BrowserWindow.fromWebContents(contents);
+    const window = owner === null ? yield* electronWindow.focusedMainOrFirst : Option.some(owner);
     if (Option.isNone(window)) {
       return null;
     }

@@ -467,6 +467,7 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "navigation.back": msg("Navigation: Back"),
   "navigation.forward": msg("Navigation: Forward"),
   "terminal.toggle": msg("Terminal: Toggle"),
+  "globalTerminal.open": msg("Global terminal: Open"),
   "terminal.split": msg("Terminal: Split"),
   "terminal.splitVertical": msg("Terminal: Split Vertical"),
   "terminal.new": msg("Terminal: New"),

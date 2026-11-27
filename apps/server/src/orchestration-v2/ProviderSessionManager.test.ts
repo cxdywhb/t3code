@@ -481,6 +481,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
       ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
     >;
     readonly beforeOpen?: (input: {
+      readonly globalAgentInstructions?: string;
       readonly providerSessionId: ProviderSessionId;
       readonly initialProviderItemIdentityVersion?: 2;
     }) => Effect.Effect<void>;
@@ -662,6 +663,7 @@ function layerTest(input: {
     ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
   >;
   readonly beforeOpen?: (input: {
+    readonly globalAgentInstructions?: string;
     readonly providerSessionId: ProviderSessionId;
     readonly initialProviderItemIdentityVersion?: 2;
   }) => Effect.Effect<void>;
@@ -1255,6 +1257,51 @@ it.effect("ProviderSessionManagerV2 opens provider sessions inside the installat
       ),
     );
   }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 snapshots global instructions when opening an agent session",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const settings = yield* ServerSettings.ServerSettingsService.pipe(
+        Effect.provide(ServerSettings.layerTest()),
+      );
+      const received: Array<string | undefined> = [];
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const threadId = ThreadId.make("thread-global-agents");
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+          ],
+        });
+        for (const instructions of ["# Global rules\n中文", "# Updated rules", ""]) {
+          yield* settings.updateSettings({ globalAgentInstructions: instructions });
+          const providerSessionId = yield* idAllocator.allocate.providerSession({
+            providerInstanceId: modelSelection.instanceId,
+            threadId,
+          });
+          yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+          yield* manager.closeInstance(modelSelection.instanceId);
+        }
+        assert.deepEqual(received, ["# Global rules\n中文", "# Updated rules", ""]);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60_000,
+            serverSettingsLayer: Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            beforeOpen: (input) =>
+              Effect.sync(() => {
+                received.push(input.globalAgentInstructions);
+              }),
+          }),
+        ),
+      );
+    }),
 );
 
 it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>

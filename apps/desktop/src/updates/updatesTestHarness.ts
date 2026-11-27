@@ -122,6 +122,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   } satisfies ElectronUpdater.ElectronUpdater["Service"]);
 
   const layerWindow = Layer.succeed(ElectronWindow.ElectronWindow, {
+    trustedAppFrame: () => Effect.succeed(false),
     create: () => Effect.die("unexpected BrowserWindow creation"),
     main: Effect.succeedNone,
     currentMainOrFirst: Effect.succeedNone,

@@ -232,6 +232,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       }),
     ).pipe(Effect.provide(layerServerSettings())),
   );
+  it.effect("persists and clears global AGENTS.md without changing project settings", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const before = yield* service.getSettings;
+        const content = "# Shared rules\n\n  保留格式。 🦊\n";
+        for (const globalAgentInstructions of [content, ""]) {
+          const changes = yield* service.subscribeChanges;
+          yield* service.updateSettings({ globalAgentInstructions });
+          const received = Option.getOrThrow(yield* Stream.runHead(changes));
+          assert.equal(received.globalAgentInstructions, globalAgentInstructions);
+          const saved = yield* decodeServerSettingsJson(
+            yield* fs.readFileString(config.settingsPath),
+          );
+          assert.equal(saved.globalAgentInstructions, globalAgentInstructions);
+          assert.deepEqual(saved.projectSettingsOverrides, before.projectSettingsOverrides);
+        }
+      }),
+    ).pipe(Effect.provide(layerServerSettings())),
+  );
   it.effect("migrates saved token delivery to paragraph buffering without resetting settings", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;

@@ -135,6 +135,8 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: vi.fn(),
     setFullScreen: vi.fn(),
     setOpacity: vi.fn(),
+    setAlwaysOnTop: vi.fn(),
+    setVisibleOnAllWorkspaces: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     setWindowButtonPosition: vi.fn(),
@@ -165,6 +167,9 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
     setOpacity: window.setOpacity,
+    setAlwaysOnTop: window.setAlwaysOnTop,
+    setVisibleOnAllWorkspaces: window.setVisibleOnAllWorkspaces,
+    getURL: webContents.getURL,
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
@@ -300,6 +305,7 @@ function layerTest(input: {
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
 
   const layerElectronWindow = Layer.succeed(ElectronWindow.ElectronWindow, {
+    trustedAppFrame: () => Effect.succeed(false),
     create: (options) =>
       Effect.sync(() => {
         input.createdWindowOptions?.push(options);
@@ -446,6 +452,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           yield* Ref.update(createdWindows, (windows) => [...windows, outcome]);
           return outcome;
         }),
+      trustedAppFrame: () => Effect.succeed(false),
       main: Ref.get(mainWindow),
       currentMainOrFirst,
       focusedMainOrFirst: currentMainOrFirst,
@@ -508,6 +515,53 @@ const captureOne = DesktopSnapShotId.make("11111111-1111-4111-8111-111111111111"
 const captureTwo = DesktopSnapShotId.make("22222222-2222-4222-8222-222222222222");
 
 describe("DesktopWindow", () => {
+  it.effect("reuses the global terminal window and toggles system always-on-top", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make(Option.none<Electron.BrowserWindow>());
+      const options: Electron.BrowserWindowConstructorOptions[] = [];
+      const program = Effect.gen(function* () {
+        const service = yield* DesktopWindow.DesktopWindow;
+        yield* service.openGlobalTerminal({ environmentId: "local", terminalId: "build" });
+        const url = fake.loadURL.mock.calls[0]![0];
+        assert.equal(new URL(url).hash, "#/global-terminal/local?terminalId=build");
+        assert.isTrue(options[0]!.alwaysOnTop);
+        assert.deepEqual(fake.setVisibleOnAllWorkspaces.mock.calls, [
+          [true, { visibleOnFullScreen: true, skipTransformProcessType: true }],
+        ]);
+        assert.equal(options[0]!.webPreferences!.preload?.includes("preload"), true);
+        fake.getURL.mockReturnValue(url);
+        yield* service.openGlobalTerminal({ environmentId: "local", terminalId: "build" });
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.equal(fake.loadURL.mock.calls.length, 1);
+        yield* service.setGlobalTerminalPinned(false);
+        assert.deepEqual(fake.setAlwaysOnTop.mock.calls, [[false]]);
+        assert.deepEqual(fake.setVisibleOnAllWorkspaces.mock.calls.at(-1), [
+          false,
+          { visibleOnFullScreen: false, skipTransformProcessType: true },
+        ]);
+        const preventDefault = vi.fn();
+        fake.webContentsListeners.get("will-navigate")!({ preventDefault });
+        fake.webContentsListeners.get("will-redirect")!({ preventDefault });
+        assert.equal(preventDefault.mock.calls.length, 2);
+        fake.windowListeners.get("closed")!();
+        yield* service.openGlobalTerminal({ environmentId: "local" });
+        assert.equal(yield* Ref.get(createCount), 2);
+      });
+      yield* program.pipe(
+        Effect.provide(
+          layerTest({
+            window: fake.window,
+            createCount,
+            mainWindow,
+            createdWindowOptions: options,
+          }),
+        ),
+      );
+    }),
+  );
+
   it("restores bounds only when the window fits within a connected display", () => {
     const persistedBounds = { x: 2040, y: 80, width: 1320, height: 880 };
     const displays = [

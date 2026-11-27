@@ -193,6 +193,24 @@ describe("CodexAdapterV2 runtime policy", () => {
       }),
   );
 
+  it.effect("sends global instructions even without T3 MCP", () =>
+    Effect.gen(function* () {
+      const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-global-rules",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "custom-model" },
+        globalAgentInstructions: "# Shared rules\nRun the relevant tests.",
+        hasT3Mcp: false,
+      });
+      assert.include(
+        params.additionalContext?.t3_global_agents_01?.value,
+        "Run the relevant tests.",
+      );
+      assert.isUndefined(params.additionalContext?.t3_code_runtime);
+    }),
+  );
+
   it.effect("derives concrete Codex turn policies from every T3 runtime mode", () =>
     Effect.gen(function* () {
       const build = (

@@ -1112,6 +1112,8 @@ export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 export interface DesktopBridge {
+  openGlobalTerminal?: (input: { environmentId: string; terminalId?: string }) => Promise<void>;
+  setGlobalTerminalPinned?: (pinned: boolean) => Promise<void>;
   getAppBranding: () => DesktopAppBranding | null;
   getDatabaseMigrationProgress?: () => Promise<DatabaseMigrationProgress | null>;
   /** `null` until the desktop host has read the login shell's environment; ask again later. */

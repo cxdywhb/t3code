@@ -123,7 +123,17 @@ type DesktopWindowRuntimeServices =
 
 export type DesktopWindowError =
   | ElectronWindow.ElectronWindowCreateError
+  | TerminalWindowLoadError
   | PreviewManager.PreviewManagerError;
+
+class TerminalWindowLoadError extends Schema.TaggedError<TerminalWindowLoadError>()(
+  "TerminalWindowLoadError",
+  { cause: Schema.Defect() },
+) {
+  override get message() {
+    return "Could not open the global terminal window.";
+  }
+}
 
 export type MainWindowZoomDirection = "in" | "out" | "reset";
 export type MainWindowContentsCommand = "reload" | "forceReload" | "toggleDevTools";
@@ -131,6 +141,11 @@ export type MainWindowContentsCommand = "reload" | "forceReload" | "toggleDevToo
 export class DesktopWindow extends Context.Service<
   DesktopWindow,
   {
+    readonly openGlobalTerminal: (input: {
+      readonly environmentId: string;
+      readonly terminalId?: string;
+    }) => Effect.Effect<void, DesktopWindowError>;
+    readonly setGlobalTerminalPinned: (pinned: boolean) => Effect.Effect<void>;
     readonly createMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
     readonly ensureMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
     readonly revealOrCreateMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
@@ -416,6 +431,8 @@ export const make = Effect.gen(function* () {
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
   const mainWindowMutex = yield* Semaphore.make(1);
+  const terminalWindowMutex = yield* Semaphore.make(1);
+  let terminalWindow: Electron.BrowserWindow | null = null;
   const pendingMainReveals = new WeakMap<Electron.BrowserWindow, Effect.Effect<void>>();
   const revealMain = Effect.fn("desktop.window.revealMain")((window: Electron.BrowserWindow) =>
     Effect.suspend(() => pendingMainReveals.get(window) ?? electronWindow.reveal(window)),
@@ -1228,7 +1245,76 @@ export const make = Effect.gen(function* () {
     yield* dispatch;
   });
 
+  const openGlobalTerminal = Effect.fn("DesktopWindow.openGlobalTerminal")(
+    (input: { readonly environmentId: string; readonly terminalId?: string }) =>
+      terminalWindowMutex.withPermits(1)(
+        Effect.gen(function* () {
+          if (yield* Ref.get(desktopState.quitting)) return;
+          if (terminalWindow === null || terminalWindow.isDestroyed()) {
+            terminalWindow = yield* electronWindow.create(
+              {
+                width: 900,
+                height: 520,
+                minWidth: 420,
+                minHeight: 240,
+                show: false,
+                alwaysOnTop: true,
+                autoHideMenuBar: true,
+                title: m(msg("Global terminal")),
+                webPreferences: {
+                  preload: environment.preloadPath,
+                  contextIsolation: true,
+                  nodeIntegration: false,
+                  sandbox: true,
+                },
+              },
+              { auxiliary: true, trustedApp: true },
+            );
+            const created = terminalWindow;
+            if (environment.platform === "darwin") {
+              // Follow the pinned window across Spaces without temporarily hiding the app's Dock icon.
+              created.setVisibleOnAllWorkspaces(true, {
+                visibleOnFullScreen: true,
+                skipTransformProcessType: true,
+              });
+            }
+            // This preload can reach app IPC; never let the terminal window load external content.
+            created.webContents.on("will-navigate", (event) => event.preventDefault());
+            created.webContents.on("will-redirect", (event) => event.preventDefault());
+            created.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+            created.once("closed", () => {
+              if (terminalWindow === created) terminalWindow = null;
+            });
+          }
+          const window = terminalWindow;
+          const url = new URL(getDesktopUrl(environment.isDevelopment));
+          url.hash = `/global-terminal/${encodeURIComponent(input.environmentId)}${input.terminalId === undefined ? "" : `?terminalId=${encodeURIComponent(input.terminalId)}`}`;
+          if (window.webContents.getURL() !== url.href) {
+            yield* Effect.tryPromise({
+              try: () => window.loadURL(url.href),
+              catch: (cause) => new TerminalWindowLoadError({ cause }),
+            });
+          }
+          yield* electronWindow.reveal(window);
+        }),
+      ),
+  );
+
   return DesktopWindow.of({
+    openGlobalTerminal,
+    setGlobalTerminalPinned: Effect.fn("DesktopWindow.setGlobalTerminalPinned")((pinned: boolean) =>
+      Effect.sync(() => {
+        if (terminalWindow !== null && !terminalWindow.isDestroyed()) {
+          terminalWindow.setAlwaysOnTop(pinned);
+          if (environment.platform === "darwin") {
+            terminalWindow.setVisibleOnAllWorkspaces(pinned, {
+              visibleOnFullScreen: pinned,
+              skipTransformProcessType: true,
+            });
+          }
+        }
+      }),
+    ),
     createMain: createMain.pipe(Effect.flatMap(requireWindow)),
     ensureMain: ensureMain.pipe(Effect.flatMap(requireWindow)),
     revealOrCreateMain,
