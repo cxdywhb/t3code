@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createProviderWorkspaceSnapshotRefreshAtomFamily,
   getProviderSkillsForSlashMenu,
+  getProviderSlashCommandsForSlashMenu,
   hasCompleteProviderWorkspaceSnapshot,
   isProviderWorkspaceSnapshotScanning,
   resolveProviderSkillsForCwd,
@@ -96,6 +97,7 @@ describe("workspace provider snapshots", () => {
       workspaceSnapshots: [
         {
           ...provider.workspaceSnapshots[0]!,
+          slashCommands: [{ name: "review" }, { name: "deploy" }],
           skills: [native],
           sharedSkills: [shared, { ...shared, name: "review" }],
         },
@@ -104,6 +106,9 @@ describe("workspace provider snapshots", () => {
     const skills = resolveProviderSkillsForCwd(sharedProvider, "/workspace/project-a");
     expect(skills).toEqual([native, shared]);
     expect(getProviderSkillsForSlashMenu(skills, true)).toEqual([native, shared]);
+    expect(
+      getProviderSlashCommandsForSlashMenu(sharedProvider, "/workspace/project-a", true),
+    ).toEqual([{ name: "deploy" }]);
     expect(
       resolveProviderSkillsForCwd(
         { ...sharedProvider, driver: ProviderDriverKind.make("codex") },

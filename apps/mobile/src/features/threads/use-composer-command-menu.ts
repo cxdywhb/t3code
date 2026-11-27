@@ -47,7 +47,6 @@ import {
   getProviderSlashCommandsForSlashMenu,
   isProviderSkillUserInvocable,
   resolveProviderSkillsForCwd,
-  resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
 import {
   formatComposerModelMention,
@@ -412,8 +411,9 @@ export function useComposerCommandMenu({
             ? {
                 ...selectedProviderStatus,
                 slashCommands: getProviderSlashCommandsForSlashMenu(
-                  resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd),
-                  visibleSkills,
+                  selectedProviderStatus,
+                  projectCwd,
+                  true,
                 ),
               }
             : null,
