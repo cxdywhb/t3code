@@ -246,8 +246,15 @@ jobs:
             sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
           fi
 
+      - name: Download natively built Windows resource monitor
+        if: inputs.platform == 'win'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: native-windows-resource-monitor
+          path: native/resource-monitor/target/${{ inputs.rust_target }}/release
+
       - name: Setup Rust
-        if: steps.resource_monitor_cache.outputs.cache-hit != 'true' || (inputs.platform == 'linux' && steps.capture_helper_cache.outputs.cache-hit != 'true')
+        if: inputs.platform != 'win' && steps.resource_monitor_cache.outputs.cache-hit != 'true' || (inputs.platform == 'linux' && steps.capture_helper_cache.outputs.cache-hit != 'true')
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
@@ -291,7 +298,7 @@ jobs:
           fi
 
       - name: Install cargo-xwin
-        if: inputs.platform == 'win' && steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        if: false
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-xwin@0.23.1
@@ -299,7 +306,7 @@ jobs:
       # Built here rather than inside the desktop build so the CLI archive,
       # which bundles the same binary, can be built and uploaded first.
       - name: Build resource monitor
-        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        if: inputs.platform != 'win' && steps.resource_monitor_cache.outputs.cache-hit != 'true'
         shell: bash
         run: cargo ${{ inputs.platform == 'win' && 'xwin build' || 'build' }} --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "${{ inputs.rust_target }}"
 
@@ -811,7 +818,7 @@ jobs:
             [[ "$RELEASE_CHANNEL" != "nightly" ]] || channel=nightly
             case "$PLATFORM" in
               win) updater_files=("release/$channel.yml" "$expected.blockmap") ;;
-              mac) updater_files=("release/$channel-mac.yml" "release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.dmg.blockmap" "release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.zip.blockmap") ;;
+              mac) updater_files=("release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.dmg.blockmap" "release/X-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.zip.blockmap") ;;
               *) updater_files=() ;;
             esac
             for file in "${updater_files[@]}"; do
