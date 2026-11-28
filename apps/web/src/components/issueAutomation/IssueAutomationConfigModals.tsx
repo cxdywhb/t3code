@@ -724,19 +724,20 @@ export function ConnectorModal({
             onSubmit={(e) => void handleSubmit(e)}
           >
             {authorization ? (
-              <div className="grid gap-4">
+              <div className="rounded-xl border border-border/70 bg-card/40 p-4 space-y-3.5">
                 <Button
                   type="button"
                   variant="outline"
+                  className="w-full"
                   onClick={() =>
                     void ensureLocalApi().shell.openExternal(authorization.authorizationUrl)
                   }
                 >
-                  <ExternalLinkIcon aria-hidden />
+                  <ExternalLinkIcon aria-hidden className="size-3.5" />
                   <T>Open sign-in page</T>
                 </Button>
                 {!authorization.automatic ? (
-                  <label className="grid gap-1.5 text-sm">
+                  <label className="grid gap-1.5 text-xs font-medium text-foreground">
                     <T>Address of the page your browser opened</T>
                     <Input
                       value={callbackUrl}
@@ -752,7 +753,10 @@ export function ConnectorModal({
                 ) : null}
               </div>
             ) : (
-              <fieldset disabled={busy} className="grid min-w-0 gap-4">
+              <fieldset
+                disabled={busy}
+                className="rounded-xl border border-border/70 bg-card/40 p-4 space-y-3.5 min-w-0"
+              >
                 <div className="space-y-1.5">
                   <Label>
                     <T>Platform adapter</T>
@@ -884,20 +888,23 @@ function RuleSection({
   children: ReactNode;
 }) {
   return (
-    <details className="min-w-0 border-t border-border/60" open>
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+    <details
+      className="group/rule-section min-w-0 rounded-xl border border-border/70 bg-card/40 transition-colors mb-3.5 overflow-hidden"
+      open
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden transition-colors">
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground in-[details[open]>summary]:rotate-90"
+          className="size-3.5 shrink-0 text-muted-foreground in-[details[open]>summary]:rotate-90 transition-transform duration-150"
         />
-        <span className="max-w-[65%] shrink-0">{title}</span>
+        <span className="font-semibold text-foreground tracking-normal text-sm">{title}</span>
         {summary && (
-          <span className="ms-auto min-w-0 truncate text-right text-xs font-normal text-muted-foreground">
+          <span className="ms-auto min-w-0 truncate text-right text-xs font-normal text-muted-foreground/80 font-mono">
             {summary}
           </span>
         )}
       </summary>
-      <div className="min-w-0 space-y-3 pb-4 sm:ps-5">{children}</div>
+      <div className="min-w-0 space-y-3.5 px-4 pb-4 pt-1 border-t border-border/40">{children}</div>
     </details>
   );
 }
@@ -905,7 +912,7 @@ function RuleSection({
 function RuleField({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <span className="text-sm font-medium">{title}</span>
+      <span className="text-xs font-medium text-foreground">{title}</span>
       {children}
     </div>
   );
@@ -1294,8 +1301,8 @@ export function ProfileModal({
             className="min-w-0"
             onSubmit={(e) => void handleSubmit(e)}
           >
-            <section className="space-y-3 pb-4">
-              <h3 className="text-sm font-semibold">
+            <section className="min-w-0 rounded-xl border border-border/70 bg-card/40 p-4 space-y-3.5 mb-3.5">
+              <h3 className="text-sm font-semibold text-foreground">
                 <T>Monitoring target</T>
               </h3>
               <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">

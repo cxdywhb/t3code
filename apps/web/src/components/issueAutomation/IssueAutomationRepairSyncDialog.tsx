@@ -6,9 +6,11 @@ import type {
 } from "@t3tools/contracts";
 import { formatIssueAutomationWriteBackComment } from "@t3tools/shared/issueAutomationWriteBack";
 import { T, useGT } from "gt-react";
+import { CheckCircle2Icon, MessageSquareIcon, SendIcon } from "lucide-react";
 import { useState } from "react";
 
 import { PullRequestMarkdown } from "../pullRequest/PullRequestMarkdown";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -74,7 +76,12 @@ export function IssueAutomationRepairSyncDialog({
   };
 
   if (task.commentSyncedAt !== null && task.stateSyncedAt !== null) {
-    return <span className="text-xs text-muted-foreground">{gt("Synced to ZenTao")}</span>;
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <CheckCircle2Icon className="size-3.5 text-success" />
+        {gt("Synced to ZenTao")}
+      </span>
+    );
   }
 
   return (
@@ -91,9 +98,10 @@ export function IssueAutomationRepairSyncDialog({
       }}
     >
       <DialogTrigger render={<Button size="xs" />}>
+        <SendIcon className="size-3" />
         <T>Sync repair to ZenTao</T>
       </DialogTrigger>
-      <DialogPopup>
+      <DialogPopup className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
             <T>Sync repair to ZenTao</T>
@@ -105,63 +113,84 @@ export function IssueAutomationRepairSyncDialog({
         </DialogHeader>
         <DialogPanel>
           <div className="space-y-3">
-            <label className="flex items-center gap-2">
-              <Checkbox
-                checked={writeComment}
-                onCheckedChange={setComment}
-                disabled={writingBack || !supportsComment || task.commentSyncedAt !== null}
-              />
-              <T>Write repair comment</T>
-              {task.commentSyncedAt ? (
-                <span className="text-xs text-muted-foreground">
-                  <T>Synced</T>
-                </span>
+            <div className="rounded-lg border border-border/70 bg-card/40 p-3 transition-colors hover:border-border">
+              <div className="flex items-center justify-between gap-2.5">
+                <label className="flex cursor-pointer items-center gap-2.5">
+                  <Checkbox
+                    checked={writeComment}
+                    onCheckedChange={setComment}
+                    disabled={writingBack || !supportsComment || task.commentSyncedAt !== null}
+                  />
+                  <span className="text-sm font-medium text-foreground">
+                    <T>Write repair comment</T>
+                  </span>
+                </label>
+                {task.commentSyncedAt ? (
+                  <Badge variant="outline" size="sm">
+                    <T>Synced</T>
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border/70 bg-card/40 p-3 transition-colors hover:border-border space-y-3">
+              <div className="flex items-center justify-between gap-2.5">
+                <label className="flex cursor-pointer items-center gap-2.5">
+                  <Checkbox
+                    checked={resolve}
+                    onCheckedChange={setResolve}
+                    disabled={writingBack || (!canResolve && !resolve)}
+                  />
+                  <span className="text-sm font-medium text-foreground">
+                    <T>Mark as resolved</T>
+                  </span>
+                </label>
+                {task.stateSyncedAt ? (
+                  <Badge variant="outline" size="sm">
+                    <T>Synced</T>
+                  </Badge>
+                ) : null}
+              </div>
+              {resolve && canResolve ? (
+                <div className="pt-1 ps-6 space-y-2">
+                  <Select value={buildId} onValueChange={setBuildId} disabled={writingBack}>
+                    <SelectTrigger size="sm" aria-label={gt("Resolved build")}>
+                      <SelectValue placeholder={gt("Select the resolved build")}>
+                        {build?.name}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {detail.availableBuilds.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  {build ? (
+                    <p className="text-xs text-muted-foreground">
+                      {gt("Bug will be marked as resolved in {build}.", { build: build.name })}
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
-            </label>
-            <label className="flex items-center gap-2">
-              <Checkbox
-                checked={resolve}
-                onCheckedChange={setResolve}
-                disabled={writingBack || (!canResolve && !resolve)}
-              />
-              <T>Mark as resolved</T>
-              {task.stateSyncedAt ? (
-                <span className="text-xs text-muted-foreground">
-                  <T>Synced</T>
-                </span>
-              ) : null}
-            </label>
-            {resolve && canResolve ? (
-              <Select value={buildId} onValueChange={setBuildId} disabled={writingBack}>
-                <SelectTrigger aria-label={gt("Resolved build")}>
-                  <SelectValue placeholder={gt("Select the resolved build")}>
-                    {build?.name}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  {detail.availableBuilds.map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.name}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            ) : null}
-            {build ? (
-              <p className="text-sm">
-                {gt("Bug will be marked as resolved in {build}.", { build: build.name })}
-              </p>
-            ) : null}
+            </div>
+
             {writeComment ? (
-              <div className="space-y-2 border-t border-border pt-3">
-                <p className="text-sm font-medium">
-                  <T>Comment preview</T>
-                </p>
-                <PullRequestMarkdown
-                  text={formatIssueAutomationWriteBackComment(report)}
-                  cwd={cwd}
-                  environmentId={environmentId}
-                />
+              <div className="rounded-lg border border-border/70 bg-muted/20 p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <MessageSquareIcon className="size-3.5 text-muted-foreground" />
+                  <span>
+                    <T>Comment preview</T>
+                  </span>
+                </div>
+                <div className="max-h-56 overflow-y-auto rounded-md border border-border/40 bg-background/80 p-2.5 text-xs">
+                  <PullRequestMarkdown
+                    text={formatIssueAutomationWriteBackComment(report)}
+                    cwd={cwd}
+                    environmentId={environmentId}
+                  />
+                </div>
               </div>
             ) : null}
           </div>
