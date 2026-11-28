@@ -1,0 +1,61 @@
+name: X Code 0.1.28 Android test APK
+
+on:
+  push:
+    branches: [release-build/x-code-0.1.28, release-build/x-code-0.1.28-android]
+    paths: [.github/workflows/x-code-android-apk.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  android_apk:
+    name: Build Android test APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      APP_VARIANT: preview
+      T3CODE_MOBILE_VERSION: "0.1.28"
+      T3CODE_MOBILE_UPDATES_ENABLED: "0"
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: 4f14ce4876c58a481dcdf0f9f19d5cbcdb1f5c66
+      - uses: ./.github/actions/drop-checkout-credentials
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=@t3tools/mobile... --filter=@t3tools/scripts...
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Generate the Android project
+        working-directory: apps/mobile
+        run: vp exec expo prebuild --clean --platform android --no-install
+
+      - name: Build and verify the signed APK
+        working-directory: apps/mobile/android
+        shell: bash
+        run: |
+          # Expo's release template uses the debug signing config. Replace its shared key for this test build.
+          rm app/debug.keystore
+          keytool -genkeypair -keystore app/debug.keystore -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=X Code Android Test"
+          ./gradlew --no-daemon :app:assembleRelease -PreactNativeArchitectures=arm64-v8a \
+            -x lintVitalAnalyzeRelease -x lintVitalRelease
+
+          apk=app/build/outputs/apk/release/app-release.apk
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          "$apksigner" verify "$apk"
+          unzip -Z1 "$apk" | grep -Fx assets/index.android.bundle
+          unzip -Z1 "$apk" | grep -Fx lib/arm64-v8a/libreactnative.so
+          cp "$apk" "$RUNNER_TEMP/X-Code-0.1.28-android-arm64-test.apk"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: android-arm64-test-apk
+          path: ${{ runner.temp }}/X-Code-0.1.28-android-arm64-test.apk
+          if-no-files-found: error
+          compression-level: 0
