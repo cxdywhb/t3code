@@ -1,4 +1,5 @@
 import { buildGlobalAgentInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import { imageMimeTypeFromBytes } from "@t3tools/shared/image";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeUtil from "node:util";
 import { AgentScope } from "@t3tools/shared/AgentScope";
@@ -3432,7 +3433,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             images.push({
               type: "image",
               data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
+              mimeType: imageMimeTypeFromBytes(bytes) ?? attachment.mimeType,
             });
           }
         }
