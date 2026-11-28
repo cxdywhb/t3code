@@ -3651,7 +3651,7 @@ export default function ChatView(props: ChatViewProps) {
             {isElectron && rightPanelControlsAtRoot ? (
               <span
                 aria-hidden
-                className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+                className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-36 [-webkit-app-region:no-drag]"
               />
             ) : null}
             {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
@@ -3852,33 +3852,40 @@ export default function ChatView(props: ChatViewProps) {
               data-chat-composer-overlay="true"
               className={
                 isDraftHeroState
-                  ? "pointer-events-none absolute inset-0 z-20 flex flex-col before:basis-[max(0px,calc(50%-5rem))] *:shrink-0 sm:[@media(min-height:34.01rem)]:before:basis-[max(0px,calc(50%+min(7dvh,3.5rem)-5rem))] [@media(max-height:34rem)]:before:basis-[max(0px,calc(100%-12rem))]"
+                  ? "pointer-events-none absolute inset-0 z-20 flex flex-col max-sm:before:basis-[max(0px,calc(50%-5rem))] max-sm:[@media(max-height:34rem)]:before:basis-[max(0px,calc(100%-12rem))]"
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
             >
-              <div ref={draftHeroTransitionGroupRef} className="chat-composer-lane w-full">
+              <div
+                ref={draftHeroTransitionGroupRef}
+                className={cn(
+                  "chat-composer-lane w-full",
+                  isDraftHeroState &&
+                    "group/composer-stack relative shrink-0 sm:flex sm:min-h-0 sm:flex-1 sm:flex-col sm:after:flex-1",
+                )}
+              >
+                {isDraftHeroState ? (
+                  <div className="mx-auto w-full max-w-(--chat-content-max-width) max-sm:absolute max-sm:inset-x-0 max-sm:bottom-full sm:flex sm:flex-[2_1_0%] sm:items-center sm:justify-center">
+                    <div
+                      className="pointer-events-auto min-w-0 max-sm:pb-4 max-sm:group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
+                      style={
+                        forceExpandedMobileComposer
+                          ? { viewTransitionName: MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME }
+                          : undefined
+                      }
+                    >
+                      <DraftHeroHeadline
+                        draftId={draftId}
+                        activeProjectRef={activeProjectRef}
+                        activeProjectTitle={activeProject?.title ?? null}
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 <div
                   data-chat-composer-stack="true"
-                  className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
+                  className="pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width) shrink-0"
                 >
-                  {isDraftHeroState ? (
-                    <div className="absolute inset-x-0 bottom-full">
-                      <div
-                        className="pb-4 group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
-                        style={
-                          forceExpandedMobileComposer
-                            ? { viewTransitionName: MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME }
-                            : undefined
-                        }
-                      >
-                        <DraftHeroHeadline
-                          draftId={draftId}
-                          activeProjectRef={activeProjectRef}
-                          activeProjectTitle={activeProject?.title ?? null}
-                        />
-                      </div>
-                    </div>
-                  ) : null}
                   <div
                     ref={draftHeroComposerAnchorRef}
                     className="relative z-10"
@@ -4160,9 +4167,7 @@ export default function ChatView(props: ChatViewProps) {
                         </div>
                       </ComposerSurface.Shell>
                       {isDraftHeroState && composerBannerItems.length > 0 ? (
-                        // Out of flow, like the headline, so a notice never moves the centered composer.
-                        // Short windows keep the notice in flow so it can use the space above.
-                        <div className="absolute inset-x-0 top-full flex flex-col gap-1 pt-4 [@media(max-height:34rem)]:static">
+                        <div className="flex flex-col gap-1 pt-4 max-sm:[@media(min-height:34.01rem)]:absolute max-sm:inset-x-0 max-sm:top-full">
                           <ComposerBannerStack items={composerBannerItems} detached />
                         </div>
                       ) : null}

@@ -395,6 +395,7 @@ export function PrReviewWorkstationPage() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex h-full min-h-0 flex-col">
         <WorkspacePageHeader
+          showGlobalTerminal
           electron={isElectron}
           reserveNativeControls={!desktopInspectorVisible}
           className="relative bg-background"

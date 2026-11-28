@@ -935,7 +935,11 @@ export function RepositoriesPage() {
 
   return (
     <SidebarInset className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <WorkspacePageHeader electron={isElectron} className="relative bg-background">
+      <WorkspacePageHeader
+        electron={isElectron}
+        showGlobalTerminal
+        className="relative bg-background"
+      >
         <WorkspacePageTitle ariaLabel={gt("Repositories")}>
           <T>Repositories</T>
         </WorkspacePageTitle>

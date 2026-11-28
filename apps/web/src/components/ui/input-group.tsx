@@ -23,6 +23,8 @@ const inputGroupVariants = cva(
           "dropdown-glass rounded-2xl has-[input:focus-visible,textarea:focus-visible]:ring-0 has-[input:focus-visible,textarea:focus-visible]:border-[color-mix(in_srgb,var(--contrast-foreground)_18%,transparent)]",
         ghost:
           "border-transparent bg-transparent shadow-none hover:bg-muted/40 has-[input:focus-visible,textarea:focus-visible]:bg-background",
+        search:
+          "rounded-none border-x-0 border-t-0 border-transparent bg-transparent has-[input:focus-visible,textarea:focus-visible]:border-primary has-[input:focus-visible,textarea:focus-visible]:ring-0",
       },
     },
   },

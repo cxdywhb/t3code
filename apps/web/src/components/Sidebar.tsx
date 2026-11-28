@@ -161,6 +161,9 @@ import {
   useQuietThreadShells,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
+import { localEnvironmentIdAtom } from "../state/primaryEnvironment";
+import { shellEnvironment } from "../state/shell";
+import { useAtomCommand } from "../state/use-atom-command";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
@@ -1341,6 +1344,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const target = entry?.targetProject ?? group;
     void handleNewThread(scopeProjectRef(target.environmentId, target.id));
   });
+  const localEnvironmentId = useAtomValue(localEnvironmentIdAtom);
+  const openLocalProjectFolder = useAtomCommand(shellEnvironment.openInEditor, {
+    reportFailure: false,
+  });
   const handleProjectFolderContextMenu = useStableCallback(
     (
       group: SidebarProjectSnapshot,
@@ -1349,12 +1356,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) => {
       const api = readLocalApi();
       if (!api) return;
+      const localProject = group.memberProjects.find(
+        (project) => project.environmentId === localEnvironmentId,
+      );
+      const folderTarget =
+        localProject &&
+        serverConfigs.get(localProject.environmentId)?.availableEditors.includes("file-manager") &&
+        readEnvironmentScope(localProject.environmentId, AuthOrchestrationOperateScope)
+          ? localProject
+          : null;
       void (async () => {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
               { id: "new-thread", label: gt("New thread") },
               { id: "copy-path", label: gt("Copy path") },
+              ...(folderTarget
+                ? [{ id: "open-folder", label: gt("Show in folder"), icon: "folder" } as const]
+                : []),
               ...(canPinProject(group)
                 ? [
                     group.pinned
@@ -1375,6 +1394,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             return;
           case "copy-path":
             copyPathToClipboard(group.workspaceRoot, { path: group.workspaceRoot });
+            return;
+          case "open-folder":
+            if (folderTarget) {
+              const result = await openLocalProjectFolder({
+                environmentId: folderTarget.environmentId,
+                input: { cwd: folderTarget.workspaceRoot, editor: "file-manager" },
+              });
+              if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                const error = squashAtomCommandFailure(result);
+                toastManager.add({
+                  type: "error",
+                  title: gt("Could not open local folder"),
+                  description: error instanceof Error ? error.message : folderTarget.workspaceRoot,
+                });
+              }
+            }
             return;
           case "pin":
           case "unpin":

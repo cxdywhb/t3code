@@ -2,6 +2,7 @@ import {
   CHATGPT_USAGE_URL,
   collectHttpQuotaSources,
   collectLimitAccounts,
+  collectLimitPoolEnvironments,
   collectLimitPools,
   displayLimitWindows,
   isPerAccountDashboardDriver,
@@ -14,6 +15,8 @@ import {
   type ResetCreditChoice,
 } from "@t3tools/shared/usageLimits";
 import { T, Var, useGT, useMessages } from "gt-react";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import type { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
@@ -22,6 +25,7 @@ import {
   type ReactNode,
   type RefObject,
   use,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -31,10 +35,12 @@ import { ensureLocalApi } from "../../localApi";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
+import { localEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { providerClients } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -46,7 +52,7 @@ import {
   dashboardLimitWindowLabel,
   formatDuration,
   formatResetsIn,
-  limitDashboardHeading,
+  limitDashboardAccountTitle,
   resetCreditChoices,
 } from "@t3tools/shared/usageLimitsCopy";
 
@@ -650,21 +656,30 @@ function PoolSection({
   pool,
   now,
   accountNumber,
-  showEnvironmentSources,
+  localEnvironmentId,
 }: {
   readonly pool: LimitPool;
   readonly now: number;
   readonly accountNumber?: number | undefined;
-  readonly showEnvironmentSources: boolean;
+  readonly localEnvironmentId: EnvironmentId | null;
 }) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
   const windows = displayLimitWindows(pool);
-  const heading = limitDashboardHeading(pool, label, accountNumber, showEnvironmentSources);
+  const { title, alias, emailPrefix } = limitDashboardAccountTitle(pool, label, accountNumber);
+  const environments = collectLimitPoolEnvironments(pool);
+  const deviceName = (
+    environments.find(({ environmentId }) => environmentId === localEnvironmentId) ??
+    environments[0]
+  )?.label;
+  const headingId = useId();
   const m = useMessages();
   return (
-    <section aria-label={heading} className="flex flex-col gap-3">
-      <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+    <section aria-labelledby={headingId} className="flex flex-col gap-3">
+      <h2
+        id={headingId}
+        className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground"
+      >
         <ProviderInstanceIcon
           driverKind={pool.driver}
           displayName={label}
@@ -672,7 +687,17 @@ function PoolSection({
           className="size-5 shrink-0"
           iconClassName="size-4 text-foreground/80"
         />
-        <span className="wrap-anywhere">{heading}</span>
+        <span className="wrap-anywhere">{alias ?? title}</span>
+        {emailPrefix ? (
+          <Badge variant="outline" size="control" className="max-w-full" title={emailPrefix}>
+            <span className="truncate">{emailPrefix}</span>
+          </Badge>
+        ) : null}
+        {deviceName ? (
+          <Badge variant="outline" size="control" className="max-w-full" title={deviceName}>
+            <span className="truncate">{deviceName}</span>
+          </Badge>
+        ) : null}
       </h2>
       {windows.map((window) => {
         const details =
@@ -701,6 +726,7 @@ export function UsageLimitsPooled({
 }) {
   const gt = useGT();
   const m = useMessages();
+  const localEnvironmentId = useAtomValue(localEnvironmentIdAtom);
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
   const pools = collectLimitPools(collectLimitAccounts(presentations), now, "dashboard");
@@ -733,7 +759,7 @@ export function UsageLimitsPooled({
               key={split ? pool.accounts[0]!.key : pool.driver}
               pool={pool}
               now={now}
-              showEnvironmentSources={presentations.size > 1}
+              localEnvironmentId={localEnvironmentId}
               accountNumber={
                 driverPools && driverPools.length > 1 ? driverPools.indexOf(pool) + 1 : undefined
               }

@@ -253,7 +253,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-diff-deletion-foreground: var(--diff-deletion-foreground);
   --color-info-foreground: var(--info-foreground);
   --color-sidebar-activity-foreground: light-dark(#743da6, #cba0f6);
-  --color-sidebar-running-foreground: #16803c;
   --color-info: var(--info);
   --color-guest: var(--guest);
   --color-guest-foreground: var(--guest-foreground);
@@ -1499,17 +1498,25 @@ html[data-theme-id] [data-chat-header] [data-toolbar-control] {
    the panel opens. They only take the themed foreground; hover and pressed
    keep the base ghost accent. The tooltip trigger's data-slot wins over the
    toggle's when the trigger renders the toggle, so match both. */
-html[data-theme-id] [data-panel-layout-controls] [data-slot="toggle"],
+html[data-theme-id]
+  [data-panel-layout-controls]
+  :is([data-slot="toggle"], [data-slot="toolbar-button"]),
 html[data-theme-id] [data-panel-layout-controls] [data-slot="tooltip-trigger"],
-html[data-theme-id] [data-workspace-titlebar-controls] [data-slot="toggle"],
+html[data-theme-id]
+  [data-workspace-titlebar-controls]
+  :is([data-slot="toggle"], [data-slot="toolbar-button"]),
 html[data-theme-id] [data-workspace-titlebar-controls] [data-slot="tooltip-trigger"] {
   --control-icon-color: var(--contrast-toolbar-foreground);
   color: var(--contrast-toolbar-foreground);
 }
 
-html[data-theme-id] [data-panel-layout-controls] [data-slot="toggle"]:disabled,
+html[data-theme-id]
+  [data-panel-layout-controls]
+  :is([data-slot="toggle"], [data-slot="toolbar-button"]):disabled,
 html[data-theme-id] [data-panel-layout-controls] [data-slot="tooltip-trigger"]:disabled,
-html[data-theme-id] [data-workspace-titlebar-controls] [data-slot="toggle"]:disabled,
+html[data-theme-id]
+  [data-workspace-titlebar-controls]
+  :is([data-slot="toggle"], [data-slot="toolbar-button"]):disabled,
 html[data-theme-id] [data-workspace-titlebar-controls] [data-slot="tooltip-trigger"]:disabled {
   --control-icon-color: color-mix(
     in oklab,

@@ -2,6 +2,7 @@ import type { RuntimeMode } from "@t3tools/contracts";
 import { type ReactNode, useRef, useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
+import "~/index.css";
 
 import { render } from "../../../test/render";
 import { ComposerHandleContext, type ComposerHandleRef } from "../../composerHandleContext";
@@ -18,6 +19,28 @@ import { ComposerPickerFooter } from "./ComposerModelEffort";
 import { resolveRuntimeModeOption, runtimeModeOptions } from "./runtimeModeConfig";
 
 const options = runtimeModeOptions.map((mode) => resolveRuntimeModeOption(mode));
+
+it.each([300, 360])("keeps all inline permission labels visible at %spx", async (width) => {
+  const labels = ["需审批", "编辑免审", "自动", "完全访问"];
+  await using screen = await render(
+    <div style={{ width }}>
+      <ComposerPickerFooter
+        traits={null}
+        runtimeMode="full-access"
+        runtimeModeOptions={options.map((option, index) => ({ ...option, label: labels[index]! }))}
+        onRuntimeModeChange={() => {}}
+      />
+    </div>,
+    { router: false },
+  );
+  for (const label of labels) {
+    const radio = screen.getByRole("radio", { name: label });
+    await expect.element(radio).toBeVisible();
+    const text = radio.element().querySelector("span")!;
+    expect(text.scrollWidth).toBeLessThanOrEqual(text.clientWidth);
+    expect(text.clientHeight).toBeLessThan(24);
+  }
+});
 
 // Mirrors the overflow menu, which holds the Permissions section.
 function OverflowMenu() {
@@ -49,11 +72,20 @@ it("reaches Permissions with arrow keys, previews, and picks with Enter", async 
   await userEvent.keyboard("{ArrowDown}");
   const supervised = page.getByRole("menuitemradio", { name: "Supervised" });
   await expect.element(supervised).toHaveFocus();
+  await expect.element(supervised).toHaveTextContent("Supervised");
   await expect
     .element(supervised)
     .toHaveAccessibleDescription("Ask before commands and file changes.");
 
   await userEvent.keyboard("{ArrowRight}");
+  const permissions = page.getByRole("group", { name: "Permissions" });
+  const indicator = permissions
+    .element()
+    .querySelector<HTMLElement>("[data-composer-segment-indicator]");
+  expect(indicator?.style.transform).toContain("100%");
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "Full access" }))
+    .toHaveAttribute("aria-checked", "true");
   await expect
     .element(page.getByRole("menuitemradio", { name: "Auto-accept edits" }))
     .toHaveFocus();
@@ -97,7 +129,7 @@ it("returns focus to the editor after a pick", async () => {
   await vi.waitFor(() => expect(handle.focusAtEnd).toHaveBeenCalled());
 });
 
-// Mirrors the model picker: a composer popover whose footer nests the Permissions menu.
+// Mirrors the model picker: a composer popover with inline permissions.
 function PickerWithPermissions() {
   const [mode, setMode] = useState<RuntimeMode>("full-access");
   const composerMenuProps = useComposerMenuProps();
@@ -119,7 +151,7 @@ function PickerWithPermissions() {
   );
 }
 
-it("on a touch tablet, tapping outside the Permissions menu leaves the editor unfocused", async () => {
+it("on a touch tablet, tapping outside the model picker leaves the editor unfocused", async () => {
   const realMatchMedia = window.matchMedia.bind(window);
   using _touch = vi
     .spyOn(window, "matchMedia")
@@ -127,15 +159,10 @@ it("on a touch tablet, tapping outside the Permissions menu leaves the editor un
   const { handle, ui } = withComposer(<PickerWithPermissions />);
   await using screen = await render(ui, { router: false }); // no routes involved
   await userEvent.click(screen.getByRole("button", { name: "Model" }));
-  await userEvent.click(page.getByRole("button", { name: "Permissions: Full access" }));
-  const fullAccess = page.getByRole("menuitemradio", { name: "Full access" });
+  const fullAccess = page.getByRole("radio", { name: "Full access" });
   await expect.element(fullAccess).toBeInTheDocument();
-  const permissionsTrigger = page.getByRole("button", { name: "Permissions: Full access" });
-  // The first outside tap closes the Permissions menu, the second the picker around it.
-  await userEvent.click(document.body, { position: { x: 1, y: 1 } });
-  await expect.element(fullAccess).not.toBeInTheDocument();
   await userEvent.click(screen.getByText("Timeline"));
-  await expect.element(permissionsTrigger).not.toBeInTheDocument();
+  await expect.element(fullAccess).not.toBeInTheDocument();
   // Focusing the editor after a tap opens the on-screen keyboard on Android tablets.
   expect(handle.focusAtEnd).not.toHaveBeenCalled();
 });

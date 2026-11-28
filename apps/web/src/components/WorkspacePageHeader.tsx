@@ -3,15 +3,19 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { cn } from "../lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../workspaceTitlebar";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "./WorkspaceBreadcrumb";
+import { GlobalTerminalButton } from "./terminal/GlobalTerminal";
 
 export function WorkspacePageHeader({
   electron = false,
   reserveNativeControls = electron,
+  showGlobalTerminal = false,
   className,
+  children,
   ...props
 }: ComponentPropsWithoutRef<"header"> & {
   readonly electron?: boolean;
   readonly reserveNativeControls?: boolean;
+  readonly showGlobalTerminal?: boolean;
 }) {
   return (
     <header
@@ -23,7 +27,14 @@ export function WorkspacePageHeader({
         className,
       )}
       {...props}
-    />
+    >
+      {children}
+      {showGlobalTerminal ? (
+        <div className="ml-auto flex shrink-0 [-webkit-app-region:no-drag]">
+          <GlobalTerminalButton />
+        </div>
+      ) : null}
+    </header>
   );
 }
 

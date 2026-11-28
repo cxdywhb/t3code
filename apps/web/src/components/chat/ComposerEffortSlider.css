@@ -6,11 +6,6 @@
 
 [data-effort-slider] {
   --effort-accent: hsl(var(--effort-hue) 94% 68%);
-  background-color: color-mix(
-    in srgb,
-    var(--effort-accent) calc(2% + 4% * var(--effort-progress)),
-    transparent
-  );
 }
 
 [data-effort-value] {
@@ -54,7 +49,6 @@
   [data-effort-slider] {
     transition:
       --effort-hue 280ms ease-out,
-      background-color 280ms ease-out,
       box-shadow 280ms ease-out;
   }
 

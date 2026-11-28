@@ -7,6 +7,24 @@ import { cn } from "~/lib/utils";
 
 export type ComposerControlSize = "sm" | "xs";
 
+export const COMPOSER_SEGMENT_CLASS =
+  "flex h-6 cursor-pointer items-center justify-center gap-1 px-2 text-muted-foreground text-xs outline-none rounded-md hover:text-foreground data-checked:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
+
+export function ComposerSegmentIndicator({ index, count }: { index: number; count: number }) {
+  if (index < 0) return null;
+  return (
+    <span
+      aria-hidden="true"
+      data-composer-segment-indicator
+      className="pointer-events-none absolute inset-y-0 start-0 rounded-md bg-input/72 motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out [--slide-direction:1] rtl:[--slide-direction:-1]"
+      style={{
+        width: `${100 / count}%`,
+        transform: `translateX(calc(${100 * index}% * var(--slide-direction)))`,
+      }}
+    />
+  );
+}
+
 function composerControlClassName(size: ComposerControlSize, className?: string) {
   return cn(
     "relative inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-(--control-radius) border border-transparent text-base outline-none hover:bg-accent data-pressed:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 data-disabled:pointer-events-none data-disabled:opacity-64 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 [&:active:not([aria-haspopup])]:scale-[0.97] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:-mx-0.5 [&_svg[data-composer-control-icon]]:mx-0",

@@ -113,7 +113,7 @@ function ComboboxSearchInput({
       <div
         className={cn(
           "relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors",
-          tone !== "neutral" && "focus-within:border-ring",
+          tone !== "neutral" && "focus-within:border-primary",
         )}
       >
         <SearchIcon

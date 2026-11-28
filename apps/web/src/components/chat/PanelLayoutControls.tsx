@@ -11,6 +11,7 @@ import { memo, type ReactNode, useLayoutEffect, useRef } from "react";
 import { cn } from "~/lib/utils";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
+import { GlobalTerminalButton } from "../terminal/GlobalTerminal";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
 import { useMobileSidebarSheetMounted } from "../ui/sidebar";
 import { Toggle } from "../ui/toggle";
@@ -20,6 +21,7 @@ import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 const THREAD_PANEL_HEADER_INSET_PX = 12;
 
 export interface PanelLayoutControlsProps {
+  showGlobalTerminalControl?: boolean;
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
@@ -40,6 +42,7 @@ export interface PanelLayoutControlsProps {
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
+  showGlobalTerminalControl = true,
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
@@ -94,6 +97,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {showGlobalTerminalControl ? <GlobalTerminalButton /> : null}
       {showThreadPanelControl ? threadPanelControl : null}
       {showTerminalControl ? (
         <SharedTooltipTrigger
@@ -190,7 +194,12 @@ export function ThreadPanelHeaderControl(props: PanelLayoutControlsProps) {
       )}
       data-workspace-titlebar-controls
     >
-      <PanelLayoutControls {...props} showTerminalControl={false} showRightPanelControl={false} />
+      <PanelLayoutControls
+        {...props}
+        showGlobalTerminalControl={false}
+        showTerminalControl={false}
+        showRightPanelControl={false}
+      />
     </div>
   );
 }

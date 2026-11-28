@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ModelSelection,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import { compileResolvedKeybindingsConfig } from "@t3tools/shared/keybindings";
 import { useState } from "react";
@@ -15,7 +16,76 @@ import { render } from "../../../test/render";
 import { __setClientSettingsForTests } from "../../hooks/useSettings";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import { ComposerEffortSlider } from "./ComposerEffortSlider";
+import { ComposerPickerFooter } from "./ComposerModelEffort";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { resolveRuntimeModeOption, runtimeModeOptions } from "./runtimeModeConfig";
+import { markOpenToPermissions } from "./composerEventScope";
+
+it("keeps the composer picker in place when a permission change reveals the footer chip", async () => {
+  const defaultMode = "approval-required";
+  const options = runtimeModeOptions.map((mode) => resolveRuntimeModeOption(mode));
+
+  function ComposerFooter() {
+    const [mode, setMode] = useState<RuntimeMode>(defaultMode);
+    return (
+      <div className="mx-auto flex w-96 justify-end" data-chat-composer-footer-controls>
+        <ProviderModelPicker
+          environmentId={null}
+          activeInstanceId={ProviderInstanceId.make("codex")}
+          model="test"
+          lockedProvider={null}
+          instanceEntries={[]}
+          modelOptionsByInstance={new Map()}
+          isComposerOwned
+          popupAlign="end"
+          triggerAriaLabel="Choose model"
+          effortColumn={<div />}
+          footer={
+            <ComposerPickerFooter
+              traits={null}
+              runtimeMode={mode}
+              runtimeModeOptions={options}
+              onRuntimeModeChange={setMode}
+            />
+          }
+          onInstanceModelChange={() => {}}
+        />
+        {mode !== defaultMode ? <span className="w-24">Permission chip</span> : null}
+      </div>
+    );
+  }
+
+  await using screen = await render(<ComposerFooter />);
+  const trigger = screen.getByRole("button", { name: "Choose model" });
+  markOpenToPermissions(trigger.element() as HTMLElement);
+  await trigger.click();
+  const permissions = page.getByRole("radiogroup", { name: "Permissions" });
+  const supervised = permissions.getByRole("radio", { name: "Supervised" });
+  const positioner = permissions
+    .element()
+    .closest<HTMLElement>('[data-slot="popover-positioner"]')!;
+  const before = positioner.getBoundingClientRect();
+  const triggerRight = trigger.element().getBoundingClientRect().right;
+  await expect.element(supervised).toHaveAttribute("aria-checked", "true");
+  await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
+  await expect.element(supervised).toHaveFocus();
+  await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+  const auto = permissions.getByRole("radio", { name: "Auto", exact: true });
+  await expect.element(auto).toHaveFocus();
+  await expect.element(supervised).toHaveAttribute("aria-checked", "true");
+  const description = document.getElementById(auto.element().getAttribute("aria-describedby")!)!;
+  await expect.element(description).toBeVisible();
+  expect(description.clientHeight).toBeGreaterThanOrEqual(32);
+  expect(description.scrollHeight).toBeLessThanOrEqual(description.clientHeight);
+  await userEvent.keyboard("{ArrowRight}{Enter}");
+  await expect
+    .element(permissions.getByRole("radio", { name: "Full access" }))
+    .toHaveAttribute("aria-checked", "true");
+  expect(trigger.element().getBoundingClientRect().right).toBeLessThan(triggerRight);
+  const after = positioner.getBoundingClientRect();
+  expect(after.x).toBeCloseTo(before.x, 0);
+  expect(after.y).toBeCloseTo(before.y, 0);
+});
 
 it("keeps each registry image when adding a model from another ACP agent", async () => {
   const icons = [
@@ -165,14 +235,25 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
   await userEvent.keyboard("{ArrowRight}");
   const slider = page.getByRole("slider", { name: "Thinking" });
   await expect.element(slider).toHaveFocus();
-  const modelPane = search.element().closest("[data-model-picker-content]")!;
+  let modelPane = search.element().closest("[data-model-picker-content]")!;
   const effortPane = slider.element().closest("[data-model-picker-effort]")!;
-  expect(modelPane.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-    effortPane.getBoundingClientRect().top,
-  );
+  expect(
+    modelPane.getBoundingClientRect().bottom - effortPane.getBoundingClientRect().top,
+  ).toBeLessThan(0.5);
   await userEvent.keyboard("{ArrowLeft}");
   await expect.element(slider).toHaveFocus();
   await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
+  const track = effortPane.querySelector("[data-effort-track]")!;
+  await page.elementLocator(track).click({
+    position: { x: track.getBoundingClientRect().width - 14, y: 14 },
+  });
+  await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+  await userEvent.keyboard("{Escape}");
+  await screen.getByRole("button", { name: "Choose model" }).click();
+  modelPane = search.element().closest("[data-model-picker-content]")!;
+  await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+  await userEvent.keyboard("{ArrowRight}");
+  await expect.element(slider).toHaveFocus();
   await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
   await expect.element(search).toHaveFocus();
 

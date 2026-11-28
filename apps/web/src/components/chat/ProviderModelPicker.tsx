@@ -216,9 +216,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       focusEffort("any");
       return;
     }
-    popupRef.current
-      ?.querySelector<HTMLButtonElement>("[data-composer-permissions-trigger]")
-      ?.click();
+    const permission = popupRef.current?.querySelector<HTMLButtonElement>(
+      '[data-composer-permissions] [role="radio"][tabindex="0"]',
+    );
+    permission?.focus({ preventScroll: true });
+    permission?.scrollIntoView({ block: "nearest" });
   };
 
   const handleInstanceModelChange = (instanceId: ProviderInstanceId, model: string) => {
@@ -450,6 +452,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       </PopoverTrigger>
       <PopoverPopup
         {...(props.isComposerOwned ? composerFloatingLayerProps : {})}
+        anchor={
+          props.isComposerOwned
+            ? () =>
+                triggerRef.current?.closest("[data-chat-composer-footer-controls]") ??
+                triggerRef.current
+            : undefined
+        }
         ref={(popup) => {
           popupRef.current = popup;
           const unlock = lockBackgroundScroll(popup);

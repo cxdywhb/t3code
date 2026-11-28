@@ -14,6 +14,11 @@ import "~/index.css";
 
 import { render } from "../../../test/render";
 import {
+  DraftId,
+  useComposerDraftModelState,
+  useComposerDraftStore,
+} from "../../composerDraftStore";
+import {
   ComposerEffortColumn,
   ComposerPickerFooter,
   describeComposerEffort,
@@ -26,7 +31,12 @@ const reasoning = {
   type: "select",
   role: "reasoning",
   options: [
-    { id: "low", label: "Low" },
+    {
+      id: "low",
+      label: "Low",
+      description:
+        "Respond quickly for straightforward requests. This preset uses a shorter reasoning pass, which is useful when the task needs a quick answer.",
+    },
     { id: "medium", label: "Medium", isDefault: true },
     { id: "high", label: "High", description: "More time to reason" },
   ],
@@ -122,8 +132,8 @@ function Column(props: {
   );
 }
 
-it("moves the same speed indicator between all advertised tiers", async () => {
-  function Footer() {
+it("keeps speed controls visible and puts offered access programs behind Advanced", async () => {
+  function Footer({ programs }: { programs: string[] }) {
     const [options, setOptions] = useState<ReadonlyArray<ProviderOptionSelection>>([]);
     const tiers = ["Standard", "Fast", "Ultrafast"];
     const traits = {
@@ -141,6 +151,16 @@ it("moves the same speed indicator between all advertised tiers", async () => {
                 currentValue: "Standard",
                 options: tiers.map((label) => ({ id: label, label })),
               },
+              {
+                type: "select",
+                id: "cyberAccessProgram",
+                label: "Cyber Access",
+                currentValue: "standard",
+                options: programs.map((id) => ({
+                  id,
+                  label: id === "standard" ? "Standard" : "Daybreak Blue",
+                })),
+              },
             ],
           }),
         },
@@ -148,7 +168,7 @@ it("moves the same speed indicator between all advertised tiers", async () => {
     };
     return (
       <>
-        <ComposerEffortColumn traits={traits} />
+        <ComposerEffortColumn traits={traits} moveCyberAccess />
         <ComposerPickerFooter
           traits={traits}
           runtimeMode="full-access"
@@ -158,8 +178,19 @@ it("moves the same speed indicator between all advertised tiers", async () => {
       </>
     );
   }
-  await using screen = await render(<Footer />, { router: false });
-  const indicator = screen.container.querySelector<HTMLElement>("[data-speed-indicator]")!;
+  await using screen = await render(<Footer programs={["standard", "daybreakBlue"]} />, {
+    router: false,
+  });
+  const advanced = screen.getByRole("button", { name: "Advanced" });
+  await expect
+    .element(screen.getByRole("button", { name: "Cyber Access: Standard" }))
+    .not.toBeInTheDocument();
+  await advanced.click();
+  await page.getByRole("menuitemradio", { name: "Daybreak Blue" }).click();
+  await expect.element(advanced).toHaveAccessibleDescription("Cyber Access: Daybreak Blue");
+  const indicator = screen.container.querySelector<HTMLElement>(
+    "[data-composer-segment-indicator]",
+  )!;
   const sweep = screen.container.querySelector("[data-effort-sweep]")!;
   const star = screen.container.querySelector("[data-effort-stars] > span")!;
   const animations = [sweep, star].flatMap((element) => element.getAnimations());
@@ -177,7 +208,7 @@ it("moves the same speed indicator between all advertised tiers", async () => {
       await expect.poll(() => animation.playbackRate).toBe(name === "Standard" ? 0.85 : 1.2);
       expect(animation.playState).toBe("running");
     }
-    expect(screen.container.querySelector("[data-speed-indicator]")).toBe(indicator);
+    expect(screen.container.querySelector("[data-composer-segment-indicator]")).toBe(indicator);
     await expect
       .poll(() =>
         Math.abs(
@@ -186,6 +217,8 @@ it("moves the same speed indicator between all advertised tiers", async () => {
       )
       .toBeLessThan(1);
   }
+  await screen.rerender(<Footer programs={["standard"]} />);
+  await expect.element(advanced).not.toBeInTheDocument();
 });
 
 it("draws an agent's reasoning as bars and keeps its mode out of the levels", async () => {
@@ -274,13 +307,52 @@ it("jumps to advertised stops and keeps arrow keys on the slider", async () => {
   await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium, Default");
 });
 
+it("restores the clicked effort from the composer draft when the slider remounts", async () => {
+  const draftId = DraftId.make("effort-remount-test");
+  const instanceId = ProviderInstanceId.make("devin");
+  using cleanup = new DisposableStack();
+  const previous = useComposerDraftStore.getState();
+  cleanup.defer(() => useComposerDraftStore.setState(previous));
+
+  function DraftColumn() {
+    const draft = useComposerDraftModelState(draftId);
+    return (
+      <ComposerEffortColumn
+        traits={{
+          draftId,
+          provider: ProviderDriverKind.make("acpRegistry"),
+          instanceId,
+          models,
+          model: "fusion",
+          modelOptions: draft.modelSelectionByProvider[instanceId]?.options,
+        }}
+      />
+    );
+  }
+
+  await using screen = await render(<DraftColumn />, { router: false });
+  const slider = screen.getByRole("slider", { name: "Thinking" });
+  const track = slider.element().closest<HTMLElement>("[data-effort-track]")!;
+  await page.elementLocator(track).click({ position: { x: track.clientWidth - 14, y: 14 } });
+  await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+  await screen.rerender(null);
+  await screen.rerender(<DraftColumn />);
+  await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+});
+
 it("tracks the pointer between reasoning steps and commits once on release", async () => {
   const onPick = vi.fn();
-  await using screen = await render(<Column onPick={onPick} />, { router: false }); // no routes involved
+  await using screen = await render(
+    <div className="w-72">
+      <Column onPick={onPick} />
+    </div>,
+    { router: false },
+  );
   const slider = screen.getByRole("slider", { name: "Thinking" });
   const track = slider.element().closest<HTMLElement>("[data-effort-track]")!;
   const trackLocator = page.elementLocator(track);
   const { left, width } = track.getBoundingClientRect();
+  const sliderHeight = track.closest("[data-effort-slider]")!.getBoundingClientRect().height;
   const knob = track.querySelector<HTMLElement>("[data-effort-knob]")!;
   const fill = track.querySelector<HTMLElement>("[data-effort-fill]")!;
   const countStars = () => track.querySelector("[data-effort-stars]")?.childElementCount ?? 0;
@@ -294,6 +366,14 @@ it("tracks the pointer between reasoning steps and commits once on release", asy
   await commands.pointerDown();
   try {
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
+    const description = document.getElementById(
+      slider.element().getAttribute("aria-describedby")!,
+    )!;
+    expect(description.getBoundingClientRect().height).toBeGreaterThanOrEqual(48);
+    expect(description.scrollHeight).toBeLessThanOrEqual(description.clientHeight);
+    expect(track.closest("[data-effort-slider]")!.getBoundingClientRect().height).toBe(
+      sliderHeight,
+    );
     expect(countStars()).toBe(0);
     await trackLocator.hover({ position: { x: width * 0.65, y: 14 } });
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium, Default");
@@ -309,6 +389,9 @@ it("tracks the pointer between reasoning steps and commits once on release", asy
     expect(midStars).toBeLessThan(22);
     await trackLocator.hover({ position: { x: width * 0.95, y: 14 } });
     await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+    expect(track.closest("[data-effort-slider]")!.getBoundingClientRect().height).toBe(
+      sliderHeight,
+    );
     expect(countStars()).toBe(22);
     await trackLocator.hover({ position: { x: width * 0.83, y: 14 } });
     expectKnobAtPointer(0.83);

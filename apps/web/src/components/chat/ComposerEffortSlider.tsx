@@ -180,10 +180,26 @@ export function ComposerEffortSlider(props: {
           className="size-7 opacity-0"
         />
       </Slider.Control>
-      {choice.description ? (
-        <p id={descriptionId} className="text-muted-foreground text-xs">
-          {choice.description}
-        </p>
+      {props.choices.some((option) => option.description) ? (
+        // Reserve the tallest description so a top-anchored picker cannot move the track mid-drag.
+        <div className="grid min-h-8 min-w-0 grid-cols-[minmax(0,1fr)] text-muted-foreground text-xs leading-4 wrap-anywhere">
+          {props.choices.map((option, optionIndex) =>
+            option.description ? (
+              <p
+                key={option.id}
+                id={optionIndex === index ? descriptionId : undefined}
+                aria-hidden={optionIndex !== index}
+                className={
+                  optionIndex === index
+                    ? "col-start-1 row-start-1"
+                    : "invisible col-start-1 row-start-1"
+                }
+              >
+                {option.description}
+              </p>
+            ) : null,
+          )}
+        </div>
       ) : null}
     </Slider.Root>
   );

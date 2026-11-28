@@ -190,7 +190,7 @@ export function ComposerControlsBar(props: {
       workspaceCwd={props.workspaceCwd}
       compact={false}
       isComposerOwned
-      // The trigger grows away from this edge when its model or effort label changes.
+      // The expanded popup aligns with the footer edge, even when a permission chip enters the row.
       popupAlign={composerControlsCollapsed ? "start" : "end"}
       disabled={providerCatalogPending || isSendBusy}
       multipleModelsEnabled={multipleModelsEnabled}
@@ -224,7 +224,7 @@ export function ComposerControlsBar(props: {
       triggerShortcuts={
         pickerOwnsModeShortcut ? "composer.effort composer.mode" : "composer.effort"
       }
-      effortColumn={<ComposerEffortColumn traits={traitsInput} />}
+      effortColumn={<ComposerEffortColumn traits={traitsInput} moveCyberAccess />}
       footer={
         <ComposerPickerFooter
           traits={traitsInput}

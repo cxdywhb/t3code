@@ -1,5 +1,6 @@
 import { Toggle as TogglePrimitive } from "@base-ui/react/toggle";
 import { cva, type VariantProps } from "class-variance-authority";
+import type { ComponentPropsWithRef } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -45,6 +46,17 @@ function Toggle({
     <TogglePrimitive
       className={cn(toggleVariants({ className, size, variant }))}
       data-slot="toggle"
+      {...props}
+    />
+  );
+}
+
+export function ToolbarButton({ className, ...props }: ComponentPropsWithRef<"button">) {
+  return (
+    <button
+      type="button"
+      data-slot="toolbar-button"
+      className={cn(toggleVariants({ variant: "ghost", size: "sm", className }))}
       {...props}
     />
   );

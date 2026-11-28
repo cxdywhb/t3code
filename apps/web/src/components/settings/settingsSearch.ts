@@ -127,6 +127,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
 /** Sidebar labels; an entry of its own lets a translator shorten one below its page title. */
 export const SETTINGS_NAV_LABELS: Readonly<Record<SettingsPath, string>> = {
   ...SETTINGS_SECTION_LABELS,
+  "/settings/agents": msg("Agent global settings", { $context: "settings navigation item" }),
+  "/settings/providers": msg("Providers", { $context: "settings navigation item" }),
   "/settings/source-control": msg("Source control & issues", {
     $context: "settings navigation item",
   }),

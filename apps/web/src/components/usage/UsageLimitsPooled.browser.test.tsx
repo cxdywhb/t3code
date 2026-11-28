@@ -5,12 +5,17 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { CHATGPT_USAGE_URL } from "@t3tools/shared/usageLimits";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
 import { render } from "../../../test/render";
 import { UsageLimitsPooled } from "./UsageLimitsPooled";
+
+vi.mock(import("../../state/primaryEnvironment"), async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  return { ...(await original()), localEnvironmentIdAtom: Atom.make(EnvironmentId.make("desk")) };
+});
 
 const checkedAt = "2026-10-25T16:00:00.000Z";
 
@@ -109,67 +114,63 @@ describe("UsageLimitsPooled next refill", () => {
   });
 });
 
-it("identifies Codex quota groups by environment and email prefix", async () => {
+it("labels Codex accounts with their instance name, email prefix and preferred device", async () => {
+  const workAccount = {
+    ...account("work", 20, "2026-10-25T17:00:00.000Z"),
+    displayName: "Codex",
+    auth: { status: "authenticated" as const, email: "work.dev@example.test" },
+  };
   const presentations = new Map([
-    [
-      EnvironmentId.make("desk"),
-      {
-        entry: { target: { label: "Desk" } },
-        serverConfig: {
-          providers: [
-            {
-              ...account("work", 20, "2026-10-25T17:00:00.000Z"),
-              displayName: "Codex",
-              auth: { status: "authenticated" as const, email: "work.dev@example.test" },
-            },
-          ],
-        },
-      },
-    ],
     [
       EnvironmentId.make("laptop"),
       {
         entry: { target: { label: "Laptop" } },
         serverConfig: {
           providers: [
+            workAccount,
             {
               ...account("personal", 60, "2026-10-25T18:00:00.000Z"),
-              displayName: "Personal",
+              displayName: "Codex Pro",
               auth: { status: "authenticated" as const, email: "personal+codex@example.test" },
             },
           ],
         },
       },
     ],
+    [
+      EnvironmentId.make("desk"),
+      {
+        entry: { target: { label: "Desk" } },
+        serverConfig: { providers: [workAccount] },
+      },
+    ],
   ]);
   await using screen = await render(
     <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
   );
-  const work = screen.getByRole("region", { name: "Codex · Desk · work.dev", exact: true });
+  const work = screen.getByRole("region", { name: "Codex work.dev Desk", exact: true });
   const personal = screen.getByRole("region", {
-    name: "Codex · Personal · Laptop · personal+codex",
+    name: "Codex Pro personal+codex Laptop",
     exact: true,
   });
   await expect.element(work.getByRole("button", { name: /80% left.*1h/ })).toBeVisible();
   await expect.element(personal.getByRole("button", { name: /40% left.*2h/ })).toBeVisible();
-  await expect
-    .element(work.getByRole("heading", { name: "Codex · Desk · work.dev" }))
-    .toBeVisible();
-  await expect
-    .element(personal.getByRole("heading", { name: "Codex · Personal · Laptop · personal+codex" }))
-    .toBeVisible();
+  const workHeading = work.getByRole("heading").element();
+  const badges = [...workHeading.querySelectorAll('[data-slot="badge"]')];
+  expect(badges.map((badge) => badge.textContent)).toEqual(["work.dev", "Desk"]);
+  expect(badges[0]?.className).toBe(badges[1]?.className);
   expect(personal.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
     work.element().getBoundingClientRect().bottom,
   );
 
   await screen.rerender(
     <UsageLimitsPooled
-      presentations={new Map([...presentations].filter(([id]) => id === "desk"))}
+      presentations={new Map([...presentations].filter(([id]) => id === "laptop"))}
       now={Date.parse(checkedAt)}
     />,
   );
   await expect
-    .element(screen.getByRole("heading", { name: "Codex · work.dev", exact: true }))
+    .element(screen.getByRole("heading", { name: "Codex work.dev Laptop", exact: true }))
     .toBeVisible();
 });
 
@@ -230,8 +231,8 @@ it("shows each Antigravity account's own remaining quota and reset time", async 
   await using screen = await render(
     <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
   );
-  const primary = screen.getByRole("region", { name: "Antigravity #1" });
-  const work = screen.getByRole("region", { name: "Antigravity · Work" });
+  const primary = screen.getByRole("region", { name: "Antigravity #1 Desk" });
+  const work = screen.getByRole("region", { name: "Work Desk" });
   await expect.element(primary.getByRole("button", { name: /85% left.*1h/ })).toBeVisible();
   await expect.element(work.getByRole("button", { name: /45% left.*2h/ })).toBeVisible();
   expect(work.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(

@@ -26,7 +26,7 @@ export function NoProjectsHero() {
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         {/* The desktop window only moves where CSS opts in, so keep a titlebar strip. */}
-        {isElectron ? <WorkspacePageHeader electron /> : null}
+        <WorkspacePageHeader electron={isElectron} showGlobalTerminal />
         <Empty size="hero" className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
             <EmptyHeader className="max-w-none">

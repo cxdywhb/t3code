@@ -956,6 +956,7 @@ export function IssueAutomationPage() {
       <div className="relative flex min-h-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
           <WorkspacePageHeader
+            showGlobalTerminal
             data-chat-header
             electron={isElectron}
             reserveNativeControls={!desktopInspectorVisible}

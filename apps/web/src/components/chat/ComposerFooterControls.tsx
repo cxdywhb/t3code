@@ -1,12 +1,18 @@
 import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { T, useGT, useMessages } from "gt-react";
-import { type ComponentProps, memo, use, useId, useRef, useState } from "react";
+import { type ComponentProps, type KeyboardEvent, memo, use, useId, useRef, useState } from "react";
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
+import { cn } from "~/lib/utils";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
+import {
+  COMPOSER_SEGMENT_CLASS,
+  ComposerControl,
+  ComposerControlIcon,
+  ComposerSegmentIndicator,
+} from "./ComposerControl";
 import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
@@ -102,96 +108,131 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   return accessDisplay === "hidden" ? null : permissionsChip;
 });
 
-/**
- * Permission modes as one horizontal toggle, with the shown mode named below.
- * Each segment is a real menu radio item, so arrow keys reach it from the rest of the menu
- * and a pick closes the menu. Lives inside a Menu: the permissions chip, the model picker,
- * or the overflow menu.
- */
+/** Shares the permission controls between the model picker and the composer menus. */
 export function ComposerPermissionsSection(props: {
+  inline?: boolean;
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const gt = useGT();
   const messages = useMessages();
-  // Hover or keyboard focus previews a mode's name and description before a pick.
+  // Hover or keyboard focus previews the option without changing the applied mode.
   const [previewMode, setPreviewMode] = useState<RuntimeMode | null>(null);
   const shownMode = previewMode ?? props.runtimeMode;
   const shown =
     props.runtimeModeOptions.find((option) => option.mode === shownMode) ??
     resolveRuntimeModeOption("approval-required", messages);
   const descriptionId = useId();
+  const Group = props.inline ? "div" : MenuPrimitive.RadioGroup;
+  const Option = props.inline ? "button" : MenuPrimitive.RadioItem;
+  const tabStop = props.inline
+    ? (props.runtimeModeOptions.find(
+        (option) => option.mode === props.runtimeMode && !option.disabledReason,
+      ) ?? props.runtimeModeOptions.find((option) => !option.disabledReason))
+    : undefined;
   // Mounted only while a picker is open, so this asks the server again each time one opens.
   useProviderRuntimeModeLimits(use(RuntimeModeLimitsTargetContext), "picker");
   return (
-    <div data-composer-permissions className="grid w-72 gap-1.5 px-2 py-1.5">
+    <div
+      data-composer-permissions
+      className={cn(
+        "@container/permissions grid min-w-0 px-2",
+        props.inline ? "w-full gap-1 py-1" : "w-[min(24rem,calc(100vw-3rem))] gap-1.5 py-1.5",
+      )}
+    >
       <div className="font-medium text-muted-foreground text-xs">
         <T>Permissions</T>
       </div>
-      <MenuPrimitive.RadioGroup
-        aria-label={gt("Permissions")}
-        value={props.runtimeMode}
-        onValueChange={(value: RuntimeMode) => {
-          if (value !== props.runtimeMode) props.onRuntimeModeChange(value);
-        }}
-        className="flex rounded-lg bg-input/40 p-0.5"
-        // Menus navigate with Up/Down only; the row reads horizontally, so Left/Right move too.
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          const items = Array.from(
-            event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
-          );
-          const index = items.findIndex((item) => item === document.activeElement);
-          const next = items[index + (event.key === "ArrowRight" ? 1 : -1)];
-          if (index < 0 || !next) return;
-          event.preventDefault();
-          event.stopPropagation();
-          next.focus();
-        }}
-      >
-        {props.runtimeModeOptions.map((option) => {
-          const OptionIcon = option.icon;
-          return (
-            <MenuPrimitive.RadioItem
-              key={option.mode}
-              value={option.mode}
-              disabled={option.disabledReason !== undefined}
-              label={option.label}
-              aria-label={option.label}
-              aria-describedby={`${descriptionId}-${option.mode}`}
-              closeOnClick
-              onPointerEnter={() => setPreviewMode(option.mode)}
-              onPointerLeave={() => setPreviewMode(null)}
-              onFocus={() => setPreviewMode(option.mode)}
-              onBlur={() => setPreviewMode(null)}
-              className="flex h-6 flex-1 cursor-pointer items-center justify-center text-muted-foreground outline-none first:rounded-l-md last:rounded-r-md data-disabled:cursor-not-allowed data-disabled:opacity-40 data-checked:bg-input/72 data-checked:text-foreground data-highlighted:text-foreground not-data-checked:data-highlighted:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-            >
-              <OptionIcon aria-hidden="true" className="size-3.5" />
-            </MenuPrimitive.RadioItem>
-          );
-        })}
-      </MenuPrimitive.RadioGroup>
-      {/* Static per-mode descriptions for screen readers; the preview below is visual only. */}
-      {props.runtimeModeOptions.map((option) => (
-        <span key={option.mode} id={`${descriptionId}-${option.mode}`} className="sr-only">
-          {option.disabledReason ?? option.description}
-        </span>
-      ))}
-      <div className="grid gap-0.5" aria-hidden="true">
-        <span
-          className={
-            shownMode === props.runtimeMode
-              ? "text-foreground text-sm"
-              : "text-muted-foreground text-sm"
-          }
+      <div className="rounded-lg bg-input/40 p-0.5">
+        <Group
+          aria-label={gt("Permissions")}
+          {...(props.inline
+            ? { role: "radiogroup" }
+            : {
+                value: props.runtimeMode,
+                onValueChange: (value: RuntimeMode) => {
+                  if (value !== props.runtimeMode) props.onRuntimeModeChange(value);
+                },
+              })}
+          className="relative grid auto-cols-fr grid-flow-col"
+          // Menus navigate with Up/Down only; the row reads horizontally, so Left/Right move too.
+          onKeyDown={(event: KeyboardEvent<HTMLElement>) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            const items = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>(
+                props.inline ? '[role="radio"]:enabled' : '[role="menuitemradio"]',
+              ),
+            );
+            const index = items.findIndex((item) => item === document.activeElement);
+            const rtl = getComputedStyle(event.currentTarget).direction === "rtl";
+            const next = items[index + ((event.key === "ArrowRight") !== rtl ? 1 : -1)];
+            if (index < 0 || (!props.inline && !next)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            next?.focus();
+          }}
         >
-          {shown.label}
-        </span>
-        {/* Two lines reserved so the menu does not shift while you preview modes. */}
-        <span className="min-h-8 text-muted-foreground text-xs leading-4">
-          {shown.disabledReason ?? shown.description}
-        </span>
+          <ComposerSegmentIndicator
+            index={props.runtimeModeOptions.findIndex(
+              (option) => option.mode === (props.inline ? props.runtimeMode : shownMode),
+            )}
+            count={props.runtimeModeOptions.length}
+          />
+          {props.runtimeModeOptions.map((option) => {
+            const OptionIcon = option.icon;
+            return (
+              <Option
+                key={option.mode}
+                value={option.mode}
+                disabled={option.disabledReason !== undefined}
+                {...(props.inline
+                  ? {
+                      type: "button" as const,
+                      role: "radio",
+                      "aria-checked": option.mode === props.runtimeMode,
+                      "data-checked": option.mode === props.runtimeMode || undefined,
+                      tabIndex: option === tabStop ? 0 : -1,
+                      onClick: () => {
+                        if (option.mode !== props.runtimeMode)
+                          props.onRuntimeModeChange(option.mode);
+                      },
+                    }
+                  : { label: option.label, closeOnClick: true })}
+                aria-label={option.label}
+                aria-describedby={`${descriptionId}-${option.mode}`}
+                onPointerEnter={() => setPreviewMode(option.mode)}
+                onPointerLeave={() => setPreviewMode(null)}
+                onFocus={() => setPreviewMode(option.mode)}
+                onBlur={() => setPreviewMode(null)}
+                className={cn(
+                  COMPOSER_SEGMENT_CLASS,
+                  "relative h-auto min-h-7 min-w-0 px-1 py-1 text-center leading-tight disabled:cursor-not-allowed disabled:opacity-40 data-disabled:cursor-not-allowed data-disabled:opacity-40 data-highlighted:text-foreground @max-[18rem]/permissions:flex-col",
+                )}
+              >
+                <OptionIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                <span className={cn("min-w-0", props.inline ? "wrap-anywhere" : "truncate")}>
+                  {option.label}
+                </span>
+              </Option>
+            );
+          })}
+        </Group>
+      </div>
+      {/* Overlapping descriptions reserve the height of the longest wrapped text. */}
+      <div className="grid min-h-8 min-w-0 grid-cols-[minmax(0,1fr)] text-muted-foreground text-xs leading-4 wrap-anywhere">
+        {props.runtimeModeOptions.map((option) => (
+          <span
+            key={option.mode}
+            id={`${descriptionId}-${option.mode}`}
+            className={cn("col-start-1 row-start-1", option !== shown && "invisible")}
+          >
+            {option.disabledReason ?? option.description}
+          </span>
+        ))}
+        {!props.runtimeModeOptions.includes(shown) ? (
+          <span className="col-start-1 row-start-1">{shown.description}</span>
+        ) : null}
       </div>
     </div>
   );

@@ -45,12 +45,11 @@ export function dashboardLimitWindowLabel(pool: LimitPoolWindow, resolve: MFunct
   return pool.label;
 }
 
-export function limitDashboardHeading(
+export function limitDashboardAccountTitle(
   pool: LimitPool,
   providerLabel: string,
   accountNumber: number | undefined,
-  showEnvironments: boolean,
-): string {
+) {
   const account = isPerAccountDashboardDriver(pool.driver) ? pool.accounts[0] : undefined;
   const email = account?.email?.trim();
   const emailPrefix = email?.match(/^([^@]+)@[^@]+$/)?.[1];
@@ -63,6 +62,20 @@ export function limitDashboardHeading(
     !alias && !emailPrefix && accountNumber !== undefined
       ? `${providerLabel} #${accountNumber}`
       : providerLabel;
+  return { title, alias, emailPrefix };
+}
+
+export function limitDashboardHeading(
+  pool: LimitPool,
+  providerLabel: string,
+  accountNumber: number | undefined,
+  showEnvironments: boolean,
+): string {
+  const { title, alias, emailPrefix } = limitDashboardAccountTitle(
+    pool,
+    providerLabel,
+    accountNumber,
+  );
   const environments = showEnvironments
     ? collectLimitPoolEnvironments(pool).map(({ label }) => label)
     : [];

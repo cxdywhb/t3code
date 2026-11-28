@@ -81,7 +81,7 @@ function MenuSearchInput({
 }: Omit<InputProps, "className" | "size" | "unstyled" | "nativeInput"> & { busy?: boolean }) {
   return (
     <label className="block min-w-0 shrink-0 cursor-text px-2 pt-1.5 pb-1">
-      <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
+      <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-primary">
         {busy ? (
           <Spinner
             aria-hidden="true"

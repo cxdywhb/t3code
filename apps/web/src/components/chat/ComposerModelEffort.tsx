@@ -9,7 +9,7 @@ import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, WorkflowIcon } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 
 import { m, type MessageResolver } from "~/i18n/messages";
@@ -23,10 +23,14 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Switch } from "../ui/switch";
-import type { ComposerControlSize } from "./ComposerControl";
+import {
+  COMPOSER_SEGMENT_CLASS,
+  ComposerSegmentIndicator,
+  type ComposerControlSize,
+} from "./ComposerControl";
 import { ComposerEffortSlider } from "./ComposerEffortSlider";
 import { ComposerPermissionsSection, type RuntimeModeOption } from "./ComposerFooterControls";
-import { composerFloatingLayerProps, focusCheckedPermission } from "./composerEventScope";
+import { composerFloatingLayerProps } from "./composerEventScope";
 import { EffortGlyph, FastBolt, resolveEffortGlyph } from "./EffortGlyph";
 import {
   getTraitsSectionVisibility,
@@ -284,13 +288,18 @@ function moveBetweenRows(event: KeyboardEvent<HTMLElement>) {
   next.scrollIntoView({ block: "nearest" });
 }
 
-function EffortLevels(props: { traits: TraitsSelectionInput }) {
+function EffortLevels(props: { traits: TraitsSelectionInput; moveCyberAccess?: boolean }) {
   const gt = useGT();
   const traits = useTraitsSelection(props.traits);
-  const { effort, others, speedSelect, fastToggle } = columnControls(
-    traits.selectDescriptors,
-    traits.booleanDescriptors,
-  );
+  const {
+    effort,
+    others: allOthers,
+    speedSelect,
+    fastToggle,
+  } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
+  const others = props.moveCyberAccess
+    ? allOthers.filter((control) => control.descriptor.id !== "cyberAccessProgram")
+    : allOthers;
   const speed = speedSelect
     ? traits.currentLabel(speedSelect)
     : fastToggle && (fastToggle.currentValue === true ? "Fast" : "Standard");
@@ -457,6 +466,7 @@ function OptionMenuRow(props: {
   traits: TraitsSelection;
   /** Holds the column's tab stop when the model has no levels. */
   tabStop: boolean;
+  advanced?: boolean;
 }) {
   const gt = useGT();
   const { descriptor, traits } = props;
@@ -487,8 +497,12 @@ function OptionMenuRow(props: {
             type="button"
             data-effort-row
             tabIndex={props.tabStop ? 0 : -1}
-            aria-label={`${descriptor.label}: ${current}`}
-            className={cn(OPTION_ROW, "data-popup-open:bg-foreground/[0.09]")}
+            aria-label={props.advanced ? undefined : `${descriptor.label}: ${current}`}
+            aria-description={props.advanced ? `${descriptor.label}: ${current}` : undefined}
+            className={cn(
+              props.advanced ? [COMPOSER_SEGMENT_CLASS, "ms-auto"] : OPTION_ROW,
+              "data-popup-open:bg-foreground/[0.09]",
+            )}
             onKeyDown={(event) => {
               if (event.key !== "ArrowRight") return;
               event.preventDefault();
@@ -498,7 +512,11 @@ function OptionMenuRow(props: {
           />
         }
       >
-        <OptionRowText label={descriptor.label} value={current} />
+        {props.advanced ? (
+          gt("Advanced")
+        ) : (
+          <OptionRowText label={descriptor.label} value={current} />
+        )}
         <ChevronRightIcon
           aria-hidden="true"
           className="-me-1 size-3.5 shrink-0 text-muted-foreground"
@@ -609,19 +627,19 @@ function EffortColumnLayout(props: { label: string | null; children: ReactNode }
 }
 
 /** The model picker's effort column: the selected model's levels and its other options. */
-export function ComposerEffortColumn(props: { traits: TraitsSelectionInput | null }) {
+export function ComposerEffortColumn(props: {
+  traits: TraitsSelectionInput | null;
+  moveCyberAccess?: boolean;
+}) {
   const gt = useGT();
   return props.traits ? (
-    <EffortLevels traits={props.traits} />
+    <EffortLevels traits={props.traits} moveCyberAccess={props.moveCyberAccess === true} />
   ) : (
     <EffortColumnLayout label={gt("Effort", { $context: "heading for reasoning effort levels" })}>
       <NoEffortRow />
     </EffortColumnLayout>
   );
 }
-
-const FOOTER_SEGMENT =
-  "flex h-6 cursor-pointer items-center justify-center gap-1 px-2 text-muted-foreground text-xs outline-none rounded-md hover:text-foreground data-checked:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
 
 function SpeedSegment(props: {
   checked: boolean;
@@ -637,7 +655,7 @@ function SpeedSegment(props: {
     role: "radio",
     "aria-checked": props.checked,
     "data-checked": props.checked || undefined,
-    className: cn(FOOTER_SEGMENT, "relative"),
+    className: cn(COMPOSER_SEGMENT_CLASS, "relative"),
     onClick: props.onPick,
   } as const;
   const content = (
@@ -682,17 +700,7 @@ function SpeedControl(props: { traits: TraitsSelectionInput }) {
       className="rounded-lg bg-input/40 p-0.5"
     >
       <div className="relative grid auto-cols-fr grid-flow-col">
-        {index >= 0 && (
-          <span
-            aria-hidden="true"
-            data-speed-indicator
-            className="pointer-events-none absolute inset-y-0 start-0 rounded-md bg-input/72 motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out [--slide-direction:1] rtl:[--slide-direction:-1]"
-            style={{
-              width: `${100 / count}%`,
-              transform: `translateX(calc(${100 * index}% * var(--slide-direction)))`,
-            }}
-          />
-        )}
+        <ComposerSegmentIndicator index={index} count={count} />
         {speedSelect
           ? choices.map((option) => (
               <SpeedSegment
@@ -739,7 +747,7 @@ function UltracodeControl(props: { traits: TraitsSelectionInput }) {
         type="button"
         aria-pressed={on}
         data-checked={on || undefined}
-        className={cn(FOOTER_SEGMENT, "data-checked:bg-input/72")}
+        className={cn(COMPOSER_SEGMENT_CLASS, "data-checked:bg-input/72")}
         onClick={() => traits.changeBoolean(ultracodeToggle.id, !on)}
       >
         <WorkflowIcon aria-hidden="true" className="size-3" />
@@ -749,50 +757,19 @@ function UltracodeControl(props: { traits: TraitsSelectionInput }) {
   );
 }
 
-/** Permissions change rarely, so the footer names the mode and nests the choice in a menu. */
-function PermissionsMenu(props: {
-  runtimeMode: RuntimeMode;
-  options: ReadonlyArray<RuntimeModeOption>;
-  onChange: (mode: RuntimeMode) => void;
-}) {
-  const gt = useGT();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const current = props.options.find((option) => option.mode === props.runtimeMode);
-  if (!current) return null;
-  const CurrentIcon = current.icon;
-  return (
-    <Menu
-      onOpenChangeComplete={(open) => {
-        if (open) focusCheckedPermission(triggerRef.current);
-      }}
-    >
-      <MenuTrigger
-        render={
-          <button
-            ref={triggerRef}
-            type="button"
-            data-composer-permissions-trigger
-            aria-label={gt("Permissions: {mode}", { mode: current.label })}
-            className="ms-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs outline-none hover:bg-foreground/[0.09] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset data-popup-open:bg-foreground/[0.09] data-popup-open:text-foreground"
-          />
-        }
-      >
-        <CurrentIcon aria-hidden="true" className="size-3.5" />
-        {current.label}
-        <ChevronUpIcon aria-hidden="true" className="size-3" />
-      </MenuTrigger>
-      <MenuPopup side="top" align="end" {...composerFloatingLayerProps}>
-        <ComposerPermissionsSection
-          runtimeMode={props.runtimeMode}
-          runtimeModeOptions={props.options}
-          onRuntimeModeChange={props.onChange}
-        />
-      </MenuPopup>
-    </Menu>
-  );
+function CyberAccessControl(props: { traits: TraitsSelectionInput }) {
+  const traits = useTraitsSelection(props.traits);
+  const descriptor = traits.selectDescriptors.find((option) => option.id === "cyberAccessProgram");
+  if (
+    traits.modelIsUnavailable ||
+    !descriptor ||
+    selectableProviderOptionChoices(descriptor).length < 2
+  ) {
+    return null;
+  }
+  return <OptionMenuRow descriptor={descriptor} traits={traits} tabStop advanced />;
 }
 
-/** The model picker's footer: speed stays one click away, permissions sit one menu deeper. */
 export function ComposerPickerFooter(props: {
   traits: TraitsSelectionInput | null;
   runtimeMode: RuntimeMode;
@@ -800,14 +777,22 @@ export function ComposerPickerFooter(props: {
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2">
-      {props.traits ? <SpeedControl traits={props.traits} /> : null}
-      {props.traits ? <UltracodeControl traits={props.traits} /> : null}
-      <PermissionsMenu
-        runtimeMode={props.runtimeMode}
-        options={props.runtimeModeOptions}
-        onChange={props.onRuntimeModeChange}
-      />
+    <div className="border-t border-border/70">
+      <div className="px-2 pt-1">
+        <ComposerPermissionsSection
+          inline
+          runtimeMode={props.runtimeMode}
+          runtimeModeOptions={props.runtimeModeOptions}
+          onRuntimeModeChange={props.onRuntimeModeChange}
+        />
+      </div>
+      {props.traits ? (
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2 empty:hidden">
+          <SpeedControl traits={props.traits} />
+          <UltracodeControl traits={props.traits} />
+          <CyberAccessControl traits={props.traits} />
+        </div>
+      ) : null}
     </div>
   );
 }

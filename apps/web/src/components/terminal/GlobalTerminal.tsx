@@ -2,13 +2,15 @@ import { useAtomValue } from "@effect/atom-react";
 import { AuthTerminalReadScope, type EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { T, useGT } from "gt-react";
-import { TerminalIcon, XIcon } from "lucide-react";
+import { SquareTerminalIcon, XIcon } from "lucide-react";
 import { lazy, Suspense, useEffect, useEffectEvent, useRef } from "react";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
 import { Button } from "../ui/button";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { toastManager } from "../ui/toast";
+import { ToolbarButton } from "../ui/toggle";
 import { showGlobalTerminal, useGlobalTerminalStore } from "./globalTerminalStore";
 
 import { useGlobalTerminalEnvironmentId } from "./globalTerminalTarget";
@@ -20,22 +22,22 @@ const GlobalTerminalPanel = lazy(() =>
 export function GlobalTerminalButton() {
   const gt = useGT();
   const environmentId = useGlobalTerminalEnvironmentId();
+  const label = gt("Global terminal");
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      disabled={!environmentId}
-      aria-label={gt("Global terminal")}
-      title={gt("Global terminal")}
-      onClick={() => {
-        if (environmentId)
-          void showGlobalTerminal(environmentId).catch(() =>
-            toastManager.add({ type: "error", title: gt("Could not open the global terminal") }),
-          );
-      }}
-    >
-      <TerminalIcon />
-    </Button>
+    <SharedTooltipTrigger render={<span className="flex shrink-0" />} label={label} side="bottom">
+      <ToolbarButton
+        disabled={!environmentId}
+        aria-label={label}
+        onClick={() => {
+          if (environmentId)
+            void showGlobalTerminal(environmentId).catch(() =>
+              toastManager.add({ type: "error", title: gt("Could not open the global terminal") }),
+            );
+        }}
+      >
+        <SquareTerminalIcon className="size-4" />
+      </ToolbarButton>
+    </SharedTooltipTrigger>
   );
 }
 
