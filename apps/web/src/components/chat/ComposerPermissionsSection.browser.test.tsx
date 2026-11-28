@@ -20,10 +20,15 @@ import { resolveRuntimeModeOption, runtimeModeOptions } from "./runtimeModeConfi
 
 const options = runtimeModeOptions.map((mode) => resolveRuntimeModeOption(mode));
 
-it.each([300, 360])("keeps all inline permission labels visible at %spx", async (width) => {
+it.each([300, 360])("keeps all permission card labels visible at %spx", async (width) => {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(width, viewport.height);
+  await using _restoreViewport = {
+    [Symbol.asyncDispose]: () => page.viewport(viewport.width, viewport.height),
+  };
   const labels = ["需审批", "编辑免审", "自动", "完全访问"];
   await using screen = await render(
-    <div style={{ width }}>
+    <div className="pt-36">
       <ComposerPickerFooter
         traits={null}
         runtimeMode="full-access"
@@ -33,8 +38,9 @@ it.each([300, 360])("keeps all inline permission labels visible at %spx", async 
     </div>,
     { router: false },
   );
+  await screen.getByRole("button", { name: "Permissions: 完全访问" }).click();
   for (const label of labels) {
-    const radio = screen.getByRole("radio", { name: label });
+    const radio = page.getByRole("menuitemradio", { name: label });
     await expect.element(radio).toBeVisible();
     const text = radio.element().querySelector("span")!;
     expect(text.scrollWidth).toBeLessThanOrEqual(text.clientWidth);
@@ -129,7 +135,7 @@ it("returns focus to the editor after a pick", async () => {
   await vi.waitFor(() => expect(handle.focusAtEnd).toHaveBeenCalled());
 });
 
-// Mirrors the model picker: a composer popover with inline permissions.
+// Mirrors the model picker: a composer popover with a permissions menu.
 function PickerWithPermissions() {
   const [mode, setMode] = useState<RuntimeMode>("full-access");
   const composerMenuProps = useComposerMenuProps();
@@ -159,7 +165,7 @@ it("on a touch tablet, tapping outside the model picker leaves the editor unfocu
   const { handle, ui } = withComposer(<PickerWithPermissions />);
   await using screen = await render(ui, { router: false }); // no routes involved
   await userEvent.click(screen.getByRole("button", { name: "Model" }));
-  const fullAccess = page.getByRole("radio", { name: "Full access" });
+  const fullAccess = page.getByRole("button", { name: "Permissions: Full access" });
   await expect.element(fullAccess).toBeInTheDocument();
   await userEvent.click(screen.getByText("Timeline"));
   await expect.element(fullAccess).not.toBeInTheDocument();

@@ -110,7 +110,6 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
 
 /** Shares the permission controls between the model picker and the composer menus. */
 export function ComposerPermissionsSection(props: {
-  inline?: boolean;
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -124,81 +123,54 @@ export function ComposerPermissionsSection(props: {
     props.runtimeModeOptions.find((option) => option.mode === shownMode) ??
     resolveRuntimeModeOption("approval-required", messages);
   const descriptionId = useId();
-  const Group = props.inline ? "div" : MenuPrimitive.RadioGroup;
-  const Option = props.inline ? "button" : MenuPrimitive.RadioItem;
-  const tabStop = props.inline
-    ? (props.runtimeModeOptions.find(
-        (option) => option.mode === props.runtimeMode && !option.disabledReason,
-      ) ?? props.runtimeModeOptions.find((option) => !option.disabledReason))
-    : undefined;
   // Mounted only while a picker is open, so this asks the server again each time one opens.
   useProviderRuntimeModeLimits(use(RuntimeModeLimitsTargetContext), "picker");
   return (
     <div
       data-composer-permissions
-      className={cn(
-        "@container/permissions grid min-w-0 px-2",
-        props.inline ? "w-full gap-1 py-1" : "w-[min(24rem,calc(100vw-3rem))] gap-1.5 py-1.5",
-      )}
+      className="@container/permissions grid w-[min(21rem,calc(100vw-3rem))] min-w-0 gap-2 px-2 py-1.5"
     >
       <div className="font-medium text-muted-foreground text-xs">
         <T>Permissions</T>
       </div>
       <div className="rounded-lg bg-input/40 p-0.5">
-        <Group
+        <MenuPrimitive.RadioGroup
           aria-label={gt("Permissions")}
-          {...(props.inline
-            ? { role: "radiogroup" }
-            : {
-                value: props.runtimeMode,
-                onValueChange: (value: RuntimeMode) => {
-                  if (value !== props.runtimeMode) props.onRuntimeModeChange(value);
-                },
-              })}
-          className="relative grid auto-cols-fr grid-flow-col"
+          value={props.runtimeMode}
+          onValueChange={(value: RuntimeMode) => {
+            if (value !== props.runtimeMode) props.onRuntimeModeChange(value);
+          }}
+          className="relative grid auto-cols-fr grid-flow-col [&>[data-composer-segment-indicator]]:bg-background [&>[data-composer-segment-indicator]]:shadow-xs"
           // Menus navigate with Up/Down only; the row reads horizontally, so Left/Right move too.
           onKeyDown={(event: KeyboardEvent<HTMLElement>) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
             const items = Array.from(
               event.currentTarget.querySelectorAll<HTMLElement>(
-                props.inline ? '[role="radio"]:enabled' : '[role="menuitemradio"]',
+                '[role="menuitemradio"]:not([data-disabled])',
               ),
             );
             const index = items.findIndex((item) => item === document.activeElement);
             const rtl = getComputedStyle(event.currentTarget).direction === "rtl";
             const next = items[index + ((event.key === "ArrowRight") !== rtl ? 1 : -1)];
-            if (index < 0 || (!props.inline && !next)) return;
+            if (index < 0 || !next) return;
             event.preventDefault();
             event.stopPropagation();
-            next?.focus();
+            next.focus();
           }}
         >
           <ComposerSegmentIndicator
-            index={props.runtimeModeOptions.findIndex(
-              (option) => option.mode === (props.inline ? props.runtimeMode : shownMode),
-            )}
+            index={props.runtimeModeOptions.findIndex((option) => option.mode === shownMode)}
             count={props.runtimeModeOptions.length}
           />
           {props.runtimeModeOptions.map((option) => {
             const OptionIcon = option.icon;
             return (
-              <Option
+              <MenuPrimitive.RadioItem
                 key={option.mode}
                 value={option.mode}
                 disabled={option.disabledReason !== undefined}
-                {...(props.inline
-                  ? {
-                      type: "button" as const,
-                      role: "radio",
-                      "aria-checked": option.mode === props.runtimeMode,
-                      "data-checked": option.mode === props.runtimeMode || undefined,
-                      tabIndex: option === tabStop ? 0 : -1,
-                      onClick: () => {
-                        if (option.mode !== props.runtimeMode)
-                          props.onRuntimeModeChange(option.mode);
-                      },
-                    }
-                  : { label: option.label, closeOnClick: true })}
+                label={option.label}
+                closeOnClick
                 aria-label={option.label}
                 aria-describedby={`${descriptionId}-${option.mode}`}
                 onPointerEnter={() => setPreviewMode(option.mode)}
@@ -207,17 +179,15 @@ export function ComposerPermissionsSection(props: {
                 onBlur={() => setPreviewMode(null)}
                 className={cn(
                   COMPOSER_SEGMENT_CLASS,
-                  "relative h-auto min-h-7 min-w-0 px-1 py-1 text-center leading-tight disabled:cursor-not-allowed disabled:opacity-40 data-disabled:cursor-not-allowed data-disabled:opacity-40 data-highlighted:text-foreground @max-[18rem]/permissions:flex-col",
+                  "relative h-auto min-h-7 min-w-0 px-1 py-1 text-center leading-tight disabled:cursor-not-allowed disabled:opacity-40 data-disabled:cursor-not-allowed data-disabled:opacity-40 data-highlighted:text-foreground data-checked:text-primary @max-[19rem]/permissions:flex-col",
                 )}
               >
                 <OptionIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                <span className={cn("min-w-0", props.inline ? "wrap-anywhere" : "truncate")}>
-                  {option.label}
-                </span>
-              </Option>
+                <span className="min-w-0 wrap-anywhere">{option.label}</span>
+              </MenuPrimitive.RadioItem>
             );
           })}
-        </Group>
+        </MenuPrimitive.RadioGroup>
       </div>
       {/* Overlapping descriptions reserve the height of the longest wrapped text. */}
       <div className="grid min-h-8 min-w-0 grid-cols-[minmax(0,1fr)] text-muted-foreground text-xs leading-4 wrap-anywhere">

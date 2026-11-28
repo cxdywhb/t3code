@@ -138,6 +138,7 @@ import {
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
+import { useRemoveProjectMembers } from "../hooks/useRemoveProjectMembers";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
@@ -1348,6 +1349,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const openLocalProjectFolder = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,
   });
+  const removeProjectMembers = useRemoveProjectMembers();
   const handleProjectFolderContextMenu = useStableCallback(
     (
       group: SidebarProjectSnapshot,
@@ -1365,6 +1367,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         readEnvironmentScope(localProject.environmentId, AuthOrchestrationOperateScope)
           ? localProject
           : null;
+      const canRemoveProject = group.memberProjects.every((member) =>
+        readEnvironmentScope(member.environmentId, AuthOrchestrationOperateScope),
+      );
       void (async () => {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
@@ -1382,6 +1387,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   ]
                 : []),
               { id: "project-settings", label: gt("Project settings"), icon: "settings" },
+              ...(canRemoveProject
+                ? [
+                    {
+                      id: "remove-project",
+                      label: gt("Remove project"),
+                      icon: "trash",
+                      destructive: true,
+                    } as const,
+                  ]
+                : []),
             ],
             position,
             source,
@@ -1414,6 +1429,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "pin":
           case "unpin":
             setProjectGroupPinned(group, clicked.value === "pin");
+            return;
+          case "remove-project":
+            if (canRemoveProject) {
+              const allMembers = projectGroups.find(
+                (projectGroup) => projectGroup.projectKey === group.projectKey,
+              )?.memberProjects;
+              await removeProjectMembers(group, group.memberProjects, allMembers);
+            }
             return;
           case "project-settings":
             openProjectSettings(group);

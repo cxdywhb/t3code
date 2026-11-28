@@ -111,6 +111,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       } as CSSProperties)
     : undefined;
   const badgeContent = props.badgeContent ?? "initials";
+  const centeredBadge =
+    props.driverKind === "codex" && props.showBadge && badgeContent === "initials";
   const iconClassName = cn(props.size === "compact" && "size-3.5", props.iconClassName);
   const isAcpRegistry = props.driverKind === "acpRegistry";
   // A custom OpenAI-compatible endpoint has no brand: show its name, marked with the protocol.
@@ -121,6 +123,72 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     iconUrl: props.acpRegistryIconUrl,
   });
 
+  const providerIcon = isAcpRegistry ? (
+    <AcpRegistryAgentIcon
+      className={cn("size-5 rounded-none bg-transparent", iconClassName)}
+      fallbackClassName="size-full"
+      icon={acpRegistryIconUrl}
+    />
+  ) : isCustomEndpoint ? (
+    // The tile is a size container: below ~18px it keeps one letter and drops the mark.
+    <span
+      className={cn(
+        "@container relative flex size-5 shrink-0 items-center justify-center rounded-md border bg-card text-4xs font-semibold leading-none text-foreground",
+        iconClassName,
+      )}
+      aria-hidden
+    >
+      {Array.from(providerInstanceInitials(props.displayName))[0]}
+      <span className="@max-[1.1rem]:hidden">
+        {Array.from(providerInstanceInitials(props.displayName)).slice(1).join("")}
+      </span>
+      <span
+        className={cn(
+          "pointer-events-none absolute right-[-0.3125rem] bottom-[-0.3125rem] z-10 flex size-3 items-center justify-center rounded-full border bg-card text-foreground shadow-sm @max-[1.1rem]:hidden",
+          props.badgeClassName,
+        )}
+        style={{ borderColor: indicatorBackground }}
+      >
+        <OpenAI className="size-2" />
+      </span>
+    </span>
+  ) : packageIcon ? (
+    <ProviderPackageIcon
+      icon={packageIcon}
+      className={cn("size-5 shrink-0", iconClassName)}
+      aria-hidden
+    />
+  ) : Icon ? (
+    <Icon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
+  ) : (
+    <span className={cn("text-3xs font-semibold leading-none", iconClassName)}>
+      {providerInstanceInitials(props.displayName)}
+    </span>
+  );
+
+  const badge =
+    !isCustomEndpoint && props.showBadge ? (
+      <span
+        className={cn(
+          "pointer-events-none absolute z-10 flex items-center justify-center rounded-full border font-semibold leading-none",
+          centeredBadge
+            ? "start-1/2 top-[calc(100%-3px)] h-2 min-w-3.5 -translate-x-1/2 text-5xs/none shadow-xs rtl:translate-x-1/2"
+            : "right-0 bottom-0 h-3.5 min-w-3.5 px-0.5 text-4xs shadow-sm",
+          accentColor
+            ? "bg-(--provider-accent) text-(--provider-accent-foreground)"
+            : "bg-card text-muted-foreground",
+          !centeredBadge &&
+            props.size === "compact" &&
+            "right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs",
+          !centeredBadge && props.badgeClassName,
+        )}
+        style={{ borderColor: indicatorBackground }}
+        aria-hidden
+      >
+        {badgeContent === "initials" ? providerInstanceInitials(props.displayName) : null}
+      </span>
+    ) : null;
+
   return (
     <span
       className={cn(
@@ -130,65 +198,17 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       style={accentStyle}
       data-provider-accent-color={accentColor}
     >
-      {isAcpRegistry ? (
-        <AcpRegistryAgentIcon
-          className={cn("size-5 rounded-none bg-transparent", iconClassName)}
-          fallbackClassName="size-full"
-          icon={acpRegistryIconUrl}
-        />
-      ) : isCustomEndpoint ? (
-        // The tile is a size container: below ~18px it keeps one letter and drops the mark.
-        <span
-          className={cn(
-            "@container relative flex size-5 shrink-0 items-center justify-center rounded-md border bg-card text-4xs font-semibold leading-none text-foreground",
-            iconClassName,
-          )}
-          aria-hidden
-        >
-          {Array.from(providerInstanceInitials(props.displayName))[0]}
-          <span className="@max-[1.1rem]:hidden">
-            {Array.from(providerInstanceInitials(props.displayName)).slice(1).join("")}
-          </span>
-          <span
-            className={cn(
-              "pointer-events-none absolute right-[-0.3125rem] bottom-[-0.3125rem] z-10 flex size-3 items-center justify-center rounded-full border bg-card text-foreground shadow-sm @max-[1.1rem]:hidden",
-              props.badgeClassName,
-            )}
-            style={{ borderColor: indicatorBackground }}
-          >
-            <OpenAI className="size-2" />
-          </span>
+      {centeredBadge ? (
+        <span className="relative inline-flex -translate-y-0.5">
+          {providerIcon}
+          {badge}
         </span>
-      ) : packageIcon ? (
-        <ProviderPackageIcon
-          icon={packageIcon}
-          className={cn("size-5 shrink-0", iconClassName)}
-          aria-hidden
-        />
-      ) : Icon ? (
-        <Icon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
       ) : (
-        <span className={cn("text-3xs font-semibold leading-none", iconClassName)}>
-          {providerInstanceInitials(props.displayName)}
-        </span>
+        <>
+          {providerIcon}
+          {badge}
+        </>
       )}
-      {isCustomEndpoint ? null : props.showBadge ? (
-        <span
-          className={cn(
-            "pointer-events-none absolute right-0 bottom-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border px-0.5 text-4xs font-semibold leading-none shadow-sm",
-            accentColor
-              ? "bg-(--provider-accent) text-(--provider-accent-foreground)"
-              : "bg-card text-muted-foreground",
-            props.size === "compact" &&
-              "right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs",
-            props.badgeClassName,
-          )}
-          style={{ borderColor: indicatorBackground }}
-          aria-hidden
-        >
-          {badgeContent === "initials" ? providerInstanceInitials(props.displayName) : null}
-        </span>
-      ) : null}
     </span>
   );
 });

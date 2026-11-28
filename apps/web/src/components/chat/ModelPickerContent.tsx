@@ -29,7 +29,7 @@ import {
 } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { ModelListRow } from "./ModelListRow";
-import { ModelPickerSidebar } from "./ModelPickerSidebar";
+import { ModelPickerProviderBar } from "./ModelPickerProviderBar";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
 import {
@@ -177,6 +177,7 @@ const MODEL_LIST_ESTIMATED_ITEM_SIZE = 32;
 const ROW_UNITS = 8;
 const ROW_SEPARATOR_UNITS = 0.5;
 const LIST_CHROME_UNITS = 15.5;
+const PROVIDER_BAR_UNITS = 11;
 
 function ModelListSeparator() {
   return <div className="h-0.5" />;
@@ -298,10 +299,7 @@ function ModelPickerList({
 
   return (
     <div
-      className={cn(
-        "relative min-h-0 overflow-hidden pr-px",
-        itemKeys.length === 0 ? "h-0" : "flex-1",
-      )}
+      className={cn("relative min-h-0 overflow-hidden", itemKeys.length === 0 ? "h-0" : "flex-1")}
     >
       <ComboboxListVirtualized>
         <LegendList<string>
@@ -313,19 +311,18 @@ function ModelPickerList({
           estimatedItemSize={MODEL_LIST_ESTIMATED_ITEM_SIZE}
           drawDistance={480}
           recycleItems
-          contentContainerClassName="pl-2 pr-px"
+          contentContainerClassName="px-2"
           ItemSeparatorComponent={ModelListSeparator}
           onLayout={updateScrollFades}
           onScroll={updateScrollFades}
           onReady={updateScrollFades}
           className={cn(
-            "scrollbar-gutter-stable h-full overflow-x-hidden overscroll-y-contain py-1.5 [&::-webkit-scrollbar-track]:my-2",
+            "h-full overflow-x-hidden overscroll-y-contain py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
             getVirtualizedScrollFadeClassName({
               top: showTopScrollFade,
               bottom: showBottomScrollFade,
             }),
-            docked &&
-              "overscroll-y-auto [--fade-size:0.375rem] [--app-scrollbar-width:3px] [--app-scrollbar-thumb:color-mix(in_srgb,var(--foreground)_18%,transparent)] [--app-scrollbar-thumb-hover:color-mix(in_srgb,var(--foreground)_32%,transparent)]",
+            docked && "overscroll-y-auto [--fade-size:0.375rem]",
           )}
         />
       </ComboboxListVirtualized>
@@ -644,7 +641,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
   const isLocked = lockedProvider !== null;
   const isSearching = searchQuery.trim().length > 0;
-  // Fit the tallest tab so switching tabs never resizes the popup and moves the rail under the cursor.
+  // Fit the tallest tab so switching tabs never resizes the popup and moves the provider bar under the cursor.
   const tallestTabUnits = (() => {
     const unitsByTab = new Map<ProviderInstanceId | "favorites", number>();
     const addRow = (tab: ProviderInstanceId | "favorites") => {
@@ -683,7 +680,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return disabled;
   })();
-  const sidebarInstanceEntries = (() => {
+  const providerBarEntries = (() => {
     const enabledEntries = instanceEntries.filter(isProviderInstancePickerVisible);
     if (!isLocked) {
       return enabledEntries;
@@ -699,7 +696,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return [...available, ...disabled];
   })();
-  const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const providerBarUnits = providerBarEntries.length > 0 ? PROVIDER_BAR_UNITS : 0;
+  const showProviderBar = !isSearching && providerBarUnits > 0;
   const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
 
   const filteredModels = (() => {
@@ -921,7 +919,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       event.preventDefault();
       event.stopPropagation();
       const next = adjacentModelPickerProvider({
-        entries: sidebarInstanceEntries,
+        entries: providerBarEntries,
         selectedInstanceId,
         direction: command === "modelPicker.nextProvider" ? 1 : -1,
         disabledInstanceIds: lockedDisabledInstanceIds,
@@ -964,34 +962,28 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       <div
         ref={pickerContentRef}
         className={cn(
-          "relative flex w-screen max-w-90 flex-row overflow-hidden",
-          props.docked
-            ? cn(
-                "w-90 max-w-[calc(100dvw-1rem)]",
-                showSidebar &&
-                  "min-h-22 pl-11 [&>[data-model-picker-sidebar]]:absolute [&>[data-model-picker-sidebar]]:inset-y-0 [&>[data-model-picker-sidebar]]:left-0",
-              )
-            : "max-h-86.5",
+          "relative flex w-screen max-w-90 flex-col overflow-hidden",
+          props.docked ? "w-90 max-w-[calc(100dvw-1rem)]" : "max-h-86.5",
         )}
         style={
           props.docked
             ? {
-                height: `min(calc(var(--spacing) * ${6 * ROW_UNITS + 5 * ROW_SEPARATOR_UNITS + LIST_CHROME_UNITS} + 1px), calc(45dvh + 2.6875rem))`,
+                height: `min(calc(var(--spacing) * ${6 * ROW_UNITS + 5 * ROW_SEPARATOR_UNITS + LIST_CHROME_UNITS + providerBarUnits} + 1px), calc(45dvh + 2.6875rem))`,
               }
             : isSearching
               ? { height: searchHeight }
               : {
-                  minHeight: `min(calc(var(--spacing) * ${tallestTabUnits + LIST_CHROME_UNITS} + 1px), calc(var(--spacing) * 86.5))`,
+                  minHeight: `min(calc(var(--spacing) * ${tallestTabUnits + LIST_CHROME_UNITS + providerBarUnits} + 1px), calc(var(--spacing) * 86.5))`,
                 }
         }
         data-model-picker-content="true"
       >
-        {showSidebar && (
-          <ModelPickerSidebar
+        {showProviderBar && (
+          <ModelPickerProviderBar
             selectedInstanceId={selectedInstanceId}
             onSelectInstance={handleSelectInstance}
             onFocusSearch={focusSearchInput}
-            instanceEntries={sidebarInstanceEntries}
+            instanceEntries={providerBarEntries}
             showFavorites
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
@@ -1053,14 +1045,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             }
           }}
         >
-          <div
-            className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/40",
-              showSidebar && "border-l border-border/70",
-            )}
-          >
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/40">
             <ComboboxSearchInput
-              tone="neutral"
               ref={searchInputRef}
               placeholder={gt("Search models...")}
               value={searchQuery}
@@ -1077,20 +1063,20 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   return;
                 }
                 if (
-                  showSidebar &&
+                  showProviderBar &&
                   !e.altKey &&
                   !e.ctrlKey &&
                   !e.metaKey &&
                   ((e.key === "ArrowLeft" && !e.shiftKey && searchQuery.length === 0) ||
                     (e.key === "Tab" && e.shiftKey))
                 ) {
-                  const sidebar = e.currentTarget
+                  const providerBar = e.currentTarget
                     .closest("[data-model-picker-content]")
-                    ?.querySelector("[data-model-picker-sidebar]");
+                    ?.querySelector("[data-model-picker-provider-bar]");
                   const button =
-                    sidebar?.querySelector<HTMLButtonElement>(
+                    providerBar?.querySelector<HTMLButtonElement>(
                       'button[aria-pressed="true"]:not(:disabled)',
-                    ) ?? sidebar?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+                    ) ?? providerBar?.querySelector<HTMLButtonElement>("button:not(:disabled)");
                   if (button) {
                     e.preventDefault();
                     e.stopPropagation();

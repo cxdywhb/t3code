@@ -9,7 +9,7 @@ import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { CheckIcon, ChevronRightIcon, WorkflowIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 
 import { m, type MessageResolver } from "~/i18n/messages";
@@ -30,7 +30,8 @@ import {
 } from "./ComposerControl";
 import { ComposerEffortSlider } from "./ComposerEffortSlider";
 import { ComposerPermissionsSection, type RuntimeModeOption } from "./ComposerFooterControls";
-import { composerFloatingLayerProps } from "./composerEventScope";
+import { composerFloatingLayerProps, focusRequestedPermission } from "./composerEventScope";
+import { resolveRuntimeModeOption } from "./runtimeModeConfig";
 import { EffortGlyph, FastBolt, resolveEffortGlyph } from "./EffortGlyph";
 import {
   getTraitsSectionVisibility,
@@ -776,23 +777,56 @@ export function ComposerPickerFooter(props: {
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
+  const permissionTriggerRef = useRef<HTMLButtonElement>(null);
+  const current =
+    props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
+    resolveRuntimeModeOption("approval-required", messages);
+  const CurrentIcon = current.icon;
   return (
-    <div className="border-t border-border/70">
-      <div className="px-2 pt-1">
-        <ComposerPermissionsSection
-          inline
-          runtimeMode={props.runtimeMode}
-          runtimeModeOptions={props.runtimeModeOptions}
-          onRuntimeModeChange={props.onRuntimeModeChange}
-        />
-      </div>
+    <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2">
       {props.traits ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2 empty:hidden">
+        <>
           <SpeedControl traits={props.traits} />
           <UltracodeControl traits={props.traits} />
-          <CyberAccessControl traits={props.traits} />
-        </div>
+        </>
       ) : null}
+      <div className="ms-auto flex items-center gap-1">
+        {props.traits ? <CyberAccessControl traits={props.traits} /> : null}
+        <Menu
+          modal={false}
+          onOpenChangeComplete={(open) =>
+            focusRequestedPermission(open, permissionTriggerRef.current)
+          }
+        >
+          <MenuTrigger
+            render={
+              <button
+                ref={permissionTriggerRef}
+                type="button"
+                data-composer-permissions-trigger
+                aria-label={gt("Permissions: {mode}", { mode: current.label })}
+                className={cn(
+                  COMPOSER_SEGMENT_CLASS,
+                  "group h-7 whitespace-nowrap data-popup-open:bg-input/72 data-popup-open:text-foreground",
+                )}
+              />
+            }
+          >
+            <CurrentIcon aria-hidden="true" className="size-3.5" />
+            {current.label}
+            <ChevronUpIcon aria-hidden="true" className="size-3 group-aria-expanded:rotate-180" />
+          </MenuTrigger>
+          <MenuPopup side="top" align="end" width="content" {...composerFloatingLayerProps}>
+            <ComposerPermissionsSection
+              runtimeMode={props.runtimeMode}
+              runtimeModeOptions={props.runtimeModeOptions}
+              onRuntimeModeChange={props.onRuntimeModeChange}
+            />
+          </MenuPopup>
+        </Menu>
+      </div>
     </div>
   );
 }

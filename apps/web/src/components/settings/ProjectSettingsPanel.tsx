@@ -1,28 +1,17 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { useComposerMenuState } from "../chat/useComposerMenuState";
 import { m as resolveMessage } from "../../i18n/messages";
-import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
-import { mapAtomCommandResult, settlePromise } from "@t3tools/client-runtime/state/runtime";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
-import {
-  checkProjectAccess,
-  reportProjectFailure,
-  useProjectGroupUpdate,
-  type ProjectGroupUpdate,
-} from "../../hooks/useProjectGroupUpdate";
+import { useProjectGroupUpdate, type ProjectGroupUpdate } from "../../hooks/useProjectGroupUpdate";
+import { useRemoveProjectMembers } from "../../hooks/useRemoveProjectMembers";
 import { Navigate, useLocation, useNavigate } from "@tanstack/react-router";
 import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { T, useGT, useMessages } from "gt-react";
 
-import { useComposerDraftStore } from "../../composerDraftStore";
-import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { persistClientSettingsUpdate, useClientSettings } from "../../hooks/useSettings";
-import { readLocalApi } from "../../localApi";
 import { derivePhysicalProjectKey } from "@t3tools/client-runtime/state/project-grouping";
 import {
   PROJECT_GROUPING_MODE_LABELS,
@@ -31,9 +20,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { refreshProjectFaviconUrl } from "../../state/assets";
-import { projectEnvironment } from "../../state/projects";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -63,7 +50,6 @@ import {
   scopeProjectSettingsGroup,
 } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
@@ -285,10 +271,7 @@ function ProjectDetail({
     group.memberProjects.find(
       (member) => environmentById.get(member.environmentId)?.serverConfig != null,
     ) ?? group.memberProjects[0]!;
-  const threads = useThreadShells();
-  const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
-    reportFailure: false,
-  });
+  const removeProjectMembers = useRemoveProjectMembers();
   const projectNameEditedRef = useRef(false);
 
   const faviconPath = group.faviconPath ?? null;
@@ -357,74 +340,7 @@ function ProjectDetail({
     group.memberProjects.some((member) => member.title !== SCRATCH_PROJECT_TITLE);
 
   const removeMembers = async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
-    if (checkProjectAccess(members, gt("Failed to remove project"))) return;
-    const api = readLocalApi();
-    if (!api) return;
-
-    const { projectThreads, isWholeGroup, confirmationMessage } = planProjectRemoval(
-      {
-        members,
-        groupMemberCount: group.memberProjects.length,
-        hasOtherMembers,
-        displayName: group.displayName,
-        threads,
-        unloadedThreadCount: readUnloadedThreadCount(members, threads),
-      },
-      resolveMessage,
-    );
-    const confirmed = await settlePromise(() =>
-      api.dialogs.confirm(confirmationMessage, { variant: "destructive" }),
-    );
-    if (confirmed._tag === "Failure" || !confirmed.value) return;
-    if (checkProjectAccess(members, gt("Failed to remove project"))) return;
-
-    const draftStore = useComposerDraftStore.getState();
-    const remainingMember = allMembers.find(
-      (candidate) =>
-        !members.some(
-          (member) =>
-            member.environmentId === candidate.environmentId && member.id === candidate.id,
-        ),
-    );
-    for (const member of members) {
-      if (checkProjectAccess([member], gt("Failed to remove project"))) return;
-      const memberThreads = projectThreads.filter(
-        (thread) => thread.environmentId === member.environmentId && thread.projectId === member.id,
-      );
-      const result = mapAtomCommandResult(
-        await deleteProject({
-          environmentId: member.environmentId,
-          input: {
-            projectId: member.id,
-            force: true,
-          },
-        }),
-        () => undefined,
-      );
-      if (result._tag === "Failure") {
-        reportProjectFailure(gt('Failed to remove "{title}"', { title: member.title }), result);
-        return;
-      }
-      const projectRef = scopeProjectRef(member.environmentId, member.id);
-      await waitForProjectRemoval(projectRef);
-      releaseProjectDraftUploads(
-        projectRef,
-        memberThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
-      );
-      const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
-      if (projectDraftThread && remainingMember) {
-        draftStore.setDraftThreadContext(projectDraftThread.draftId, {
-          projectRef: scopeProjectRef(remainingMember.environmentId, remainingMember.id),
-          environmentSelection: "manual",
-          loadBalancedEnvironmentId: null,
-        });
-      } else if (projectDraftThread) {
-        draftStore.clearDraftThread(projectDraftThread.draftId);
-      }
-      draftStore.clearProjectDraftThreadId(projectRef);
-    }
-
-    if (isWholeGroup && !hasOtherMembers) {
+    if (await removeProjectMembers(group, members, allMembers)) {
       void navigate({
         to: "/settings/projects",
         search: ({ machine }) => ({ project: undefined, machine, checkout: undefined }),

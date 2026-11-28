@@ -27,7 +27,7 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, type ComposerControlSize } from "./ComposerControl";
-import { takeOpenTarget, useComposerMenuProps } from "./composerEventScope";
+import { markOpenToPermissions, takeOpenTarget, useComposerMenuProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -52,7 +52,7 @@ function lockBackgroundScroll(popup: HTMLElement | null) {
     return (
       target instanceof Element &&
       target.closest(
-        "[data-model-picker-content], [data-model-picker-scroll], [data-model-picker-option-menu]",
+        "[data-model-picker-content], [data-model-picker-scroll], [data-model-picker-option-menu], [data-composer-permissions]",
       )
     );
   };
@@ -216,11 +216,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       focusEffort("any");
       return;
     }
-    const permission = popupRef.current?.querySelector<HTMLButtonElement>(
-      '[data-composer-permissions] [role="radio"][tabindex="0"]',
+    const trigger = popupRef.current?.querySelector<HTMLButtonElement>(
+      "[data-composer-permissions-trigger]",
     );
-    permission?.focus({ preventScroll: true });
-    permission?.scrollIntoView({ block: "nearest" });
+    if (!trigger) return;
+    trigger.scrollIntoView({ block: "nearest" });
+    markOpenToPermissions(trigger);
+    trigger.click();
   };
 
   const handleInstanceModelChange = (instanceId: ProviderInstanceId, model: string) => {
@@ -489,7 +491,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         {props.effortColumn ? (
           <div
             data-model-picker-scroll
-            className="max-h-(--available-height) overflow-x-hidden overflow-y-auto overscroll-contain"
+            className="max-h-(--available-height) overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             {picker}
             <div

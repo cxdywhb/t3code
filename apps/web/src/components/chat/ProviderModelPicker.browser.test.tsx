@@ -59,18 +59,18 @@ it("keeps the composer picker in place when a permission change reveals the foot
   const trigger = screen.getByRole("button", { name: "Choose model" });
   markOpenToPermissions(trigger.element() as HTMLElement);
   await trigger.click();
-  const permissions = page.getByRole("radiogroup", { name: "Permissions" });
-  const supervised = permissions.getByRole("radio", { name: "Supervised" });
-  const positioner = permissions
+  const permissionsTrigger = page.getByRole("button", { name: "Permissions: Supervised" });
+  const permissions = page.getByRole("group", { name: "Permissions" });
+  const supervised = permissions.getByRole("menuitemradio", { name: "Supervised" });
+  await expect.element(supervised).toHaveFocus();
+  const positioner = permissionsTrigger
     .element()
     .closest<HTMLElement>('[data-slot="popover-positioner"]')!;
   const before = positioner.getBoundingClientRect();
   const triggerRight = trigger.element().getBoundingClientRect().right;
   await expect.element(supervised).toHaveAttribute("aria-checked", "true");
-  await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
-  await expect.element(supervised).toHaveFocus();
   await userEvent.keyboard("{ArrowRight}{ArrowRight}");
-  const auto = permissions.getByRole("radio", { name: "Auto", exact: true });
+  const auto = permissions.getByRole("menuitemradio", { name: "Auto", exact: true });
   await expect.element(auto).toHaveFocus();
   await expect.element(supervised).toHaveAttribute("aria-checked", "true");
   const description = document.getElementById(auto.element().getAttribute("aria-describedby")!)!;
@@ -78,9 +78,10 @@ it("keeps the composer picker in place when a permission change reveals the foot
   expect(description.clientHeight).toBeGreaterThanOrEqual(32);
   expect(description.scrollHeight).toBeLessThanOrEqual(description.clientHeight);
   await userEvent.keyboard("{ArrowRight}{Enter}");
+  await expect.element(permissions).not.toBeInTheDocument();
   await expect
-    .element(permissions.getByRole("radio", { name: "Full access" }))
-    .toHaveAttribute("aria-checked", "true");
+    .element(page.getByRole("button", { name: "Permissions: Full access" }))
+    .toHaveFocus();
   expect(trigger.element().getBoundingClientRect().right).toBeLessThan(triggerRight);
   const after = positioner.getBoundingClientRect();
   expect(after.x).toBeCloseTo(before.x, 0);
@@ -259,7 +260,29 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
 
   const popup = modelPane.closest<HTMLElement>("[data-slot=popover-popup]")!;
   const height = popup.offsetHeight;
-  await page.getByRole("button", { name: "Favorites", exact: true }).click();
+  const providerBar = page.getByRole("toolbar", { name: "Providers" });
+  const favorites = providerBar.getByRole("button", { name: "Favorites", exact: true });
+  const codex = providerBar.getByRole("button", { name: "Codex", exact: true });
+  expect(favorites.element().getBoundingClientRect().top).toBe(
+    codex.element().getBoundingClientRect().top,
+  );
+  expect(providerBar.element().getBoundingClientRect().bottom).toBeLessThan(
+    search.element().getBoundingClientRect().top,
+  );
+  const listScroller = modelPane.querySelector('[class*="overscroll-y-auto"]');
+  expect(listScroller).not.toBeNull();
+  expect(getComputedStyle(listScroller!).scrollbarWidth).toBe("none");
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  await expect.element(codex).toHaveFocus();
+  await userEvent.keyboard("{ArrowLeft}");
+  await expect.element(favorites).toHaveFocus();
+  await userEvent.keyboard("{ArrowDown}");
+  await expect.element(search).toHaveFocus();
+  await favorites.click();
+  await expect.element(favorites).toHaveAttribute("aria-pressed", "true");
+  expect(getComputedStyle(favorites.element()).color).not.toBe(
+    getComputedStyle(codex.element()).color,
+  );
   await expect.element(page.getByText("No favorites yet")).toBeVisible();
   expect(popup.offsetHeight).toBe(height);
   await page

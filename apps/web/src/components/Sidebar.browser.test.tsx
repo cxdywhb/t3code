@@ -203,6 +203,55 @@ describe("sidebar project folder new thread", () => {
   });
 });
 
+it("asks for confirmation before removing a project from its folder menu", async () => {
+  using stack = new DisposableStack();
+  const previousSettings = getClientSettings();
+  stack.defer(() => __setClientSettingsForTests(previousSettings));
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, boringSidebarEnabled: true });
+  const entry = project("local-checkout");
+  const show = vi.fn().mockResolvedValue("remove-project");
+  const confirm = vi.fn().mockResolvedValue(false);
+  const dispatch = vi.fn();
+  using _projects = vi
+    .spyOn(await import("../state/entities"), "useProjects")
+    .mockReturnValue([entry]);
+  using _threads = vi
+    .spyOn(await import("../state/entities"), "useQuietThreadShells")
+    .mockReturnValue([]);
+  using _scope = vi
+    .spyOn(await import("../state/session"), "readEnvironmentScope")
+    .mockReturnValue(true);
+  using _api = vi.spyOn(await import("../localApi"), "readLocalApi").mockReturnValue({
+    contextMenu: { show },
+    dialogs: { confirm },
+  } as unknown as LocalApi);
+  using _command = vi
+    .spyOn(await import("../state/use-orchestration-command"), "useOrchestrationCommand")
+    .mockReturnValue(dispatch as never);
+  await using screen = await render(
+    <SidebarProvider>
+      <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+    </SidebarProvider>,
+  );
+  const folder = screen.getByTestId("sidebar-project-folder");
+  await expect.element(folder).toBeVisible();
+  await act(() =>
+    folder
+      .getByRole("button", { name: entry.title, exact: true })
+      .element()
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })),
+  );
+  await vi.waitFor(() =>
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("not the files on disk"), {
+      variant: "destructive",
+    }),
+  );
+  expect(show.mock.calls[0]?.[0]).toContainEqual(
+    expect.objectContaining({ id: "remove-project", label: "Remove project", destructive: true }),
+  );
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
 // regression: #38623 unsent drafts are listed above threads but mod+1..9 skipped them
 describe("sidebar numbered jumps", () => {
   it("numbers the unsent draft at the top before the threads below it", async () => {
