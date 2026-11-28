@@ -56,6 +56,7 @@ export function pullRequestSavedViewPatch(
     draft: preferences.draft,
     review: preferences.review,
     checks: preferences.checks,
+    updatedWithin: preferences.updatedWithin,
     author: preferences.author,
     labels: preferences.labels,
     sort: preferences.sort,

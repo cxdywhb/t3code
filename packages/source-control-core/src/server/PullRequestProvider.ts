@@ -696,6 +696,7 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly labels: ReadonlyArray<string>;
       readonly applied: boolean;
+      readonly createIfMissing?: boolean | undefined;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

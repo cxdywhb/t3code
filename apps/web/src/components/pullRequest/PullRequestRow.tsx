@@ -1,7 +1,7 @@
 import type { PullRequestAction } from "@t3tools/contracts";
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { T } from "gt-react";
+import { T, useGT } from "gt-react";
 import { SearchIcon } from "lucide-react";
 import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { PullRequestStackPopover } from "./PullRequestStackPopover";
@@ -9,7 +9,7 @@ import {
   PullRequestSpeedActions,
   type PullRequestSpeedActionResult,
 } from "./PullRequestSpeedActions";
-import { memo, type RefCallback } from "react";
+import { memo, type ReactNode, type RefCallback } from "react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -27,6 +27,7 @@ import {
 } from "./PullRequestListRow";
 import { PullRequestPrivateMark } from "./PullRequestDetailLayout";
 import { PullRequestLabelChip, PullRequestReviewDecisionGlyph } from "./pullRequestPresentation";
+import { Checkbox } from "../ui/checkbox";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 const LABEL_SLOTS = [
@@ -72,6 +73,12 @@ export type PullRequestRowTarget = Pick<
   "environmentId" | "projectId" | "host" | "repository" | "number"
 >;
 
+export interface PullRequestRowBatchSelection {
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly toggle: () => void;
+}
+
 function PullRequestRowImpl({
   entry,
   selected,
@@ -88,6 +95,8 @@ function PullRequestRowImpl({
   closing = false,
   sweeping = false,
   onCloseSweepStart,
+  reviewControls,
+  batchSelection,
 }: {
   entry: EnvironmentPullRequestEntry;
   selected: boolean;
@@ -106,7 +115,10 @@ function PullRequestRowImpl({
   closing?: boolean;
   sweeping?: boolean;
   onCloseSweepStart?: (entry: EnvironmentPullRequestEntry, event: PointerEvent) => void;
+  reviewControls?: ReactNode;
+  batchSelection?: PullRequestRowBatchSelection | undefined;
 }) {
+  const gt = useGT();
   const { Icon, providerName, terminology } = getSourceControlPresentationForKind(entry.provider);
   return (
     <div
@@ -115,13 +127,25 @@ function PullRequestRowImpl({
       data-pull-request-key={statsKey}
       className={cn(
         "flex items-center rounded-md [content-visibility:auto] [contain-intrinsic-block-size:56.5px]",
-        selected ? "bg-accent" : "hover:bg-accent/60",
+        (batchSelection?.checked ?? selected) ? "bg-accent" : "hover:bg-accent/60",
       )}
     >
+      {batchSelection ? (
+        <div className="flex shrink-0 items-center pl-3">
+          <Checkbox
+            aria-label={gt("Select {title} for review", { title: entry.title })}
+            checked={batchSelection.checked}
+            disabled={batchSelection.disabled}
+            onCheckedChange={batchSelection.toggle}
+          />
+        </div>
+      ) : null}
       <button
         type="button"
-        aria-current={selected ? "true" : undefined}
-        onClick={() => onSelect(entry)}
+        aria-current={!batchSelection && selected ? "true" : undefined}
+        aria-pressed={batchSelection?.checked}
+        disabled={batchSelection?.disabled}
+        onClick={batchSelection ? batchSelection.toggle : () => onSelect(entry)}
         onPointerEnter={() => onIntent?.(entry)}
         onPointerLeave={(event) => {
           if (event.currentTarget !== document.activeElement) onIntent?.(null);
@@ -259,7 +283,8 @@ function PullRequestRowImpl({
           updatedAt={entry.updatedAt}
         />
       </button>
-      {hostActions.size > 0 ? (
+      {batchSelection ? null : reviewControls}
+      {!batchSelection && hostActions.size > 0 ? (
         <PullRequestSpeedActions
           entry={entry}
           hostActions={hostActions}

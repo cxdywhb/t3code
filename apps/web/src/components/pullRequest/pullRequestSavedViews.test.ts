@@ -18,6 +18,7 @@ const preferences = {
   draft: "hide",
   review: "review-required",
   checks: "passing",
+  updatedWithin: "7d",
   author: "me",
   labels: ["bug", "priority"],
   sort: "updated",

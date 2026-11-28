@@ -5,7 +5,7 @@ import {
 } from "@t3tools/contracts";
 import { EnvironmentId, ProjectId, type PullRequestDetailView } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   update: vi.fn(),
@@ -34,13 +34,15 @@ vi.mock(import("~/hooks/useSettings"), async (original) => ({
 }));
 vi.mock(import("~/state/pullRequests"), async (original) => {
   const actual = await original();
-  const { Atom } = await import("effect/reactivity");
+  const { Atom, AsyncResult } = await import("effect/reactivity");
   const allowed = Atom.make(true);
   const denied = Atom.make(false);
   return {
     ...actual,
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
+      labelCandidates: (() =>
+        Atom.make(AsyncResult.success({ candidates: [], truncated: false }))) as never,
       update: {
         ...actual.pullRequestEnvironment.update,
         permissionAtom: () => (state.canUpdate ? allowed : denied),
@@ -146,6 +148,33 @@ async function render(value = detail) {
     visibleText: () => container.innerText,
   });
 }
+
+it.each(["keyboard", "click"])("creates and applies an unmatched label by %s", async (method) => {
+  setup();
+  await using screen = await render({
+    ...detail,
+    capabilities: { ...detail.capabilities, labels: true, createLabels: true },
+  });
+  const trigger = page.elementLocator(
+    screen.container.querySelector('[aria-label="Change labels"]')!,
+  );
+  await trigger.getByText("None", { exact: true }).click();
+  const search = page.getByRole("combobox", { name: "Search labels" });
+  await expect.element(search).toHaveFocus();
+  await search.fill("release-ready");
+  const create = page.getByRole("option", { name: "Create label “release-ready”" });
+  await expect.element(create).toBeVisible();
+  if (method === "keyboard") await userEvent.keyboard("{Enter}");
+  else await create.click();
+  expect(state.update).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "environment",
+    input: expect.objectContaining({
+      labels: ["release-ready"],
+      applied: true,
+      createIfMissing: true,
+    }),
+  });
+});
 
 it("keeps an unsaved description when collapsed and reopened, and after a failed save", async () => {
   setup();

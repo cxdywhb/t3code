@@ -31,6 +31,9 @@ export const PullRequestReviewDecision = Schema.Literals([
 ]);
 export type PullRequestReviewDecision = typeof PullRequestReviewDecision.Type;
 
+export const PullRequestUpdatedWithin = Schema.Literals(["3d", "7d", "30d"]);
+export type PullRequestUpdatedWithin = typeof PullRequestUpdatedWithin.Type;
+
 const PullRequestQualifierValue = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
 const PullRequestQualifierValues = Schema.Array(PullRequestQualifierValue).check(
   Schema.isMaxLength(10),
@@ -42,12 +45,26 @@ export const PullRequestListFilters = Schema.Struct({
     Schema.Literals(["approved", "changes-requested", "review-required", "none"]),
   ),
   checks: Schema.optional(Schema.Literals(["passing", "failing"])),
+  updatedWithin: Schema.optional(PullRequestUpdatedWithin),
   /** GitHub label qualifiers: every group must match; any name within a group suffices. */
   labels: Schema.optional(Schema.Array(PullRequestQualifierValues).check(Schema.isMaxLength(10))),
   excludedLabels: Schema.optional(PullRequestQualifierValues),
   author: Schema.optional(PullRequestQualifierValue),
 });
 export type PullRequestListFilters = typeof PullRequestListFilters.Type;
+
+const pullRequestUpdatedWithinDays = { "3d": 3, "7d": 7, "30d": 30 } as const;
+
+export function matchesPullRequestUpdateTime(
+  updatedAt: string,
+  range: PullRequestUpdatedWithin | undefined,
+  now: number,
+): boolean {
+  return (
+    range === undefined ||
+    Date.parse(updatedAt) >= now - pullRequestUpdatedWithinDays[range] * 86_400_000
+  );
+}
 
 export const PullRequestChecksState = Schema.Literals(["passing", "failing", "pending"]);
 export type PullRequestChecksState = typeof PullRequestChecksState.Type;
@@ -314,6 +331,7 @@ export const PullRequestCapabilities = Schema.Struct({
   /** Stack actions also arm and cancel auto-merge for a layer and the open layers below it. */
   stackAutoMerge: Schema.optional(Schema.Boolean),
   labels: Schema.optional(Schema.Boolean),
+  createLabels: Schema.optional(Schema.Boolean),
   /** The host searches the repository's users, so composers can complete `@login`. */
   mentions: Schema.optional(Schema.Boolean),
   /** The sigils whose issue and change request references composers can complete. */
@@ -984,7 +1002,12 @@ export const PullRequestLabelChangeInput = Schema.Struct({
     Schema.isMaxLength(PULL_REQUEST_CHANGE_BATCH_LIMIT),
   ),
   applied: Schema.Boolean,
-});
+  createIfMissing: Schema.optionalKey(Schema.Boolean),
+}).check(
+  Schema.makeFilter(
+    (input) => !input.createIfMissing || (input.applied && input.labels.length === 1),
+  ),
+);
 export type PullRequestLabelChangeInput = typeof PullRequestLabelChangeInput.Type;
 
 /**
@@ -1062,7 +1085,7 @@ export class PullRequestOperationError extends Schema.TaggedError<PullRequestOpe
   {
     operation: Schema.String,
     detail: TrimmedNonEmptyString,
-    reason: Schema.optional(Schema.Literal("not-found")),
+    reason: Schema.optional(Schema.Literals(["not-found", "head-changed"])),
     listResult: Schema.optional(PullRequestListResult),
     cause: Schema.optional(Schema.Defect()),
   },

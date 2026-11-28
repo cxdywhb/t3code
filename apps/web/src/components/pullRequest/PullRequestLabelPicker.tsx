@@ -1,8 +1,8 @@
 import { useAtomCommand } from "~/state/use-atom-command";
 import type { EnvironmentId, PullRequestLabelCandidate, PullRequestRef } from "@t3tools/contracts";
-import { CheckIcon, TagIcon } from "lucide-react";
+import { CheckIcon, PlusIcon, TagIcon } from "lucide-react";
 import { msg, useGT, useMessages } from "gt-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { m } from "~/i18n/messages";
 
@@ -35,14 +35,19 @@ export function PullRequestLabelPicker({
   environmentId,
   reference,
   allowed,
+  canCreate,
+  triggerText,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   allowed: boolean;
+  canCreate: boolean;
+  triggerText: ReactNode;
 }) {
   const gt = useGT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState(emptySelection<PullRequestLabelCandidate>);
 
   const candidatesQuery = useEnvironmentQuery(
@@ -53,20 +58,40 @@ export function PullRequestLabelPicker({
     reportFailure: false,
   });
 
+  const newName = query.trim();
   const candidates = (candidatesQuery.data?.candidates ?? []).filter((entry) =>
-    matches(entry, query),
+    matches(entry, newName),
   );
-
+  const createOption =
+    canCreate &&
+    !creating &&
+    candidatesQuery.isSuccess &&
+    newName &&
+    !candidates.some((candidate) => candidate.name.toLowerCase() === newName.toLowerCase())
+      ? { name: newName, create: true as const }
+      : null;
   const send = async (labels: ReadonlyArray<PullRequestLabelCandidate>, applied: boolean) => {
-    for (const batch of changeBatches(labels)) await sendBatch(batch, applied);
+    for (const batch of changeBatches(labels))
+      await sendBatch(
+        batch.map((label) => label.name),
+        applied,
+      );
   };
-  const sendBatch = async (labels: ReadonlyArray<PullRequestLabelCandidate>, applied: boolean) => {
-    const names = labels.map((label) => label.name);
+  const sendBatch = async (
+    names: ReadonlyArray<string>,
+    applied: boolean,
+    createIfMissing?: true,
+  ) => {
     const result = await setLabels({
       environmentId,
-      input: { ...reference, labels: names, applied },
+      input: {
+        ...reference,
+        labels: names,
+        applied,
+        ...(createIfMissing ? { createIfMissing } : {}),
+      },
     });
-    if (result._tag === "Success") return;
+    if (result._tag === "Success") return true;
     toastManager.add({
       type: "error",
       title: applied
@@ -77,6 +102,19 @@ export function PullRequestLabelPicker({
         m(msg("The host refused it. Check that you have triage access on this repository.")),
       ),
     });
+    return false;
+  };
+
+  const create = (name: string) => {
+    setCreating(true);
+    return sendBatch([name], true, true)
+      .then((created) => {
+        if (created) {
+          setQuery((current) => (current.trim() === name ? "" : current));
+          candidatesQuery.refresh();
+        }
+      })
+      .finally(() => setCreating(false));
   };
 
   const onOpenChange = (nextOpen: boolean) => {
@@ -93,9 +131,10 @@ export function PullRequestLabelPicker({
   };
 
   return (
-    <PullRequestCandidatePicker
+    <PullRequestCandidatePicker<PullRequestLabelCandidate | { name: string; create: true }>
       icon={<TagIcon className="size-3.5" />}
       label={gt("Change labels")}
+      triggerText={triggerText}
       allowed={allowed}
       disabledReason={gt("Changing labels needs triage access on this repository")}
       open={open}
@@ -103,9 +142,9 @@ export function PullRequestLabelPicker({
       query={query}
       onQueryChange={setQuery}
       searchLabel={gt("Search labels")}
-      isPending={candidatesQuery.isPending && candidatesQuery.data === null}
+      isPending={creating || (candidatesQuery.isPending && candidatesQuery.data === null)}
       error={candidatesQuery.data === null ? candidatesQuery.error : null}
-      candidates={candidates}
+      candidates={createOption ? [...candidates, createOption] : candidates}
       emptyLabel={gt("This repository has no labels.")}
       noMatchLabel={gt("No label matches that.")}
       errorLabel={gt("The labels could not be read.")}
@@ -114,13 +153,27 @@ export function PullRequestLabelPicker({
         "This repository has more labels than are listed here. Apply the rest on the host.",
       )}
       candidateKey={(candidate) => candidate.name}
-      onSelect={(candidate) =>
+      onSelect={(candidate) => {
+        if ("create" in candidate) {
+          void create(candidate.name);
+          return;
+        }
         setDraft((current) =>
           toggleSelection(current, candidate.name, candidate, candidate.isApplied),
-        )
-      }
+        );
+      }}
     >
       {(candidate) => {
+        if ("create" in candidate) {
+          return (
+            <>
+              <PlusIcon aria-hidden className="size-3.5 shrink-0" />
+              <span className="min-w-0 truncate">
+                {gt("Create label “{name}”", { name: candidate.name })}
+              </span>
+            </>
+          );
+        }
         const dot = pullRequestLabelColor(candidate.color);
         return (
           <>

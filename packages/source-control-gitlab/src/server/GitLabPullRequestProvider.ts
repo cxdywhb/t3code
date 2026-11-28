@@ -48,6 +48,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   },
   reviewers: { request: true, listCandidates: true, searchCandidates: true },
   labels: true,
+  createLabels: true,
   edit: { changeRequest: true, comment: true, maintainerEdits: true },
   withheldFileDiff: true,
 };
@@ -585,6 +586,7 @@ export const make = Effect.gen(function* () {
           number: input.number,
           labels: input.labels,
           applied: input.applied,
+          createIfMissing: input.createIfMissing,
         })
         .pipe(Effect.mapError(fail("setLabels"))),
     ),

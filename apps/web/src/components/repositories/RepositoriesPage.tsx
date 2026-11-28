@@ -935,14 +935,8 @@ export function RepositoriesPage() {
 
   return (
     <SidebarInset className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <WorkspacePageHeader
-        electron={isElectron}
-        showGlobalTerminal
-        className="relative bg-background"
-      >
-        <WorkspacePageTitle ariaLabel={gt("Repositories")}>
-          <T>Repositories</T>
-        </WorkspacePageTitle>
+      <WorkspacePageHeader electron={isElectron} className="relative bg-background">
+        <WorkspacePageTitle ariaLabel={gt("Repositories")}>{gt("Repositories")}</WorkspacePageTitle>
         <div className="min-w-0 flex-1" />
         <div
           className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]"
@@ -1821,7 +1815,7 @@ export function RepositoriesPage() {
                       setPage((current) => repositoriesQuery.data?.nextPage ?? current + 1)
                     }
                   >
-                    <T>Next</T>
+                    {gt("Next page")}
                     <ChevronRightIcon className="size-3.5" />
                   </Button>
                 </div>

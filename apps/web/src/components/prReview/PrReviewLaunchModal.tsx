@@ -1,4 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { AuthSourceControlWriteScope } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -37,6 +38,7 @@ import {
   type PrReviewLaunchPrefs,
 } from "./prReviewAnalytics.logic";
 import { prReviewEnvironment } from "~/state/prReview";
+import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -408,6 +410,7 @@ export function LaunchPrReviewDialog({
   const gt = useGT();
   const writeBackLabel = usePrReviewWriteBackLabel();
   const startReview = useAtomCommand(prReviewEnvironment.startReview, { reportFailure: false });
+  const canWriteBack = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const catalog = useOfficialModelCatalog(environmentId);
   const storageKey = `${PR_REVIEW_LAUNCH_PREFS_STORAGE_PREFIX}${environmentId}`;
 
@@ -559,6 +562,8 @@ export function LaunchPrReviewDialog({
   };
 
   const effectiveMode: PrReviewMode = targets.length > 1 ? "multi_model_fusion" : mode;
+  const effectiveWriteBack =
+    effectiveMode === "multi_model_fusion" && canWriteBack ? writeBackMode : "manual";
 
   const submit = async () => {
     if (slots.length === 0 || targets.length === 0 || submitting) return;
@@ -585,7 +590,7 @@ export function LaunchPrReviewDialog({
         synthesizerModel: effectiveMode === "multi_model_fusion" ? synthesizer : null,
         boundSkillNames: [...boundSkills],
         customInstructions: customInstructions.trim() || null,
-        writeBackMode: effectiveMode === "multi_model_fusion" ? writeBackMode : "manual",
+        writeBackMode: effectiveWriteBack,
       },
     });
     setSubmitting(false);
@@ -642,6 +647,18 @@ export function LaunchPrReviewDialog({
 
         <DialogPanel className="max-h-[70dvh] overflow-y-auto">
           <div className="flex flex-col gap-4">
+            {targets.length > 1 ? (
+              <ul className="max-h-32 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                {targets.map((target) => (
+                  <li key={`${target.host}/${target.repository}#${target.number}`}>
+                    <span className="font-mono">
+                      {target.host}/{target.repository}#{target.number}
+                    </span>
+                    {target.title ? ` · ${target.title}` : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             {targets.length === 1 ? (
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button
@@ -780,7 +797,8 @@ export function LaunchPrReviewDialog({
                   <T>Write-Back Policy</T>
                 </Label>
                 <Select
-                  value={writeBackMode}
+                  value={effectiveWriteBack}
+                  disabled={!canWriteBack}
                   onValueChange={(val) => {
                     if (val) {
                       handleWriteBackChange(val as PrReviewWriteBackMode);
@@ -788,7 +806,7 @@ export function LaunchPrReviewDialog({
                   }}
                 >
                   <SelectTrigger>
-                    <SelectValue>{writeBackLabel(writeBackMode)}</SelectValue>
+                    <SelectValue>{writeBackLabel(effectiveWriteBack)}</SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {WRITE_BACK_OPTIONS.map((opt) => (

@@ -149,7 +149,6 @@ export function WorkflowsPage() {
           )}
         >
           <WorkspacePageHeader
-            showGlobalTerminal
             electron={isElectron}
             reserveNativeControls={!paneOpen}
             className="border-b"

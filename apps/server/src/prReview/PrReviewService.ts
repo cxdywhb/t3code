@@ -39,6 +39,7 @@ import {
   type PullRequestReviewVerdict,
   type ThreadId,
 } from "@t3tools/contracts";
+import { projectChangeRequestHost } from "@t3tools/source-control-core/shared/definition";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -160,6 +161,7 @@ export class PrReviewService extends Context.Service<
     readonly deletePreset: (input: PrReviewDeletePresetInput) => Effect.Effect<void, PrReviewError>;
     readonly startReview: (
       input: PrReviewStartInput,
+      canWriteBack: boolean,
     ) => Effect.Effect<PrReviewStartResult, PrReviewError>;
     readonly cancelTask: (input: PrReviewCancelTaskInput) => Effect.Effect<void, PrReviewError>;
     readonly writeBack: (
@@ -305,11 +307,24 @@ const make = Effect.gen(function* () {
   const resolveExecutionProject = Effect.fn("PrReviewService.resolveExecutionProject")(function* (
     target: PrReviewTargetItem,
   ) {
+    const targetRepo = target.repository.trim().toLowerCase();
+    const targetHost = target.host.trim().toLowerCase();
+    const matchesTarget = (identity: OrchestrationProjectShell["repositoryIdentity"]) =>
+      projectChangeRequestHost(identity, undefined) === targetHost &&
+      sourceControlDefinitions.repositorySelector(identity)?.toLowerCase() === targetRepo;
+    const matchesCheckout = (shell: OrchestrationProjectShell) =>
+      matchesTarget(shell.repositoryIdentity) ||
+      matchesTarget(
+        resolveOriginOnlyRepositoryIdentity(shell.repositoryIdentity, true, {
+          recognizeProvider: (remoteUrl) =>
+            sourceControlDefinitions.recognizeRemote(remoteUrl)?.kind,
+        }),
+      );
     if (!target.projectId.startsWith("cloud:")) {
       const direct = yield* projects
         .getShell(target.projectId)
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationProjectShell>()));
-      if (Option.isSome(direct)) {
+      if (Option.isSome(direct) && matchesCheckout(direct.value)) {
         const scratch = yield* managedFolders
           .isScratchProject(direct.value.id)
           .pipe(Effect.orElseSucceed(() => false));
@@ -324,19 +339,7 @@ const make = Effect.gen(function* () {
     const allShells = yield* projects
       .listShells()
       .pipe(Effect.orElseSucceed(() => [] as OrchestrationProjectShell[]));
-    const matched = allShells.find((shell) => {
-      const identity = shell.repositoryIdentity;
-      if (!identity) return false;
-      const targetRepo = target.repository.trim().toLowerCase();
-      const selector = sourceControlDefinitions.repositorySelector(identity);
-      const originSelector = sourceControlDefinitions.repositorySelector(
-        resolveOriginOnlyRepositoryIdentity(identity, true, {
-          recognizeProvider: (remoteUrl) =>
-            sourceControlDefinitions.recognizeRemote(remoteUrl)?.kind,
-        }),
-      );
-      return selector?.toLowerCase() === targetRepo || originSelector?.toLowerCase() === targetRepo;
-    });
+    const matched = allShells.find(matchesCheckout);
     if (matched) {
       return {
         projectId: matched.id,
@@ -470,6 +473,13 @@ const make = Effect.gen(function* () {
 
     const chosenVerdict: PullRequestReviewVerdict =
       input.verdict ?? input.task.verdict ?? "comment";
+    const expectedHeadSha = input.task.headSha;
+    if (expectedHeadSha === null) {
+      return yield* new PrReviewError({
+        operation: "writeBackReview",
+        detail: "审查报告缺少提交版本，请重新审查后再发布正式评审。",
+      });
+    }
     const selectedIds = new Set(input.inlineFindingIds ?? []);
     const readCachedPatch = Effect.sync(() => {
       try {
@@ -497,6 +507,12 @@ const make = Effect.gen(function* () {
       ],
       { concurrency: 2 },
     );
+    if (!detail?.headSha || !PullRequestService.isHeadSha(detail.headSha, expectedHeadSha)) {
+      return yield* new PrReviewError({
+        operation: "writeBackReview",
+        detail: "PR/MR 的提交版本已变化或无法确认，请重新审查后再发布正式评审。",
+      });
+    }
 
     const inlineByPositionKey = new Map<string, PullRequestReviewCommentDraft>();
     for (const f of input.task.findings) {
@@ -569,7 +585,9 @@ const make = Effect.gen(function* () {
     const isRecoverableReviewError = (
       err: PullRequestService.PullRequestError,
     ): err is PullRequestOperationError =>
-      err._tag === "PullRequestOperationError" && err.reason !== "not-found";
+      err._tag === "PullRequestOperationError" &&
+      err.reason !== "not-found" &&
+      err.reason !== "head-changed";
 
     const submit = (
       verdict: PullRequestReviewVerdict,
@@ -578,6 +596,7 @@ const make = Effect.gen(function* () {
     ) =>
       pullRequests.submitReview({
         ...ref,
+        expectedHeadSha,
         verdict,
         body,
         comments,
@@ -1116,7 +1135,7 @@ const make = Effect.gen(function* () {
 
   const startReview: PrReviewService["Service"]["startReview"] = Effect.fn(
     "PrReviewService.startReview",
-  )(function* (input) {
+  )(function* (input, canWriteBack) {
     const presets = yield* repo.listPresets.pipe(Effect.mapError(mapErr("listPresets")));
     const matchedPreset = input.presetId
       ? (presets.find((p) => p.id === input.presetId) ?? null)
@@ -1141,6 +1160,12 @@ const make = Effect.gen(function* () {
         ? input.customInstructions
         : (matchedPreset?.customInstructions ?? null);
     const writeBackMode = input.writeBackMode ?? matchedPreset?.writeBackMode ?? "manual";
+    if (input.mode !== "direct_agent" && writeBackMode !== "manual" && !canWriteBack) {
+      return yield* new PrReviewError({
+        operation: "startReview",
+        detail: "自动回写需要源码写入权限，请选择手动回写。",
+      });
+    }
 
     const allSkills = boundSkillNames.length ? yield* discoverSkills : [];
     const skillByName = new Map(allSkills.map((s) => [s.name, s]));

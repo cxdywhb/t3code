@@ -1,7 +1,6 @@
 import type {
   EnvironmentId,
   IssueAutomationConnector,
-  IssueAutomationPlatformDescriptor,
   IssueAutomationProfile,
 } from "@t3tools/contracts";
 import { T, useGT } from "gt-react";
@@ -19,15 +18,8 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "../ui/empty";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import type { SelectableProjectOption } from "./IssueAutomationConfigModals";
 import { useActionModeLabel } from "./issueAutomationPresentation";
@@ -35,7 +27,6 @@ import { useActionModeLabel } from "./issueAutomationPresentation";
 export function IssueAutomationRulesView({
   environmentId,
   canConfigureConnector,
-  platforms,
   connectors,
   profiles,
   projects,
@@ -52,7 +43,6 @@ export function IssueAutomationRulesView({
 }: {
   readonly environmentId: EnvironmentId | null;
   readonly canConfigureConnector: boolean;
-  readonly platforms: ReadonlyArray<IssueAutomationPlatformDescriptor>;
   readonly connectors: ReadonlyArray<IssueAutomationConnector>;
   readonly profiles: ReadonlyArray<IssueAutomationProfile>;
   readonly projects: ReadonlyArray<SelectableProjectOption>;
@@ -92,24 +82,23 @@ export function IssueAutomationRulesView({
             <SettingsRow
               key={conn.id}
               title={
-                <span className="inline-flex items-center gap-2">
+                <span className="inline-flex min-w-0 flex-wrap items-center gap-2">
                   <span
                     aria-hidden
                     className={cn(
                       "size-2 shrink-0 rounded-full",
-                      healthy ? "bg-primary" : "bg-warning",
+                      healthy ? "bg-success" : "bg-warning",
                     )}
                   />
                   <span>{conn.name}</span>
-                  <Badge variant="outline" size="sm">
+                  <span className="text-xs font-normal text-muted-foreground">
                     {conn.platform}
                     {conn.serverVersion ? ` v${conn.serverVersion}` : ""}
-                  </Badge>
+                  </span>
                 </span>
               }
               description={
                 <span>
-                  <span className="font-mono">{conn.mcpUrl ?? conn.baseUrl}</span> ·{" "}
                   {conn.status === "disconnected" ? (
                     <T>Authorization required</T>
                   ) : (
@@ -156,11 +145,6 @@ export function IssueAutomationRulesView({
                         <MoreHorizontalIcon className="size-4" />
                       </MenuTrigger>
                       <MenuPopup align="end">
-                        <MenuItem onClick={() => onEditConnector(conn)}>
-                          <PencilIcon />
-                          <T>Edit connection</T>
-                        </MenuItem>
-                        <MenuSeparator />
                         <MenuItem variant="destructive" onClick={() => onDeleteConnector(conn.id)}>
                           <Trash2Icon />
                           <T>Remove connection</T>
@@ -173,26 +157,6 @@ export function IssueAutomationRulesView({
             />
           );
         })}
-
-        <SettingsRow
-          title={gt("Extensible platform plugin registry")}
-          description={gt(
-            "Issue auto-analysis runs on a pluggable adapter interface so Jira and future enterprise trackers share the same multi-repo & multi-model engine.",
-          )}
-          control={
-            <div className="flex flex-wrap items-center gap-1.5">
-              {platforms.map((item) => (
-                <Badge
-                  key={item.platform}
-                  variant={item.implemented ? "secondary" : "outline"}
-                  size="sm"
-                >
-                  {item.displayName} · {item.implemented ? gt("Ready") : gt("Plugin slot")}
-                </Badge>
-              ))}
-            </div>
-          }
-        />
       </SettingsSection>
 
       <SettingsSection
@@ -214,18 +178,9 @@ export function IssueAutomationRulesView({
                 <T>No unattended rules yet</T>
               </EmptyTitle>
               <EmptyDescription>
-                <T>
-                  Bind a ZenTao product to one or more local codebases and assign local AI models
-                  for background polling, Worktree fixing, and automatic comment write-back.
-                </T>
+                <T>Choose a product, repository, and model to set up polling.</T>
               </EmptyDescription>
             </EmptyHeader>
-            <EmptyContent>
-              <Button size="sm" onClick={onAddProfile}>
-                <PlusIcon className="size-4" />
-                <T>Create unattended rule</T>
-              </Button>
-            </EmptyContent>
           </Empty>
         ) : (
           profiles.map((prof) => {
@@ -287,7 +242,7 @@ export function IssueAutomationRulesView({
                   </span>
                 }
                 control={
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {environmentId ? (
                       <Button
                         size="xs"

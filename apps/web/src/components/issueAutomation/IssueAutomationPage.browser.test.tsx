@@ -316,6 +316,14 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
   await page.getByRole("button", { name: "Scan now" }).click();
   await expect.element(page.getByText("Pairing screen stays blank")).toBeVisible();
   await expect.element(page.getByText("Pairing already confirmed")).not.toBeInTheDocument();
+  const selectPage = page.getByRole("checkbox", { name: "Select all issues on this page" });
+  await selectPage.click();
+  await expect.element(page.getByRole("status").filter({ hasText: "1 selected" })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Run batch" })).toBeVisible();
+  await expect.element(page.getByText("Pairing screen stays blank")).toBeVisible();
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  await expect.element(selectPage).not.toBeChecked();
+  await expect.element(page.getByRole("button", { name: "Run batch" })).not.toBeInTheDocument();
   const scanInput = {
     supportsPauseStages: true,
     connectorId,
@@ -345,6 +353,10 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
 
   await page.getByRole("button", { name: /^Runs/ }).click();
   await expect.element(page.getByText("Pairing diagnosis")).toBeVisible();
+  await page.viewport(420, 800);
+  await expect.element(page.getByText("Pairing diagnosis")).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "View diagnosis" })).toBeVisible();
+  await page.viewport(1200, 800);
   expect(page.getByText("Pairing diagnosis").all()).toHaveLength(1);
   const history = page.getByRole("button", { name: "Execution history · 2 runs" });
   await expect.element(history).toHaveAttribute("aria-expanded", "false");
@@ -387,4 +399,12 @@ it("scans without dispatching and opens diagnosis, repair and ZenTao sync from t
     connectorId,
     action: { kind: "sync_repair", taskId: repair.id, writeComment: true, resolvedBuild: "7" },
   });
+
+  await page.getByRole("button", { name: "Analytics", exact: true }).click();
+  const allTime = page.getByRole("button", { name: "All time", exact: true });
+  await expect.element(allTime).toBeVisible();
+  (allTime.element() as HTMLElement).focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(page.getByText("Issues covered")).toBeVisible();
+  await expect.element(page.getByText("Pipeline outcome distribution")).toBeVisible();
 });

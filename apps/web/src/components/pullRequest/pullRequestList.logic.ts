@@ -1,7 +1,7 @@
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { msg } from "gt-react";
 
-import { resolvePullRequestAuthorFilter } from "@t3tools/contracts";
+import { matchesPullRequestUpdateTime, resolvePullRequestAuthorFilter } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   PullRequestListEntry,
@@ -42,6 +42,7 @@ export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 export interface PullRequestGroup<Entry extends PullRequestListEntry = PullRequestListEntry> {
   readonly key: PullRequestGroupKey;
   readonly label: string;
+  readonly section?: "open" | "completed";
   readonly entries: ReadonlyArray<Entry>;
 }
 
@@ -334,6 +335,7 @@ export function matchesPullRequestFilters(
   const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
   const holds = (label: string) => labels.includes(label.trim().toLowerCase());
   return (
+    matchesPullRequestUpdateTime(entry.updatedAt, filters.updatedWithin, Date.now()) &&
     (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
     (filters.review === undefined ||
       (filters.review === "none"
@@ -371,6 +373,19 @@ export function groupPullRequestsByInvolvement<Entry extends ScopedEntry>(
   return (["authored", "reviewRequested", "others"] as const)
     .filter((key) => buckets[key].length > 0)
     .map((key) => ({ key, label: GROUP_LABELS[key], entries: buckets[key] }));
+}
+
+export function splitPullRequestGroupsByCompletion<Entry extends PullRequestListEntry>(
+  groups: ReadonlyArray<PullRequestGroup<Entry>>,
+): ReadonlyArray<PullRequestGroup<Entry>> {
+  return (["open", "completed"] as const).flatMap((section) =>
+    groups.flatMap((group) => {
+      const entries = group.entries.filter(
+        (entry) => (entry.state === "open") === (section === "open"),
+      );
+      return entries.length > 0 ? [{ ...group, section, entries }] : [];
+    }),
+  );
 }
 
 export function pullRequestEntryKey(entry: ScopedEntry): string {

@@ -34,6 +34,7 @@ import {
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   AuthOrchestrationOperateScope,
+  AuthSourceControlWriteScope,
   AuthTerminalOperateScope,
   AuthProvidersManageScope,
   type AuthEnvironmentScope,
@@ -1678,6 +1679,8 @@ export const layerWsRpc = (
           ? effect
           : Effect.fail(rpcAuthorizationError(requiredScope));
 
+      const canWriteToSourceControl = currentSession.scopes.includes(AuthSourceControlWriteScope);
+
       const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
         input: AcpRegistryListSessionsInput,
       ) {
@@ -2102,12 +2105,15 @@ export const layerWsRpc = (
           issueAutomation.scanProfileIssues(input),
         [WS_METHODS.issueAutomationGetRemoteIssueDetail]: (input) =>
           issueAutomation.getRemoteIssueDetail(input),
-        [WS_METHODS.issueAutomationSaveProfile]: (input) => issueAutomation.saveProfile(input),
+        [WS_METHODS.issueAutomationSaveProfile]: (input) =>
+          issueAutomation.saveProfile(input, canWriteToSourceControl),
         [WS_METHODS.issueAutomationDeleteProfile]: (input) => issueAutomation.deleteProfile(input),
         [WS_METHODS.issueAutomationSetProfileEnabled]: (input) =>
-          issueAutomation.setProfileEnabled(input),
-        [WS_METHODS.issueAutomationTriggerPoll]: (input) => issueAutomation.triggerPoll(input),
-        [WS_METHODS.issueAutomationAnalyzeIssues]: (input) => issueAutomation.analyzeIssues(input),
+          issueAutomation.setProfileEnabled(input, canWriteToSourceControl),
+        [WS_METHODS.issueAutomationTriggerPoll]: (input) =>
+          issueAutomation.triggerPoll(input, canWriteToSourceControl),
+        [WS_METHODS.issueAutomationAnalyzeIssues]: (input) =>
+          issueAutomation.analyzeIssues(input, canWriteToSourceControl),
         [WS_METHODS.issueAutomationCancelTask]: (input) => issueAutomation.cancelTask(input),
         [WS_METHODS.issueAutomationConfirmRepair]: (input) => issueAutomation.confirmRepair(input),
         [WS_METHODS.issueAutomationWriteBack]: (input) => issueAutomation.writeBack(input),
@@ -2116,7 +2122,8 @@ export const layerWsRpc = (
         [WS_METHODS.prReviewSubscribe]: () => prReview.subscribe,
         [WS_METHODS.prReviewSavePreset]: (input) => prReview.savePreset(input),
         [WS_METHODS.prReviewDeletePreset]: (input) => prReview.deletePreset(input),
-        [WS_METHODS.prReviewStartReview]: (input) => prReview.startReview(input),
+        [WS_METHODS.prReviewStartReview]: (input) =>
+          prReview.startReview(input, canWriteToSourceControl),
         [WS_METHODS.prReviewCancelTask]: (input) => prReview.cancelTask(input),
         [WS_METHODS.prReviewWriteBack]: (input) => prReview.writeBack(input),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>

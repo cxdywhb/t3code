@@ -1,6 +1,6 @@
 import { DEFAULT_SERVER_SETTINGS, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { CircleDotIcon, GitForkIcon, GlobeIcon, LayersIcon, ServerIcon } from "lucide-react";
-import { useId } from "react";
+import { type ComponentProps, useId } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -30,11 +30,12 @@ function renderFiltersMenu(overrides?: {
   readonly originOnlyVisible?: boolean;
   readonly originOnlyDisabled?: boolean;
   readonly onOriginOnly?: (originOnly: boolean) => void;
+  readonly onFilters?: ComponentProps<typeof PullRequestFiltersMenu>["onFilters"];
 }) {
   return (
     <PullRequestFiltersMenu
-      state="open"
-      stateOptions={[{ value: "open", label: "Open", Icon: CircleDotIcon }]}
+      state="all"
+      stateOptions={[{ value: "all", label: "All", Icon: CircleDotIcon }]}
       onState={() => {}}
       involvement="all"
       involvementOptions={[{ value: "all", label: "All PRs", Icon: LayersIcon }]}
@@ -66,6 +67,17 @@ function renderFiltersMenu(overrides?: {
     />
   );
 }
+
+it("offers three update windows and applies the selected one", async () => {
+  const onFilters = vi.fn();
+  await using _screen = await render(renderFiltersMenu({ onFilters }));
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.getByRole("menuitem", { name: /Last updated/ }).hover();
+  await expect.element(page.getByRole("menuitemradio", { name: "Last 3 days" })).toBeVisible();
+  await expect.element(page.getByRole("menuitemradio", { name: "Last month" })).toBeVisible();
+  await page.getByRole("menuitemradio", { name: "Last 7 days" }).click();
+  expect(onFilters).toHaveBeenCalledExactlyOnceWith({ updatedWithin: "7d" });
+});
 
 describe("PullRequestFiltersMenu origin-only control", () => {
   it("shows, counts off-default state, and toggles the origin remote filter when visible", async () => {

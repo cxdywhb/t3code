@@ -169,7 +169,7 @@ export interface Preferences {
   /** Hardware-keyboard Return behavior in the composer. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   readonly followUpBehavior?: FollowUpBehavior;
-  /** The client `language` setting: a locale code or "system". Unset means English. */
+  /** The client `language` setting: a locale code or "system". */
   readonly language?: string;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;

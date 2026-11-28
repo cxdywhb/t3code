@@ -17,6 +17,8 @@ import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
   type EnvironmentId,
+  type PrReviewMode,
+  type PrReviewTargetItem,
   type PullRequestAction,
   type PullRequestDetail,
   type PullRequestMergeMethod,
@@ -27,7 +29,6 @@ import {
   type PullRequestSummary,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
-  type ThreadId,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -36,7 +37,6 @@ import {
   GitCommitHorizontalIcon,
   MessageSquareIcon,
   PanelRightIcon,
-  ShieldCheckIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -181,9 +181,11 @@ import { PullRequestGuideTab } from "./PullRequestGuideTab";
 import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
 import { useNavigate } from "@tanstack/react-router";
-import { useFavoriteReviewSkills, usePrReviewLiveState } from "~/state/prReview";
+import { PrReviewActionButtons } from "../prReview/PrReviewActionButtons";
+import { PrReviewDetailTab } from "../prReview/PrReviewDetailTab";
+import { PrReviewLaunch } from "../prReview/PrReviewLaunch";
+import { prReviewEnvironment } from "~/state/prReview";
 import { buildThreadRouteParams } from "~/threadRoutes";
-import { LaunchPrReviewDialog } from "../prReview/PrReviewLaunchModal";
 
 import { changeRequestTermKind, type ChangeRequestTermKind } from "./changeRequestTerm";
 
@@ -282,6 +284,7 @@ const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
   { value: "guide", label: msg("Guide", { $context: "pull request tab" }) },
   { value: "timeline", label: msg("Timeline", { $context: "pull request tab" }) },
   { value: "code", label: msg("Code", { $context: "pull request tab" }) },
+  { value: "ai-review", label: msg("Review", { $context: "pull request detail tab" }) },
 ];
 
 // Defer the diff viewer's worker pool until Code is approached.
@@ -476,6 +479,11 @@ export function PullRequestDetailPanel({
     environmentId,
     (settings) => settings.reviewGuidesEnabled,
   );
+  const canStartReview = useAtomValue(
+    prReviewEnvironment.startReview.permissionAtom(environmentId),
+  );
+  const prReviewSupported =
+    environmentConfigs.get(environmentId)?.environment.capabilities.prReview === true;
   const guideKey = guideRunKey(environmentId, reference);
   const pageTab = useGuideRunStore((state) =>
     tabOnPage && state.pageDetailTab?.key === guideKey ? state.pageDetailTab.tab : null,
@@ -483,7 +491,8 @@ export function PullRequestDetailPanel({
   const requestedTab = tabOnPage ? (pageTab ?? initialTab) : selectedTab;
   const isTabAvailable = (value: PullRequestDetailTab) =>
     (value !== "code" || detail === null || detail.capabilities.diff) &&
-    (value !== "guide" || reviewGuidesEnabled);
+    (value !== "guide" || reviewGuidesEnabled) &&
+    (value !== "ai-review" || prReviewSupported);
   // An unavailable tab falls back without overwriting the saved selection.
   const tab = isTabAvailable(requestedTab) ? requestedTab : "summary";
   const selectTab = (next: PullRequestDetailTab) => {
@@ -877,9 +886,31 @@ export function PullRequestDetailPanel({
   const actionPending = pendingAction !== null;
   const newThread = useNewThreadHandler();
   const navigateToRoute = useNavigate();
-  const [fusionModalOpen, setFusionModalOpen] = useState(false);
-  const [favoriteSkills] = useFavoriteReviewSkills(environmentId);
-  const { snapshot: prReviewSnapshot } = usePrReviewLiveState(environmentId);
+  const [reviewLaunch, setReviewLaunch] = useState<{ key: string; mode: PrReviewMode } | null>(
+    null,
+  );
+  const launchReview = (mode: PrReviewMode) => setReviewLaunch({ key: guideKey, mode });
+  const reviewTarget: PrReviewTargetItem | null =
+    detail && prReviewSupported
+      ? {
+          provider: detail.provider,
+          host:
+            reference.host ??
+            matchingListEntry?.host ??
+            sourceControlClients.parseChangeRequestUrl(detail.url)?.link.host ??
+            URL.parse(detail.url)?.host ??
+            "",
+          projectId: reference.projectId,
+          projectTitle: detail.projectTitle,
+          repository: reference.repository,
+          number: reference.number,
+          title: detail.title,
+          url: detail.url,
+          author: detail.author?.login ?? null,
+          headBranch: detail.headBranch,
+          baseBranch: detail.baseBranch,
+        }
+      : null;
   const { environments } = useEnvironments();
   const pickableEnvironments =
     context === "page"
@@ -1675,10 +1706,9 @@ export function PullRequestDetailPanel({
                 resolveConflicts={resolveConflictsControl}
               />
               {checkoutControl}
-              <Button size="xs" variant="outline" onClick={() => setFusionModalOpen(true)}>
-                <ShieldCheckIcon className="size-3.5 text-primary" />
-                <T>Fusion Review</T>
-              </Button>
+              {reviewTarget && canStartReview && tab !== "ai-review" ? (
+                <PrReviewActionButtons onLaunch={launchReview} />
+              ) : null}
               <PullRequestActionsMenu
                 environmentId={environmentId}
                 reference={reference}
@@ -1726,7 +1756,9 @@ export function PullRequestDetailPanel({
                 perform={perform}
                 openOnHostText={openOnHostText}
                 copyReference={copyReference}
-                onOpenFusionReview={() => setFusionModalOpen(true)}
+                {...(reviewTarget && canStartReview
+                  ? { onOpenFusionReview: () => launchReview("multi_model_fusion") }
+                  : {})}
               />
             </>
           ) : null}
@@ -2290,43 +2322,34 @@ export function PullRequestDetailPanel({
             ) : null}
           </PullRequestMarkdownContext>
         ) : null}
-        {detail && fusionModalOpen ? (
-          <LaunchPrReviewDialog
-            open
-            onOpenChange={setFusionModalOpen}
-            environmentId={environmentId}
-            targets={[
-              {
-                provider: detail.provider,
-                host:
-                  reference.host ??
-                  sourceControlClients.parseChangeRequestUrl(detail.url)?.link.host ??
-                  (detail.provider === "gitlab" ? "gitlab.com" : "github.com"),
-                projectId: reference.projectId,
-                projectTitle: detail.projectTitle,
-                repository: reference.repository,
-                number: reference.number,
-                title: detail.title,
-                url: detail.url,
-                author: detail.author?.login ?? null,
-                headBranch: detail.headBranch,
-                baseBranch: detail.baseBranch,
-              },
-            ]}
-            presets={prReviewSnapshot.presets}
-            availableSkills={favoriteSkills}
-            onLaunched={({ jumpThreadId, mode }) => {
-              if (mode === "direct_agent" && jumpThreadId) {
+        {mountedTabs.has("ai-review") && reviewTarget && detail ? (
+          <div
+            className={cn("absolute inset-0", tab !== "ai-review" && "invisible")}
+            inert={tab !== "ai-review"}
+          >
+            <PrReviewDetailTab
+              key={guideKey}
+              environmentId={environmentId}
+              target={reviewTarget}
+              headSha={detail.headSha ?? null}
+              cwd={project?.workspaceRoot ?? ""}
+              onLaunch={canStartReview ? launchReview : undefined}
+              onJumpToThread={(threadId) => {
                 void navigateToRoute({
                   to: "/$environmentId/$threadId",
-                  params: buildThreadRouteParams(
-                    scopeThreadRef(environmentId, jumpThreadId as ThreadId),
-                  ),
+                  params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
                 });
-                return;
-              }
-              void navigateToRoute({ to: "/pr-review" });
-            }}
+              }}
+            />
+          </div>
+        ) : null}
+        {reviewTarget && canStartReview && reviewLaunch?.key === guideKey ? (
+          <PrReviewLaunch
+            environmentId={environmentId}
+            mode={reviewLaunch.mode}
+            targets={[reviewTarget]}
+            onClose={() => setReviewLaunch(null)}
+            onFusionStarted={() => selectTab("ai-review")}
           />
         ) : null}
       </div>

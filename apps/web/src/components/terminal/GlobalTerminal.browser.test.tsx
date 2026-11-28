@@ -1,6 +1,7 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { DraftId } from "../../composerDraftStore";
+import { SidebarProvider } from "../ui/sidebar";
 import { render } from "../../../test/render";
 import type { ThreadRouteTarget } from "../../threadRoutes";
 
@@ -14,11 +15,13 @@ const remote = EnvironmentId.make("remote");
 vi.mock(import("../../hooks/useThreadRouteTarget"), () => ({
   useThreadRouteTarget: () => state.target,
 }));
-vi.mock(import("../../state/environments"), () => ({
+vi.mock(import("../../state/environments"), async (original) => ({
+  ...(await original()),
   usePrimaryEnvironmentId: () => local,
   readPrimaryEnvironmentId: () => local,
 }));
-vi.mock(import("../../state/session"), () => ({
+vi.mock(import("../../state/session"), async (original) => ({
+  ...(await original()),
   useEnvironmentScope: () => state.allowed,
   readEnvironmentScope: () => state.allowed,
 }));
@@ -39,7 +42,12 @@ it("opens the viewed remote environment and stays disabled without its terminal 
   };
   state.allowed = true;
   vi.mocked(showGlobalTerminal).mockClear();
-  await using screen = await render(<GlobalTerminalButton />);
+  const ui = () => (
+    <SidebarProvider>
+      <GlobalTerminalButton />
+    </SidebarProvider>
+  );
+  await using screen = await render(ui());
   using _draft = vi
     .spyOn(useComposerDraftStore.getState(), "getDraftSession")
     .mockImplementation(() =>
@@ -50,23 +58,23 @@ it("opens the viewed remote environment and stays disabled without its terminal 
   expect(showGlobalTerminal).toHaveBeenCalledWith(remote);
   expect(readGlobalTerminalEnvironmentId(state.target)).toBe(remote);
   state.allowed = false;
-  await screen.rerender(<GlobalTerminalButton />);
+  await screen.rerender(ui());
   await expect.element(button).toBeDisabled();
   expect(readGlobalTerminalEnvironmentId(state.target)).toBeNull();
   state.allowed = true;
   state.target = { kind: "draft", draftId: DraftId.make("draft") };
   state.draftEnvironmentId = remote;
-  await screen.rerender(<GlobalTerminalButton />);
+  await screen.rerender(ui());
   await button.click();
   expect(showGlobalTerminal).toHaveBeenLastCalledWith(remote);
   expect(readGlobalTerminalEnvironmentId(state.target)).toBe(remote);
   state.draftEnvironmentId = null;
-  await screen.rerender(<GlobalTerminalButton />);
+  await screen.rerender(ui());
   await expect.element(button).toBeDisabled();
   expect(readGlobalTerminalEnvironmentId(state.target)).toBeNull();
   state.target = null;
   state.allowed = true;
-  await screen.rerender(<GlobalTerminalButton />);
+  await screen.rerender(ui());
   await button.click();
   expect(showGlobalTerminal).toHaveBeenLastCalledWith(local);
   expect(readGlobalTerminalEnvironmentId(state.target)).toBe(local);

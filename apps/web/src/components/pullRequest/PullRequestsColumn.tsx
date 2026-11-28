@@ -1,12 +1,12 @@
 import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
-import { Plug2Icon, SearchIcon, ShieldCheckIcon, UserRoundIcon } from "lucide-react";
+import { Plug2Icon, SearchIcon, UserRoundIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { RefreshIcon } from "../ui/refresh-icon";
 import {
   WorkspaceBreadcrumb,
@@ -25,53 +25,65 @@ function ExpandableSearch({
   searchValue,
   open,
   onOpenChange,
-  onFocusWithin,
 }: {
   searchInput: ReactNode;
   searchValue: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /**
-   * An unmount fires no blur, which is the point: whoever unmounted this can still see the reader
-   * was mid-typing and move the focus somewhere that continues the sentence.
-   */
-  onFocusWithin?: (focused: boolean) => void;
 }) {
   const gt = useGT();
+  const expanded = open || searchValue.length > 0;
   const containerRef = useRef<HTMLDivElement | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the search input DOM node when the topbar search opens
   useEffect(() => {
-    if (!open) return;
-    containerRef.current?.querySelector("input")?.focus();
+    const container = containerRef.current;
+    if (open && container && !container.contains(document.activeElement)) {
+      container.querySelector("input")?.focus();
+    }
   }, [open]);
-  if (open || searchValue.length > 0) {
-    return (
+  return (
+    <div
+      className={cn(
+        "relative flex min-w-0 shrink items-center transition-[width] duration-180 ease-out motion-reduce:transition-none",
+        expanded ? "w-64" : "w-8 sm:w-7",
+      )}
+    >
       <div
         ref={containerRef}
-        className="w-56 min-w-24 shrink transition-[opacity,translate] duration-150 ease-out starting:translate-x-1 starting:opacity-0 motion-reduce:transition-none"
-        onFocus={() => {
-          onFocusWithin?.(true);
-          // Open while focused, so Escape clearing the query does not unmount the field.
-          onOpenChange(true);
-        }}
-        onBlur={() => {
-          onFocusWithin?.(false);
-          onOpenChange(false);
+        inert={!expanded}
+        className={cn(
+          "min-w-0 flex-1 overflow-hidden transition-opacity duration-150 ease-out motion-reduce:transition-none",
+          expanded ? "opacity-100" : "opacity-0",
+        )}
+        onFocus={() => onOpenChange(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) onOpenChange(false);
         }}
       >
         {searchInput}
       </div>
-    );
-  }
-  return (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      aria-label={gt("Search pull requests")}
-      onClick={() => onOpenChange(true)}
-    >
-      <SearchIcon className="size-4" />
-    </Button>
+      <div
+        inert={expanded}
+        className={cn(
+          "absolute end-0 flex transition-opacity duration-150 ease-out motion-reduce:transition-none",
+          expanded ? "opacity-0" : "opacity-100",
+        )}
+      >
+        <SharedTooltipTrigger
+          label={gt("Search pull requests")}
+          render={
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label={gt("Search pull requests")}
+              onClick={() => onOpenChange(true)}
+            >
+              <SearchIcon aria-hidden />
+            </Button>
+          }
+        />
+      </div>
+    </div>
   );
 }
 
@@ -90,6 +102,7 @@ export function PullRequestsColumn({
   sortMenu,
   filtersMenu,
   savedViewsMenu,
+  reviewControls,
   rightPanelControl,
   titlebarControls,
   rightPanelOpen,
@@ -111,6 +124,7 @@ export function PullRequestsColumn({
   sortMenu: ReactNode;
   filtersMenu: ReactNode;
   savedViewsMenu: ReactNode;
+  reviewControls?: ReactNode;
   rightPanelControl: ReactNode;
   titlebarControls: ReactNode;
   rightPanelOpen: boolean;
@@ -120,7 +134,6 @@ export function PullRequestsColumn({
 }) {
   const gt = useGT();
   const resolve = useMessages();
-  const navigate = useNavigate();
   const contentArea = workspaceAreaProps("pull-requests", 1, gt("Pull requests"));
   const markerRef = useRef<HTMLDivElement | null>(null);
   const [condensed, setCondensed] = useState(false);
@@ -135,10 +148,6 @@ export function PullRequestsColumn({
     observer.observe(marker);
     return () => observer.disconnect();
   }, [scrollRef]);
-  // Typing into the topbar search narrows the list, and a short enough list un-scrolls the
-  // page — which dissolves the condensed topbar and unmounts the very input being typed in.
-  const topbarSearchFocusedRef = useRef(false);
-  const inFlowSearchRef = useRef<HTMLDivElement | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const topbarSearchRef = useRef<HTMLDivElement | null>(null);
   const searchExpanded = searchOpen || searchValue.length > 0;
@@ -150,26 +159,14 @@ export function PullRequestsColumn({
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
       if (event.altKey || event.shiftKey) return;
       event.preventDefault();
-      // A closed topbar search has no input yet; opening it mounts one that focuses itself.
-      if (condensed) setSearchOpen(true);
-      const input = (condensed ? topbarSearchRef : inFlowSearchRef).current?.querySelector("input");
+      setSearchOpen(true);
+      const input = topbarSearchRef.current?.querySelector("input");
       input?.focus();
       input?.select();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed, maximizedAway]);
-  if (!condensed && searchOpen) setSearchOpen(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves DOM focus to the in-flow search when the topbar search it was typed in unmounts
-  useEffect(() => {
-    if (condensed) return;
-    if (!topbarSearchFocusedRef.current) return;
-    topbarSearchFocusedRef.current = false;
-    const input = inFlowSearchRef.current?.querySelector("input");
-    if (!input) return;
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-  }, [condensed]);
+  }, [maximizedAway]);
 
   return (
     <div
@@ -185,11 +182,13 @@ export function PullRequestsColumn({
         reserveNativeControls={!rightPanelOpen}
         className="relative bg-background"
       >
-        {titlebarControls}
         {condensed ? (
           <WorkspaceBreadcrumb
             ariaLabel={gt("Pull request scope")}
-            className="overflow-hidden transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none"
+            className={cn(
+              "overflow-hidden transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none",
+              searchExpanded && "@max-sm/pr-list:sr-only",
+            )}
           >
             <WorkspaceBreadcrumbItem current className={cn(searchExpanded && "sr-only")}>
               <h1 className="truncate">
@@ -222,28 +221,28 @@ export function PullRequestsColumn({
             </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         ) : (
-          <WorkspacePageTitle ariaLabel={gt("Pull requests breadcrumb")}>
-            <T>Pull requests</T>
-          </WorkspacePageTitle>
+          <div className={cn("min-w-0", searchExpanded && "@max-sm/pr-list:sr-only")}>
+            <WorkspacePageTitle ariaLabel={gt("Pull requests breadcrumb")}>
+              <T>Pull requests</T>
+            </WorkspacePageTitle>
+          </div>
         )}
         <div className="min-w-0 flex-1" />
-        {condensed ? (
-          <div
-            ref={topbarSearchRef}
-            className="flex shrink items-center gap-1.5 transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none"
-          >
-            <ExpandableSearch
-              searchInput={searchInput}
-              searchValue={searchValue}
-              open={searchOpen}
-              onOpenChange={setSearchOpen}
-              onFocusWithin={(focused) => {
-                topbarSearchFocusedRef.current = focused;
-              }}
-            />
+        <div
+          ref={topbarSearchRef}
+          className="flex min-w-0 shrink items-center gap-1.5 [-webkit-app-region:no-drag]"
+        >
+          <ExpandableSearch
+            searchInput={searchInput}
+            searchValue={searchValue}
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+          />
+          {condensed ? (
             <PullRequestRefreshControl compact refreshing={refreshing} onRefresh={onRefresh} />
-          </div>
-        ) : null}
+          ) : null}
+        </div>
+        {titlebarControls}
         {rightPanelControl}
       </WorkspacePageHeader>
 
@@ -253,10 +252,17 @@ export function PullRequestsColumn({
       >
         <WorkspacePageContainer width="expanded" className="min-h-full gap-4">
           <div className="flex flex-col gap-3">
-            <div ref={inFlowSearchRef} className="flex flex-wrap items-center gap-2">
-              <div className="min-w-0 basis-full @lg/pr-list:basis-0 @lg/pr-list:flex-1">
-                {searchInput}
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <PullRequestCompactFilterMenu
+                label={gt("Filter by provider")}
+                outlined
+                iconOnly={host !== undefined}
+                triggerIcon={<Plug2Icon aria-hidden className="size-4" />}
+                triggerLabel={gt("Source")}
+                value={host ?? ""}
+                options={hostMenuOptions}
+                onChange={(next) => onHost(next === "" ? undefined : next)}
+              />
               <PullRequestCompactFilterMenu
                 label={gt("Filter by involvement")}
                 outlined
@@ -268,24 +274,7 @@ export function PullRequestsColumn({
               {sortMenu}
               {filtersMenu}
               {savedViewsMenu}
-              <PullRequestCompactFilterMenu
-                label={gt("Filter by provider")}
-                outlined
-                iconOnly={host !== undefined}
-                triggerIcon={<Plug2Icon aria-hidden className="size-4" />}
-                triggerLabel={gt("All", { $context: "all providers" })}
-                value={host ?? ""}
-                options={hostMenuOptions}
-                onChange={(next) => onHost(next === "" ? undefined : next)}
-              />
-              <Button
-                size="default"
-                variant="outline"
-                onClick={() => void navigate({ to: "/pr-review" })}
-              >
-                <ShieldCheckIcon className="size-3.5 text-primary" />
-                <T>PR Cross Review</T>
-              </Button>
+              {reviewControls}
               {!condensed ? (
                 <PullRequestRefreshControl refreshing={refreshing} onRefresh={onRefresh} />
               ) : null}

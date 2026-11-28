@@ -317,9 +317,12 @@ export class GitLabUnknownLabelError extends Schema.TaggedError<GitLabUnknownLab
     command: Schema.Literal("glab"),
     cwd: Schema.String,
     labels: Schema.Array(Schema.String),
+    reason: Schema.optionalKey(Schema.Literals(["contains-comma", "not-applied"])),
   },
 ) {
   get detail(): string {
+    if (this.reason === "contains-comma") return "GitLab label names cannot contain a comma.";
+    if (this.reason === "not-applied") return "GitLab did not apply the requested label.";
     return `The project has no label named ${this.labels.map((label) => `"${label}"`).join(", ")}.`;
   }
 
@@ -581,6 +584,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       readonly labels: ReadonlyArray<string>;
       readonly applied: boolean;
+      readonly createIfMissing?: boolean | undefined;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly listProjectUsers: (input: {
@@ -1083,6 +1087,9 @@ function actionArgs(
 
 /** @public */
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeAppliedLabels = Schema.decodeUnknownResult(
+  Schema.fromJsonString(Schema.Struct({ labels: Schema.Array(Schema.String) })),
+);
 const isGitLabCliCommandError = Schema.is(GitLabCli.GitLabCliCommandError);
 
 export const make = Effect.gen(function* () {
@@ -3019,7 +3026,15 @@ export const make = Effect.gen(function* () {
     }),
 
     setLabels: Effect.fn("GitLabPullRequestCli.setLabels")(function* (input) {
-      if (input.applied) {
+      if (input.createIfMissing && input.labels.some((label) => label.includes(","))) {
+        return yield* new GitLabUnknownLabelError({
+          command: "glab",
+          cwd: input.cwd,
+          labels: input.labels,
+          reason: "contains-comma",
+        });
+      }
+      if (input.applied && !input.createIfMissing) {
         // GitLab creates any label it is asked to add that the project does not have yet.
         const found = yield* Effect.forEach(
           input.labels,
@@ -3054,7 +3069,7 @@ export const make = Effect.gen(function* () {
           });
         }
       }
-      yield* api({
+      const updated = yield* api({
         cwd: input.cwd,
         host: input.host,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
@@ -3065,6 +3080,20 @@ export const make = Effect.gen(function* () {
           [input.applied ? "add_labels" : "remove_labels"]: input.labels.join(","),
         }),
       });
+      if (input.createIfMissing) {
+        const applied = decodeAppliedLabels(updated.stdout);
+        if (
+          Result.isFailure(applied) ||
+          !input.labels.every((label) => applied.success.labels.includes(label))
+        ) {
+          return yield* new GitLabUnknownLabelError({
+            command: "glab",
+            cwd: input.cwd,
+            labels: input.labels,
+            reason: "not-applied",
+          });
+        }
+      }
     }),
 
     listProjectUsers: Effect.fn("GitLabPullRequestCli.listProjectUsers")(function (input) {

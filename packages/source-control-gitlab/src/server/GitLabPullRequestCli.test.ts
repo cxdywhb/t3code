@@ -2269,6 +2269,26 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("lets GitLab create and apply a label only when requested", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output('{"labels":["release ready"]}')));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      yield* cli.setLabels({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        labels: ["release ready"],
+        applied: true,
+        createIfMissing: true,
+      });
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+      expect(argsOfCall(0).slice(1)).toContain("projects/acme%2Fweb/merge_requests/7");
+      expect(JSON.parse(mockedExecute.mock.calls[0]?.[0].stdin ?? "{}")).toEqual({
+        add_labels: "release ready",
+      });
+    }),
+  );
+
   it.effect("refuses to add a label the project lacks, since GitLab would create it", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation(() =>

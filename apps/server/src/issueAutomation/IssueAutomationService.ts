@@ -377,18 +377,22 @@ export class IssueAutomationService extends Context.Service<
     ) => Effect.Effect<IssueAutomationRemoteIssueDetail, IssueAutomationError>;
     readonly saveProfile: (
       input: IssueAutomationSaveProfileInput,
+      canWriteBack?: boolean,
     ) => Effect.Effect<IssueAutomationProfile, IssueAutomationError>;
     readonly deleteProfile: (
       input: IssueAutomationDeleteProfileInput,
     ) => Effect.Effect<void, IssueAutomationError>;
     readonly setProfileEnabled: (
       input: IssueAutomationSetProfileEnabledInput,
+      canWriteBack?: boolean,
     ) => Effect.Effect<IssueAutomationProfile, IssueAutomationError>;
     readonly triggerPoll: (
       input: IssueAutomationTriggerPollInput,
+      canWriteBack?: boolean,
     ) => Effect.Effect<IssueAutomationTriggerPollResult, IssueAutomationError>;
     readonly analyzeIssues: (
       input: IssueAutomationAnalyzeIssuesInput,
+      canWriteBack?: boolean,
     ) => Effect.Effect<IssueAutomationAnalyzeIssuesResult, IssueAutomationError>;
     readonly cancelTask: (
       input: IssueAutomationCancelTaskInput,
@@ -1609,6 +1613,7 @@ const make = Effect.gen(function* () {
   const pollSingleProfile = Effect.fn("IssueAutomationService.pollSingleProfile")(function* (
     profileId: IssueAutomationProfileId,
     requireEnabled = false,
+    canWriteBack = true,
   ) {
     const scan = yield* taskStarts.withPermits(1)(
       Effect.gen(function* () {
@@ -1616,6 +1621,12 @@ const make = Effect.gen(function* () {
           .getProfile(profileId)
           .pipe(Effect.mapError(mapRepoErr("getProfile")));
         if (!profile || (requireEnabled && !profile.enabled)) return;
+        if (profile.policy.autoWriteComment && !canWriteBack) {
+          return yield* new IssueAutomationError({
+            operation: "triggerPoll",
+            detail: "自动回写需要源码写入权限。",
+          });
+        }
         if (requireEnabled && canPauseAutomaticDiagnosis(profile.policy)) {
           const pending = yield* repo
             .hasPendingResume(profileId)
@@ -2215,7 +2226,13 @@ const make = Effect.gen(function* () {
   const saveProfile: IssueAutomationService["Service"]["saveProfile"] = Effect.fn(
     "IssueAutomationService.saveProfile",
   )(
-    function* (input) {
+    function* (input, canWriteBack = true) {
+      if (input.policy.autoWriteComment && !canWriteBack) {
+        return yield* new IssueAutomationError({
+          operation: "saveProfile",
+          detail: "自动回写需要源码写入权限。",
+        });
+      }
       const prev = input.id
         ? yield* repo.getProfile(input.id).pipe(Effect.mapError(mapRepoErr("getProfile")))
         : undefined;
@@ -2310,7 +2327,7 @@ const make = Effect.gen(function* () {
   const setProfileEnabled: IssueAutomationService["Service"]["setProfileEnabled"] = Effect.fn(
     "IssueAutomationService.setProfileEnabled",
   )(
-    function* (input) {
+    function* (input, canWriteBack = true) {
       const found = yield* repo
         .getProfile(input.profileId)
         .pipe(Effect.mapError(mapRepoErr("getProfile")));
@@ -2318,6 +2335,12 @@ const make = Effect.gen(function* () {
         return yield* new IssueAutomationError({
           operation: "setProfileEnabled",
           detail: "未找到对应的自动分析策略配置",
+        });
+      }
+      if (input.enabled && found.policy.autoWriteComment && !canWriteBack) {
+        return yield* new IssueAutomationError({
+          operation: "setProfileEnabled",
+          detail: "自动回写需要源码写入权限。",
         });
       }
       const updatedAt = yield* nowIso;
@@ -2336,7 +2359,7 @@ const make = Effect.gen(function* () {
 
   const triggerPoll: IssueAutomationService["Service"]["triggerPoll"] = Effect.fn(
     "IssueAutomationService.triggerPoll",
-  )(function* (input) {
+  )(function* (input, canWriteBack = true) {
     const profiles = yield* repo.listProfiles.pipe(Effect.mapError(mapRepoErr("listProfiles")));
     const found = profiles.find((p) => p.id === input.profileId);
     if (!found) {
@@ -2345,12 +2368,12 @@ const make = Effect.gen(function* () {
         detail: "未找到对应的自动分析策略配置",
       });
     }
-    return yield* pollSingleProfile(found.id);
+    return yield* pollSingleProfile(found.id, false, canWriteBack);
   });
 
   const analyzeIssues: IssueAutomationService["Service"]["analyzeIssues"] = Effect.fn(
     "IssueAutomationService.analyzeIssues",
-  )(function* (input) {
+  )(function* (input, canWriteBack = true) {
     const { connector } = yield* readConnectorCredentials(input.connectorId);
     const sourceId = input.retryTaskId ?? input.repairFromTaskId;
     const previous =
@@ -2455,6 +2478,12 @@ const make = Effect.gen(function* () {
               matchedProfile.policy.autoWriteComment,
           }
         : configuredPolicy;
+    if (policy.autoWriteComment && !canWriteBack) {
+      return yield* new IssueAutomationError({
+        operation: "analyzeIssues",
+        detail: "自动回写需要源码写入权限。",
+      });
+    }
     const maxConcurrency = matchedProfile?.filter.maxConcurrency ?? 2;
     const scopeName =
       connector.scopes.find((scope) => scope.id === input.scopeId)?.name ?? input.scopeName;

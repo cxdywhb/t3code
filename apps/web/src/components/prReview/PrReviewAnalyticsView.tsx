@@ -56,11 +56,7 @@ export function PrReviewAnalyticsView({
             <T>No review telemetry in selected time window</T>
           </EmptyTitle>
           <EmptyDescription>
-            <T>
-              Launch Multi-Model Fusion Reviews from the Cloud MR / PR Queue or widen the time range
-              above to inspect pipeline reliability, stage latency, defect interception, and
-              engineering hours saved.
-            </T>
+            <T>Start a fusion review from Pull requests or choose a wider time range.</T>
           </EmptyDescription>
         </EmptyHeader>
       </Empty>

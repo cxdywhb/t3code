@@ -29,6 +29,7 @@ export interface PullRequestListPreferences {
   readonly draft?: "only" | "hide";
   readonly review?: NonNullable<PullRequestListFilters["review"]>;
   readonly checks?: NonNullable<PullRequestListFilters["checks"]>;
+  readonly updatedWithin?: NonNullable<PullRequestListFilters["updatedWithin"]>;
   readonly author?: string | undefined;
   readonly labels?: ReadonlyArray<string> | undefined;
   readonly sort?: PullRequestListSort;
@@ -40,7 +41,7 @@ export type PullRequestListPreferencePatch = {
 
 const DEFAULT_PULL_REQUEST_LIST_PREFERENCES = {
   involvement: "all",
-  state: "open",
+  state: "all",
 } as const satisfies PullRequestListPreferences;
 
 const BoundedPreference = Schema.String.check(Schema.isMaxLength(200));
@@ -54,6 +55,7 @@ export const PullRequestListPreferencesSchema = Schema.Struct({
   draft: PullRequestListFilters.fields.draft,
   review: PullRequestListFilters.fields.review,
   checks: PullRequestListFilters.fields.checks,
+  updatedWithin: PullRequestListFilters.fields.updatedWithin,
   author: Schema.optional(BoundedPreference),
   labels: Schema.optional(Schema.Array(BoundedPreference).check(Schema.isMaxLength(10))),
   sort: Schema.optional(PullRequestListSort),
@@ -84,6 +86,7 @@ export function pullRequestListPreferences(
     ...(search.draft ? { draft: search.draft } : {}),
     ...(search.review ? { review: search.review } : {}),
     ...(search.checks ? { checks: search.checks } : {}),
+    ...(search.updatedWithin ? { updatedWithin: search.updatedWithin } : {}),
     ...(search.author ? { author: search.author } : {}),
     ...(search.labels && search.labels.length > 0 ? { labels: search.labels } : {}),
     ...(search.sort && search.sort !== "ready" ? { sort: search.sort } : {}),

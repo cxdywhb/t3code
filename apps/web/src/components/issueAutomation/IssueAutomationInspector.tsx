@@ -302,7 +302,7 @@ export function IssueAutomationInspectorContent({
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col bg-background">
+    <div className="@container/issue-inspector relative flex h-full min-h-0 flex-1 flex-col bg-background">
       <div
         data-chat-header
         className="flex h-[var(--workspace-topbar-height)] shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4"
@@ -560,12 +560,14 @@ export function IssueAutomationInspectorContent({
                       </PullRequestMetaRow>
                     </div>
 
-                    <div className="mt-4 rounded-xl border border-border/60 bg-card/40 p-3.5">
+                    <div className="mt-4 rounded-xl border border-border/70 bg-card/40 p-3.5 shadow-xs space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-xs font-medium text-foreground">
-                          <BotIcon className="size-3.5 text-muted-foreground" />
+                        <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                          <span className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <BotIcon className="size-3.5" />
+                          </span>
                           <span>
-                            <T>Automated diagnosis & Worktree fix</T>
+                            <T>Diagnosis settings</T>
                           </span>
                           {matchedProfile ? (
                             <Badge variant="secondary" size="sm">
@@ -584,7 +586,7 @@ export function IssueAutomationInspectorContent({
                         </Button>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <div className="grid grid-cols-1 gap-2 @min-[32rem]/issue-inspector:grid-cols-3">
                         <SearchableProjectMenu
                           projects={projects}
                           value={resolvedProjectId}
@@ -849,7 +851,7 @@ export function IssueAutomationInspectorContent({
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-2.5 rounded-xl border border-border/60 bg-card/40 px-3.5 py-3 sm:grid-cols-6">
+              <div className="mt-4 rounded-xl border border-border/70 bg-card/40 p-3 grid grid-cols-2 gap-x-2 gap-y-2.5 @min-[23rem]/issue-inspector:grid-cols-3 @min-[43rem]/issue-inspector:grid-cols-6">
                 {[
                   { idx: 1, label: gt("Fetch") },
                   { idx: 2, label: gt("Route") },

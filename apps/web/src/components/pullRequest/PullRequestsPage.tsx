@@ -12,10 +12,12 @@ import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullReques
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
 import { sortProjectsByGroupOrder } from "@t3tools/client-runtime/state/project-grouping";
-import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectId,
+  PrReviewMode,
+  PrReviewTaskId,
   PullRequestAction,
   PullRequestInvolvement,
   PullRequestListCursors,
@@ -26,7 +28,7 @@ import type {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowDownUpIcon, LayersIcon, Plug2Icon } from "lucide-react";
+import { ArrowDownUpIcon, LayersIcon, Plug2Icon, ShieldCheckIcon, XIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 
 import { m } from "~/i18n/messages";
@@ -65,6 +67,11 @@ import {
 import { SavedViewsMenu } from "../SavedViewsMenu";
 import { PULL_REQUEST_SAVED_VIEWS, pullRequestSavedViewPatch } from "./pullRequestSavedViews";
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
+import { PrReviewLaunch } from "../prReview/PrReviewLaunch";
+import { PrReviewRowControls } from "../prReview/PrReviewRowControls";
+import { useServerConfigs } from "~/state/entities";
+import { useEnvironmentsWithScope } from "~/state/session";
+import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
   PullRequestFiltersMenu,
@@ -103,6 +110,7 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
 import { registerCommands } from "~/shortcuts/dispatcher";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "../chat/PanelLayoutControls";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { Button } from "../ui/button";
 import { SidebarInset, useMobileSidebarSheetMounted } from "../ui/sidebar";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -301,6 +309,7 @@ export function PullRequestsPage() {
           ...(next.draft ? { draft: next.draft } : {}),
           ...(next.review ? { review: next.review } : {}),
           ...(next.checks ? { checks: next.checks } : {}),
+          ...(next.updatedWithin ? { updatedWithin: next.updatedWithin } : {}),
           ...(next.author ? { author: next.author } : {}),
           ...(next.labels && next.labels.length > 0 ? { labels: next.labels } : {}),
         };
@@ -347,7 +356,7 @@ export function PullRequestsPage() {
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
-  const scopeKey = `${environmentKey}:${originOnlyKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
+  const scopeKey = `${environmentKey}:${originOnlyKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.updatedWithin ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
   const [page, setPage] = useState<{
@@ -1211,11 +1220,162 @@ export function PullRequestsPage() {
     });
   };
 
+  const serverConfigs = useServerConfigs();
+  const reviewSupported = [...serverConfigs.values()].some(
+    (config) => config.environment.capabilities.prReview === true,
+  );
+  const [selectingForReview, setSelectingForReview] = useState(false);
+  const [reviewSelection, setReviewSelection] = useState<
+    ReadonlyArray<EnvironmentPullRequestEntry>
+  >([]);
+  const [reviewLaunch, setReviewLaunch] = useState<{
+    mode: PrReviewMode;
+    entries: ReadonlyArray<EnvironmentPullRequestEntry>;
+    batch: boolean;
+  } | null>(null);
+  const reviewWritable = useEnvironmentsWithScope(
+    capableEnvironments,
+    AuthOrchestrationOperateScope,
+  );
+  const canStartReview = (entry: EnvironmentPullRequestEntry) =>
+    reviewWritable.has(entry.environmentId) &&
+    serverConfigs.get(entry.environmentId)?.environment.capabilities.prReview === true;
+  const visibleReviewKeys = new Set(
+    displayGroups.flatMap((group) => group.entries.map(pullRequestEntryKey)),
+  );
+  const canBatchReview = (entry: EnvironmentPullRequestEntry) =>
+    canStartReview(entry) && visibleReviewKeys.has(pullRequestEntryKey(entry));
+  const selectedForReview = reviewSelection.filter(canBatchReview);
+  const batchEnvironmentId = selectedForReview[0]?.environmentId;
+  const selectedReviewKeys = new Set(selectedForReview.map(pullRequestEntryKey));
+  const batchAvailable = displayGroups.some((group) => group.entries.some(canStartReview));
+  const batchSelectionOf = (entry: EnvironmentPullRequestEntry) => {
+    const key = pullRequestEntryKey(entry);
+    const checked = selectedReviewKeys.has(key);
+    return {
+      checked,
+      disabled:
+        !canStartReview(entry) ||
+        (batchEnvironmentId !== undefined && entry.environmentId !== batchEnvironmentId) ||
+        (!checked && selectedForReview.length >= 20),
+      toggle: () => {
+        if (!canBatchReview(entry)) return;
+        setReviewSelection((previous) => {
+          const current = previous.filter(canBatchReview);
+          if (current.some((item) => pullRequestEntryKey(item) === key))
+            return current.filter((item) => pullRequestEntryKey(item) !== key);
+          if (
+            current.length >= 20 ||
+            (current[0] && current[0].environmentId !== entry.environmentId)
+          )
+            return current;
+          return [...current, entry];
+        });
+      },
+    };
+  };
+  const reviewWorkspace = (reviewEnvironmentId?: EnvironmentId, reviewTaskId?: PrReviewTaskId) =>
+    void navigate({
+      to: "/pull-requests",
+      search: (previous) => ({
+        ...previous,
+        reviewWorkspace: true,
+        reviewEnvironmentId,
+        reviewTaskId,
+      }),
+    });
+  const openReview = (entry: EnvironmentPullRequestEntry) => {
+    selectEntry(entry);
+    useGuideRunStore
+      .getState()
+      .showPageDetailTab(guideRunKey(entry.environmentId, entry), "ai-review");
+  };
+  const clearReviewSelection = () => {
+    setSelectingForReview(false);
+    setReviewSelection([]);
+  };
+  const renderReviewControls = (entry: EnvironmentPullRequestEntry) => {
+    if (serverConfigs.get(entry.environmentId)?.environment.capabilities.prReview !== true)
+      return null;
+    return (
+      <PrReviewRowControls
+        entry={entry}
+        onLaunch={(mode) => setReviewLaunch({ mode, entries: [entry], batch: false })}
+        onOpenReport={() => openReview(entry)}
+      />
+    );
+  };
+  const reviewControls = reviewSupported ? (
+    <>
+      <SharedTooltipTrigger
+        label={gt("PR Cross Review")}
+        render={
+          <Button
+            size="default"
+            variant="outline"
+            aria-label={gt("PR Cross Review")}
+            onClick={() => reviewWorkspace(scopedEnvironmentId ?? undefined)}
+          >
+            <ShieldCheckIcon aria-hidden />
+            <T>Fusion</T>
+          </Button>
+        }
+      />
+      <SharedTooltipTrigger
+        label={gt("Batch Fusion Review")}
+        render={
+          <Button
+            size="default"
+            variant="outline"
+            aria-label={
+              selectingForReview
+                ? gt("Batch Fusion Review ({count})", { count: selectedForReview.length })
+                : gt("Batch Fusion Review")
+            }
+            disabled={selectingForReview ? selectedForReview.length === 0 : !batchAvailable}
+            onClick={() => {
+              if (selectingForReview) {
+                setReviewLaunch({
+                  mode: "multi_model_fusion",
+                  entries: selectedForReview,
+                  batch: true,
+                });
+              } else {
+                setSelectingForReview(true);
+              }
+            }}
+          >
+            <LayersIcon aria-hidden />
+            <T>Batch</T>
+            {selectingForReview ? (
+              <span className="tabular-nums">{selectedForReview.length}</span>
+            ) : null}
+          </Button>
+        }
+      />
+      {selectingForReview ? (
+        <SharedTooltipTrigger
+          label={gt("Cancel batch selection")}
+          render={
+            <Button
+              size="icon"
+              variant="outline"
+              aria-label={gt("Cancel batch selection")}
+              onClick={clearReviewSelection}
+            >
+              <XIcon aria-hidden />
+            </Button>
+          }
+        />
+      ) : null}
+    </>
+  ) : null;
+
   const searchInput = (
     <PullRequestSearchInput
       value={search.q ?? ""}
       label={gt("Search pull requests")}
-      placeholder={gt("Search pull requests, or label:bug")}
+      placeholder={gt("Search")}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateListScope({ q: query || undefined })}
       onSubmit={submitQuery}
@@ -1291,7 +1451,7 @@ export function PullRequestsPage() {
           query={typedQuery}
           filtered={
             menuFiltered ||
-            search.state !== "open" ||
+            search.state !== "all" ||
             search.involvement !== "all" ||
             scopedProjectId !== undefined ||
             search.host !== undefined
@@ -1317,6 +1477,8 @@ export function PullRequestsPage() {
           closingKeys={closingKeys}
           sweepingKeys={closeSweepKeys}
           onCloseSweepStart={startCloseSweep}
+          reviewControls={renderReviewControls}
+          batchSelectionOf={selectingForReview ? batchSelectionOf : null}
         />
       )}
 
@@ -1408,6 +1570,7 @@ export function PullRequestsPage() {
           draft: next.draft,
           review: next.review,
           checks: next.checks,
+          updatedWithin: next.updatedWithin,
           author: next.author,
           labels: next.labels?.flatMap((group) => group),
         });
@@ -1448,6 +1611,7 @@ export function PullRequestsPage() {
     onState: (state: PullRequestListState) => updateListScope({ state }),
     onHost: (host: string | undefined) => updateListScope({ host }),
     searchInput,
+    reviewControls,
     sortMenu,
     filtersMenu,
     savedViewsMenu: (
@@ -1457,35 +1621,37 @@ export function PullRequestsPage() {
         onApply={(preferences) => updateListScope(pullRequestSavedViewPatch(preferences))}
       />
     ),
-    rightPanelControl: !pullRequestsSupported ? null : (
-      <span
-        aria-hidden
-        className={cn(
-          "shrink-0",
-          rightPanelState.isOpen ? "-ml-3 w-0" : "w-7 sm:w-5",
-          panelAnimationsActive && "transition-[width,margin] ease-out",
-        )}
-        style={
-          panelAnimationsActive
-            ? { transitionDuration: `${panelAnimationDurationMs}ms` }
-            : undefined
-        }
-      />
-    ),
-    titlebarControls:
-      // While the panel is closed the strip lives inside the header: a no-drag
-      // descendant beats the header's desktop drag-region, where a floating
-      // sibling loses (app-region hit-testing ignores z-index).
-      pullRequestsSupported ? (
-        rightPanelPresent ? (
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-y-0 left-full w-7 [-webkit-app-region:no-drag]"
-          />
-        ) : (
-          openPanelControls
-        )
+    rightPanelControl:
+      pullRequestsSupported && rightPanelPresent ? (
+        <span
+          aria-hidden
+          className={cn(
+            "shrink-0",
+            rightPanelState.isOpen ? "-ml-3 w-0" : "w-16",
+            panelAnimationsActive && "transition-[width,margin] ease-out",
+          )}
+          style={
+            panelAnimationsActive
+              ? { transitionDuration: `${panelAnimationDurationMs}ms` }
+              : undefined
+          }
+        />
       ) : null,
+    titlebarControls: pullRequestsSupported ? (
+      rightPanelPresent ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-full w-7 [-webkit-app-region:no-drag]"
+        />
+      ) : (
+        <div
+          className={cn("flex h-full shrink-0 items-center", mobileSidebarSheetMounted && "hidden")}
+          data-workspace-titlebar-controls
+        >
+          {panelToggleControls}
+        </div>
+      )
+    ) : null,
     rightPanelOpen: rightPanelState.isOpen,
     maximizedAway: rightPanelMaximized,
     listBody,
@@ -1601,6 +1767,27 @@ export function PullRequestsPage() {
       <div className="relative flex min-h-0 flex-1">
         {pullRequestsSupported && rightPanelPresent ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
+        {reviewLaunch?.entries[0] ? (
+          <PrReviewLaunch
+            environmentId={reviewLaunch.entries[0].environmentId}
+            mode={reviewLaunch.mode}
+            targets={reviewLaunch.entries.map((entry) => ({
+              ...entry,
+              author: entry.author?.login ?? null,
+            }))}
+            onClose={() => setReviewLaunch(null)}
+            onFusionStarted={(tasks) => {
+              const first = reviewLaunch.entries[0];
+              if (!first) return;
+              if (reviewLaunch.batch) {
+                clearReviewSelection();
+                reviewWorkspace(first.environmentId, tasks[0]?.id);
+              } else {
+                openReview(first);
+              }
+            }}
+          />
+        ) : null}
 
         {rightPanelPresent && renderedPullRequestSurface && panelEnvironmentId !== null ? (
           <RightPanelTabs

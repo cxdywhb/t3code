@@ -4335,6 +4335,37 @@ it.effect("hands a host's own resume position back on the next read", () =>
   }),
 );
 
+it.effect("keeps update windows distinct through the list cache", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-07-10T00:00:00Z"));
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                changeRequest(1, "2026-07-09T00:00:00Z"),
+                changeRequest(2, "2026-07-05T00:00:00Z"),
+                changeRequest(3, "2026-06-21T00:00:00Z"),
+              ],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+    for (const [updatedWithin, numbers] of [
+      ["3d", [1]],
+      ["7d", [1, 2]],
+      ["30d", [1, 2, 3]],
+    ] as const) {
+      const list = yield* service.list({ state: "open", filters: { updatedWithin } });
+      assert.deepStrictEqual(list.entries.map((entry) => entry.number).toSorted(), [...numbers]);
+    }
+  }),
+);
+
 it.effect("judges review and checks filters only on a host that summarises them", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

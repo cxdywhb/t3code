@@ -4838,6 +4838,41 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("creates a requested missing label before applying it", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.fail(
+            new GitHubRequestPolicy.GitHubApiNotFoundError({
+              host: "github.com",
+              operation: "getLabel",
+            }),
+          ),
+        )
+        .mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* cli.setLabels({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        labels: ["release ready"],
+        applied: true,
+        createIfMissing: true,
+      });
+      expect(callAt(0)).toMatchObject({
+        method: "GET",
+        path: "repos/acme/web/labels/release%20ready",
+      });
+      expect(callAt(1)).toMatchObject({
+        method: "POST",
+        path: "repos/acme/web/labels",
+        body: { name: "release ready", color: "ededed" },
+      });
+      expect(callAt(2)).toMatchObject({ method: "POST", path: "repos/acme/web/issues/7/labels" });
+    }),
+  );
+
   it.effect("takes labels off one at a time, naming each in the path encoded", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));

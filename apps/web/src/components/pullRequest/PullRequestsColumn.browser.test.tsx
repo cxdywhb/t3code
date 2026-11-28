@@ -129,10 +129,9 @@ describe("PullRequestsColumn condensed search", () => {
       ),
     );
     scrollRef.current?.scrollTo({ top: 1000 });
-    const searches = page.getByRole("searchbox", { name: "Search pull requests" });
-    // The topbar copy comes first and mounts once the header condenses.
-    await expect.element(searches.nth(1)).toBeInTheDocument();
-    const search = searches.nth(0);
+    const search = page.getByRole("searchbox", { name: "Search pull requests" });
+    await expect.element(search).toBeVisible();
+    expect(search.all()).toHaveLength(1);
     // Safari ends the composition just before the confirming keydown, reporting only keyCode 229.
     const pressDuringComposition = (key: string) =>
       act(() => {

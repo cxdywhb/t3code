@@ -49,13 +49,10 @@ export function IssueAutomationAnalyticsView({
             <TrendingUpIcon />
           </EmptyMedia>
           <EmptyTitle>
-            <T>No telemetry data in selected window</T>
+            <T>No runs in this period</T>
           </EmptyTitle>
           <EmptyDescription>
-            <T>
-              Dispatch diagnosis runs from the Issues tab or widen the time range filter above to
-              inspect team efficiency, ROI hours saved, and model benchmarks.
-            </T>
+            <T>Try a wider time range.</T>
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -92,9 +89,9 @@ export function IssueAutomationAnalyticsView({
     hotspotTab === "repos" ? summary.repoHotspots : summary.moduleHotspots;
 
   return (
-    <div className="flex flex-col gap-5 pb-12">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
+    <div className="@container/issue-analytics flex flex-col gap-4 pb-12">
+      <div className="grid grid-cols-1 gap-px rounded-lg border border-border/60 bg-border/60 overflow-hidden @min-[22rem]/issue-analytics:grid-cols-2 @min-[38rem]/issue-analytics:grid-cols-3 @min-[76rem]/issue-analytics:grid-cols-6">
+        <div className="flex min-w-0 flex-col justify-between gap-1.5 bg-background p-3">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Issues covered</T>
@@ -104,9 +101,6 @@ export function IssueAutomationAnalyticsView({
           <div className="flex items-baseline gap-1.5">
             <span className="font-mono text-2xl font-semibold tracking-tight text-foreground tabular-nums">
               {summary.uniqueIssuesCount}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              <T>unique bugs</T>
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
@@ -122,7 +116,7 @@ export function IssueAutomationAnalyticsView({
         <button
           type="button"
           onClick={() => onJumpToRuns(summary.activeCount > 0 ? "active" : "all")}
-          className="group flex cursor-pointer flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 text-left shadow-xs/5 transition-[background-color,border-color,transform] duration-150 ease-out hover:-translate-y-0.5 hover:border-border hover:bg-accent/40 active:translate-y-0 motion-reduce:transition-colors motion-reduce:transform-none"
+          className="group flex min-w-0 cursor-pointer flex-col justify-between gap-1.5 bg-background p-3 text-start transition-colors hover:bg-accent focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
@@ -152,7 +146,7 @@ export function IssueAutomationAnalyticsView({
         <button
           type="button"
           onClick={() => onJumpToRuns("completed")}
-          className="group flex cursor-pointer flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 text-left shadow-xs/5 transition-[background-color,border-color,transform] duration-150 ease-out hover:-translate-y-0.5 hover:border-border hover:bg-accent/40 active:translate-y-0 motion-reduce:transition-colors motion-reduce:transform-none"
+          className="group flex min-w-0 cursor-pointer flex-col justify-between gap-1.5 bg-background p-3 text-start transition-colors hover:bg-accent focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
@@ -174,7 +168,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </button>
 
-        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
+        <div className="flex min-w-0 flex-col justify-between gap-1.5 bg-background p-3">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Avg diagnosis time</T>
@@ -197,7 +191,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
+        <div className="flex min-w-0 flex-col justify-between gap-1.5 bg-background p-3">
           <div className="flex items-center justify-between gap-1.5 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Est. hours saved</T>
@@ -249,7 +243,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between gap-2 rounded-xl border border-border/60 bg-card/40 p-3.5 shadow-xs/5">
+        <div className="flex min-w-0 flex-col justify-between gap-1.5 bg-background p-3">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="font-medium">
               <T>Autonomous & sync</T>
@@ -271,7 +265,7 @@ export function IssueAutomationAnalyticsView({
         </div>
       </div>
 
-      <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3 shadow-xs/5">
+      <div className="rounded-lg border border-border/60 px-4 py-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="font-medium text-foreground">
             <T>Pipeline outcome distribution</T>
@@ -340,15 +334,12 @@ export function IssueAutomationAnalyticsView({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <div className="flex flex-col justify-between rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5 xl:col-span-7">
+        <div className="flex flex-col justify-between rounded-lg border border-border/60 p-4 xl:col-span-7">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
                 <T>Daily diagnosis throughput & efficiency trend</T>
               </h3>
-              <p className="text-xs text-muted-foreground">
-                <T>Stacked daily run outcomes and deduplicated engineering hours saved.</T>
-              </p>
             </div>
             <Badge variant="secondary" size="sm">
               <span className="font-mono tabular-nums">+{totalDailyHours.toFixed(1)}h</span>{" "}
@@ -464,7 +455,7 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between gap-4 rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5 xl:col-span-5">
+        <div className="flex flex-col justify-between gap-4 rounded-lg border border-border/60 p-4 xl:col-span-5">
           <div>
             <h3 className="text-sm font-semibold text-foreground">
               <T>Stage latency & critical bug breakdown</T>
@@ -544,16 +535,13 @@ export function IssueAutomationAnalyticsView({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div className="flex flex-col rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5">
+        <div className="flex flex-col rounded-lg border border-border/60 p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div>
               <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                 <BotIcon className="size-4 text-primary" />
                 <T>Model performance & ROI leaderboard</T>
               </h3>
-              <p className="text-xs text-muted-foreground">
-                <T>Compare first-pass reliability, speed, and code-fix output across models.</T>
-              </p>
             </div>
             <AwardIcon className="size-4 shrink-0 text-muted-foreground" />
           </div>
@@ -614,16 +602,13 @@ export function IssueAutomationAnalyticsView({
           </div>
         </div>
 
-        <div className="flex flex-col rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5">
+        <div className="flex flex-col rounded-lg border border-border/60 p-4">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                 <FolderGit2Icon className="size-4 text-primary" />
                 <T>Defect concentration & resolution hotspots</T>
               </h3>
-              <p className="text-xs text-muted-foreground">
-                <T>Identify bug-dense repositories or modules and track auto-resolution health.</T>
-              </p>
             </div>
             <ToggleGroup
               variant="segmented"

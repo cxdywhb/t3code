@@ -768,6 +768,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly number: number;
       readonly labels: ReadonlyArray<string>;
       readonly applied: boolean;
+      readonly createIfMissing?: boolean | undefined;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly readCheckLogs: (input: {
@@ -2664,11 +2665,44 @@ export const make = Effect.gen(function* () {
       },
     ),
 
-    setLabels: Effect.fn("GitHubPullRequestApi.setLabels")(function (input) {
+    setLabels: Effect.fn("GitHubPullRequestApi.setLabels")(function* (input) {
       const { owner, name } = parseRepositorySelector(input.repository);
       const issue = `repos/${owner}/${name}/issues/${input.number}/labels`;
       if (input.applied) {
-        return api
+        const label = input.createIfMissing ? input.labels[0] : undefined;
+        if (label !== undefined) {
+          const path = `repos/${owner}/${name}/labels`;
+          const lookup = api.rest({
+            host: input.host,
+            operation: "getLabel",
+            method: "GET",
+            path: `${path}/${encodeURIComponent(label)}`,
+          });
+          const existing = yield* Effect.result(lookup);
+          if (Result.isFailure(existing)) {
+            if (existing.failure._tag !== "GitHubApiNotFoundError") return yield* existing.failure;
+            const created = yield* api
+              .rest({
+                host: input.host,
+                operation: "createLabel",
+                method: "POST",
+                path,
+                body: { name: label, color: "ededed" },
+              })
+              .pipe(Effect.result);
+            if (Result.isFailure(created)) {
+              const error = created.failure;
+              if (error._tag !== "GitHubApiResponseError" || error.status !== 422)
+                return yield* error;
+              const concurrent = yield* Effect.result(lookup);
+              if (Result.isFailure(concurrent))
+                return yield* concurrent.failure._tag === "GitHubApiNotFoundError"
+                  ? error
+                  : concurrent.failure;
+            }
+          }
+        }
+        return yield* api
           .rest({
             host: input.host,
             operation: "setLabels",
@@ -2678,7 +2712,7 @@ export const make = Effect.gen(function* () {
           })
           .pipe(Effect.asVoid);
       }
-      return Effect.forEach(
+      return yield* Effect.forEach(
         input.labels,
         (label) =>
           api.rest({

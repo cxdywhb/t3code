@@ -8,16 +8,17 @@ import {
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import {
+  EnvironmentId,
   PrReviewSkillDescriptor,
   WS_METHODS,
-  type EnvironmentId,
   type PrReviewStateSnapshot,
+  type PrReviewTargetItem,
+  type PrReviewTask,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
-import { useServerConfigs } from "./entities";
 import { usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
 
@@ -106,15 +107,39 @@ const liveStreamSnapshotAtom = Atom.family((environmentId: EnvironmentId | null)
   }).pipe(Atom.withLabel(`web:pr-review:live-stream:${environmentId ?? "none"}`)),
 );
 
-export function usePrReviewSupported(): boolean {
-  const configs = useServerConfigs();
-  for (const config of configs.values()) {
-    if (config.environment.capabilities.prReview === true) {
-      return true;
-    }
-  }
-  return false;
+export function prReviewTargetKey(
+  target:
+    | Pick<PrReviewTargetItem, "host" | "repository" | "number">
+    | Pick<PrReviewTask, "host" | "repository" | "prNumber">,
+): string {
+  const number = "number" in target ? target.number : target.prNumber;
+  return `${target.host.toLowerCase()}/${target.repository.toLowerCase()}#${number}`;
 }
+
+const latestReviewByTargetAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const snapshot =
+      get(liveStreamSnapshotAtom(environmentId)) ??
+      AsyncResult.getOrElse(
+        get(prReviewEnvironment.stateQuery({ environmentId, input: {} })),
+        () => EMPTY_SNAPSHOT,
+      );
+    const latest = new Map<string, PrReviewTask>();
+    for (const task of snapshot.tasks) {
+      const key = prReviewTargetKey(task);
+      const previous = latest.get(key);
+      if (!previous || previous.createdAt < task.createdAt) latest.set(key, task);
+    }
+    return latest;
+  }),
+);
+
+export const latestPrReviewAtom = Atom.family((key: string) => {
+  const separator = key.indexOf("\n");
+  const environmentId = EnvironmentId.make(key.slice(0, separator));
+  const target = key.slice(separator + 1);
+  return Atom.make((get) => get(latestReviewByTargetAtom(environmentId)).get(target) ?? null);
+});
 
 const Favorites = Schema.Array(PrReviewSkillDescriptor);
 export function useFavoriteReviewSkills(environmentId: EnvironmentId | null) {

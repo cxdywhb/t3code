@@ -365,6 +365,7 @@ it.effect(
     Effect.gen(function* () {
       const submittedReviews: PullRequestSubmitReviewInput[] = [];
       let viewerLogin = "reviewer";
+      let headSha = "abcdef123456";
 
       const samplePatch = [
         "diff --git a/src/old.ts b/src/new.ts",
@@ -381,6 +382,7 @@ it.effect(
         detail: () =>
           decodeDetail({
             ...SAMPLE_DETAIL,
+            headSha,
             projectId: "cloud:gitlab.example.test",
             projectTitle: "platform/core-api",
             workspaceRoot: "/tmp",
@@ -559,6 +561,7 @@ it.effect(
         assert.isTrue(res1.ok);
         const commentPass = submittedReviews.find((r) => r.verdict === "comment");
         assert.isDefined(commentPass);
+        assert.strictEqual(commentPass?.expectedHeadSha, baseTask.headSha);
         assert.strictEqual(commentPass?.comments.length, 2);
         assert.deepStrictEqual(commentPass?.comments[0]?.oldPath, "src/old.ts");
         assert.deepStrictEqual(commentPass?.comments[0]?.position, {
@@ -587,6 +590,19 @@ it.effect(
         const nonEmptyBodies = submittedReviews.filter((r) => r.body.trim().length > 0);
         assert.strictEqual(nonEmptyBodies.length, 1);
         assert.strictEqual(nonEmptyBodies[0]?.verdict, "comment");
+
+        submittedReviews.length = 0;
+        headSha = "fedcba654321";
+        const refused = yield* service
+          .writeBack({
+            taskId: baseTask.id,
+            kind: "review",
+            verdict: "approve",
+            body: TrimmedNonEmptyString.make("Old review"),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused.operation, "writeBackReview");
+        assert.deepStrictEqual(submittedReviews, []);
       }).pipe(Effect.provide(baseLayer));
     }).pipe(Effect.scoped),
 );

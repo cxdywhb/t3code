@@ -3,12 +3,9 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
-  PrReviewMode,
   PrReviewPreset,
-  PrReviewTargetItem,
   PrReviewTask,
-  PullRequestInvolvement,
-  PullRequestListState,
+  PrReviewTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -16,27 +13,21 @@ import { T, useGT, Var } from "gt-react";
 import {
   ActivityIcon,
   AlertTriangleIcon,
+  ArrowLeftIcon,
   ArrowUpRightIcon,
   BarChart3Icon,
   BotIcon,
   CheckCircle2Icon,
   ClockIcon,
-  EyeIcon,
-  GitForkIcon,
-  GlobeIcon,
   LayersIcon,
-  PenLineIcon,
   PlusIcon,
   Settings2Icon,
   ShieldAlertIcon,
-  ShieldCheckIcon,
   Trash2Icon,
   WorkflowIcon,
   XCircleIcon,
-  ZapIcon,
 } from "lucide-react";
 import {
-  useId,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -44,27 +35,11 @@ import {
 
 import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import { PullRequestSearchInput } from "~/components/pullRequest/PullRequestListFilters";
-import {
-  PullRequestRowBranches,
-  PullRequestRowLines,
-} from "~/components/pullRequest/PullRequestListRow";
-import type { EnvironmentPullRequestEntry } from "~/components/pullRequest/pullRequestList.logic";
-import type { PullRequestHostAvailability } from "~/components/pullRequest/pullRequestProjectAssignment.logic";
-import {
-  PullRequestMetaLine,
-  PullRequestStateGlyph,
-} from "~/components/pullRequest/pullRequestPresentation";
-import { PULL_REQUEST_STATE_PRESENTATION } from "~/components/pullRequest/pullRequestIcons";
-import {
-  usePullRequestOriginOnlyControl,
-  usePullRequestScope,
-} from "~/components/pullRequest/usePullRequestListView";
 import { RelativeTime } from "~/components/RelativeTime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { WorkspaceInspectorDrawer } from "~/components/WorkspaceInspectorDrawer";
 import { WorkspacePageContainer } from "~/components/WorkspacePageContainer";
 import {
-  WORKSPACE_BAR_ENTER_CLASS,
   WORKSPACE_TAB_PANEL_CLASS,
   WorkspacePageHeader,
   WorkspacePageTitle,
@@ -75,31 +50,26 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useNowSecond } from "~/hooks/useNowSecond";
 import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { useProjects } from "~/state/entities";
+import { useProjects, useServerConfigs } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
   prReviewEnvironment,
   useFavoriteReviewSkills,
   usePrReviewLiveState,
 } from "~/state/prReview";
-import { pullRequestEnvironment, usePullRequestHostList } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Dialog, DialogHeader, DialogTitle, DialogPanel, DialogPopup } from "../ui/dialog";
-import { Checkbox } from "../ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Sheet, SheetPopup } from "../ui/sheet";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
-import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PrReviewAnalyticsView } from "./PrReviewAnalyticsView";
 import {
   isPrReviewStageActive,
@@ -109,7 +79,6 @@ import {
 } from "./PrReviewInspector";
 import {
   SkillMultiPicker,
-  LaunchPrReviewDialog,
   PresetEditorDialog,
   usePrReviewRoleLabel,
   usePrReviewWriteBackLabel,
@@ -131,32 +100,6 @@ import {
   type PrReviewWorkstationTab,
 } from "./prReviewAnalytics.logic";
 
-const EMPTY_HOST_AVAILABILITY: PullRequestHostAvailability = new Map();
-
-function entryIdentityKey(entry: {
-  readonly host: string;
-  readonly repository: string;
-  readonly number: number;
-}) {
-  return `${entry.host.toLowerCase()}::${entry.repository.toLowerCase()}#${entry.number}`;
-}
-
-function toTargetItem(entry: EnvironmentPullRequestEntry): PrReviewTargetItem {
-  return {
-    provider: entry.provider,
-    host: entry.host,
-    projectId: entry.projectId,
-    projectTitle: entry.projectTitle,
-    repository: entry.repository,
-    number: entry.number,
-    title: entry.title,
-    url: entry.url,
-    author: entry.author?.login ?? null,
-    headBranch: entry.headBranch,
-    baseBranch: entry.baseBranch,
-  };
-}
-
 function RunDurationLabel({
   task,
   environmentId,
@@ -176,13 +119,48 @@ function RunDurationLabel({
   );
 }
 
-export function PrReviewWorkstationPage() {
+export function PrReviewWorkstationPage({
+  preferredEnvironmentId,
+  initialTaskId,
+}: {
+  preferredEnvironmentId?: EnvironmentId | undefined;
+  initialTaskId?: PrReviewTaskId | undefined;
+}) {
+  const configs = useServerConfigs();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const reviewEnvironments = [...configs].filter(
+    ([, config]) => config.environment.capabilities.prReview === true,
+  );
+  const preferred = preferredEnvironmentId ?? primaryEnvironmentId;
+  const environmentId =
+    reviewEnvironments.find(([id]) => id === preferred)?.[0] ?? reviewEnvironments[0]?.[0] ?? null;
+  return (
+    <PrReviewWorkstation
+      key={`${environmentId}:${initialTaskId ?? ""}`}
+      environmentId={environmentId}
+      initialTaskId={initialTaskId}
+      environmentOptions={reviewEnvironments.map(([id, config]) => ({
+        id,
+        label: config.environment.label,
+      }))}
+    />
+  );
+}
+
+function PrReviewWorkstation({
+  environmentId,
+  environmentOptions,
+  initialTaskId,
+}: {
+  environmentId: EnvironmentId | null;
+  environmentOptions: ReadonlyArray<{ id: EnvironmentId; label: string }>;
+  initialTaskId?: PrReviewTaskId | undefined;
+}) {
   const gt = useGT();
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: "/pull-requests" });
   const roleLabel = usePrReviewRoleLabel();
   const writeBackLabel = usePrReviewWriteBackLabel();
   const isWideDesktop = useMediaQuery("(min-width: 1024px)");
-  const environmentId = usePrimaryEnvironmentId();
   const [favorites, setFavorites] = useFavoriteReviewSkills(environmentId);
   const [addingSkills, setAddingSkills] = useState(false);
   const catalog = useEnvironmentQuery(
@@ -191,91 +169,34 @@ export function PrReviewWorkstationPage() {
       : null,
   );
   const allProjects = useProjects();
-  const { snapshot, refresh: refreshPrReview } = usePrReviewLiveState(environmentId);
+  const { snapshot, isPending, refresh: refreshPrReview } = usePrReviewLiveState(environmentId);
   const deletePreset = useAtomCommand(prReviewEnvironment.deletePreset, { reportFailure: false });
-  const invalidatePrCache = useAtomCommand(pullRequestEnvironment.invalidate, {
-    reportFailure: false,
-  });
-
   const [prefs, setPrefs] = useLocalStorage(
     `t3code:pr-review:prefs:v2:${environmentId ?? "default"}`,
     DEFAULT_PR_WORKSTATION_PREFS,
     PrReviewWorkstationPrefsSchema,
   );
-  const [query, setQuery] = useState("");
   const [runSearchQuery, setRunSearchQuery] = useState("");
-  const [checkedKeys, setCheckedKeys] = useState<ReadonlyArray<string>>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId ?? null);
   const [isInspectorExpanded, setIsInspectorExpanded] = useState(false);
   const [isDraggingSplitter, setIsDraggingSplitter] = useState(false);
 
-  const [launchModalState, setLaunchModalState] = useState<{
-    targets: ReadonlyArray<PrReviewTargetItem>;
-    defaultMode: PrReviewMode;
-  } | null>(null);
   const [presetModalState, setPresetModalState] = useState<{
     open: boolean;
     preset: PrReviewPreset | null;
   }>({ open: false, preset: null });
 
-  const scope = usePullRequestScope(
-    {
-      involvement: prefs.involvement,
-      state: prefs.state,
-      ...(prefs.host ? { host: prefs.host } : {}),
-      ...(query.trim() ? { q: query.trim() } : {}),
-    },
-    EMPTY_HOST_AVAILABILITY,
-  );
-  const originOnlySwitchId = useId();
-  const originOnlyControl = usePullRequestOriginOnlyControl(scope.capableEnvironments);
-
-  const listTargets = scope.environmentQueries.map(({ environmentId: envId, projectIds }) => ({
-    environmentId: envId,
-    input: {
-      state: prefs.state,
-      involvement: prefs.involvement,
-      limit: 99,
-      ...(projectIds ? { projectIds } : {}),
-      ...(prefs.host ? { host: prefs.host } : {}),
-      ...(query.trim() ? { query: query.trim() } : {}),
-    },
-  }));
-  const prListQuery = usePullRequestHostList(listTargets);
-  const prEntries = prListQuery.data?.entries ?? [];
-  const hostProviders = prListQuery.data?.providers ?? [];
-  const selectedHostProvider = prefs.host
-    ? hostProviders.find((hp) => hp.host === prefs.host)
-    : undefined;
-  const SelectedHostIcon = selectedHostProvider
-    ? getSourceControlPresentationForKind(selectedHostProvider.kind).Icon
-    : null;
-  const stateIconPresentation =
-    prefs.state === "all" ? null : PULL_REQUEST_STATE_PRESENTATION[prefs.state];
-
-  const latestTaskByPrKey = new Map<string, PrReviewTask>();
-  for (const task of snapshot.tasks) {
-    const key = entryIdentityKey({
-      host: task.host,
-      repository: task.repository,
-      number: task.prNumber,
-    });
-    if (!latestTaskByPrKey.has(key)) {
-      latestTaskByPrKey.set(key, task);
-    }
-  }
-
+  const [runOpened, setRunOpened] = useState(initialTaskId !== undefined);
+  const tab = runOpened || prefs.tab === "queue" ? "runs" : prefs.tab;
   const selectedTask =
     selectedTaskId !== null ? (snapshot.tasks.find((t) => t.id === selectedTaskId) ?? null) : null;
 
   const selectedTaskCwd = selectedTask
-    ? (allProjects.find((p) => p.id === selectedTask.projectId)?.workspaceRoot ?? "")
+    ? (allProjects.find((p) => p.id === selectedTask.projectId && p.environmentId === environmentId)
+        ?.workspaceRoot ?? "")
     : "";
 
-  const inspectorVisible =
-    selectedTask !== null &&
-    environmentId !== null &&
-    (prefs.tab === "queue" || prefs.tab === "runs");
+  const inspectorVisible = selectedTask !== null && environmentId !== null && tab === "runs";
   const desktopInspectorVisible = inspectorVisible && isWideDesktop;
 
   const clampedInspectorWidth = Math.max(
@@ -361,20 +282,6 @@ export function PrReviewWorkstationPage() {
     });
   };
 
-  const handleRefreshAll = async () => {
-    if (environmentId) {
-      await invalidatePrCache({ environmentId, input: {} });
-    }
-    prListQuery.refresh(listTargets);
-    refreshPrReview();
-  };
-
-  const toggleChecked = (key: string) => {
-    setCheckedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
-  };
-
-  const selectedEntries = prEntries.filter((e) => checkedKeys.includes(entryIdentityKey(e)));
-
   const inspectorNode =
     selectedTask && environmentId ? (
       <PrReviewInspector
@@ -395,7 +302,6 @@ export function PrReviewWorkstationPage() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex h-full min-h-0 flex-col">
         <WorkspacePageHeader
-          showGlobalTerminal
           electron={isElectron}
           reserveNativeControls={!desktopInspectorVisible}
           className="relative bg-background"
@@ -404,6 +310,54 @@ export function PrReviewWorkstationPage() {
             <T>PR Cross Review</T>
           </WorkspacePageTitle>
           <div className="min-w-0 flex-1" />
+          {environmentId && environmentOptions.length > 1 ? (
+            <Select
+              value={environmentId}
+              onValueChange={(id) => {
+                if (id)
+                  void navigate({
+                    to: "/pull-requests",
+                    search: (previous) => ({
+                      ...previous,
+                      reviewEnvironmentId: id,
+                      reviewTaskId: undefined,
+                    }),
+                    replace: true,
+                  });
+              }}
+            >
+              <SelectTrigger aria-label={gt("Environment")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {environmentOptions.map(({ id, label }) => (
+                  <SelectItem key={id} value={id}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={gt("Pull requests")}
+            render={
+              <Link
+                from="/pull-requests"
+                to="/pull-requests"
+                search={(previous) => ({
+                  ...previous,
+                  reviewWorkspace: undefined,
+                  reviewEnvironmentId: undefined,
+                  reviewTaskId: undefined,
+                })}
+              />
+            }
+          >
+            <ArrowLeftIcon />
+            <T>Pull requests</T>
+          </Button>
           <div
             className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]"
             data-workspace-titlebar-controls
@@ -419,7 +373,10 @@ export function PrReviewWorkstationPage() {
                 size="sm"
                 variant="ghost"
                 className="hidden xl:inline-flex"
-                onClick={() => setPrefs((prev) => ({ ...prev, tab: "analytics" }))}
+                onClick={() => {
+                  setRunOpened(false);
+                  setPrefs((prev) => ({ ...prev, tab: "analytics" }));
+                }}
               >
                 <CheckCircle2Icon className="size-3.5 text-success" />
                 <span className="font-mono text-foreground tabular-nums">
@@ -447,10 +404,10 @@ export function PrReviewWorkstationPage() {
             <Button
               size="icon-sm"
               variant="ghost"
-              onClick={() => void handleRefreshAll()}
+              onClick={refreshPrReview}
               aria-label={gt("Refresh")}
             >
-              <RefreshIcon size="md" refreshing={prListQuery.isPending} />
+              <RefreshIcon size="md" refreshing={isPending} />
             </Button>
           </div>
         </WorkspacePageHeader>
@@ -465,16 +422,15 @@ export function PrReviewWorkstationPage() {
             <WorkspacePageToolbar>
               <ToggleGroup
                 className="max-w-full flex-wrap"
-                value={[prefs.tab]}
+                value={[tab]}
                 onValueChange={(vals) => {
                   const next = vals[0] as PrReviewWorkstationTab | undefined;
-                  if (next) setPrefs((prev) => ({ ...prev, tab: next }));
+                  if (next) {
+                    setRunOpened(false);
+                    setPrefs((prev) => ({ ...prev, tab: next }));
+                  }
                 }}
               >
-                <Toggle value="queue">
-                  <LayersIcon className="size-3.5" />
-                  <T>Cloud MR / PR Queue</T>
-                </Toggle>
                 <Toggle value="runs">
                   {snapshot.activeRunCount > 0 ? (
                     <Spinner size="xs" />
@@ -492,364 +448,9 @@ export function PrReviewWorkstationPage() {
                   <T>Presets & Skills</T>
                 </Toggle>
               </ToggleGroup>
-
-              {prefs.tab === "queue" && selectedEntries.length > 0 ? (
-                <div className={cn("ms-auto flex items-center gap-2", WORKSPACE_BAR_ENTER_CLASS)}>
-                  <span className="text-xs text-muted-foreground">
-                    <Var>{selectedEntries.length}</Var> <T>selected</T>
-                  </span>
-                  <Button
-                    size="xs"
-                    onClick={() =>
-                      setLaunchModalState({
-                        targets: selectedEntries.map(toTargetItem),
-                        defaultMode: "multi_model_fusion",
-                      })
-                    }
-                  >
-                    <ShieldCheckIcon className="size-3.5" />
-                    <T>
-                      Batch Fusion Review (<Var>{selectedEntries.length}</Var>)
-                    </T>
-                  </Button>
-                  <Button size="xs" variant="ghost" onClick={() => setCheckedKeys([])}>
-                    <T>Clear</T>
-                  </Button>
-                </div>
-              ) : null}
             </WorkspacePageToolbar>
 
-            {prefs.tab === "queue" ? (
-              <div
-                key="queue"
-                className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
-              >
-                <div className="flex flex-wrap items-center gap-2 border-b border-border/50 bg-background py-2.5 pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)">
-                  <div className="min-w-48 flex-1">
-                    <PullRequestSearchInput
-                      value={query}
-                      busy={prListQuery.isPending && query.length > 0}
-                      label={gt("Search PRs or MRs")}
-                      placeholder={gt("Search cloud MRs / PRs by title or branch…")}
-                      onChange={setQuery}
-                      onSubmit={setQuery}
-                    />
-                  </div>
-
-                  <ToggleGroup
-                    value={[prefs.involvement]}
-                    onValueChange={(vals) => {
-                      const next = vals[0] as PullRequestInvolvement | undefined;
-                      if (next) setPrefs((prev) => ({ ...prev, involvement: next }));
-                    }}
-                  >
-                    <Toggle value="authored">
-                      <PenLineIcon />
-                      <T>Created by Me</T>
-                    </Toggle>
-                    <Toggle value="reviewing">
-                      <EyeIcon />
-                      <T>Reviewing</T>
-                    </Toggle>
-                    <Toggle value="all">
-                      <LayersIcon />
-                      <T>All</T>
-                    </Toggle>
-                  </ToggleGroup>
-
-                  <Select
-                    value={prefs.state}
-                    onValueChange={(val) => {
-                      if (val)
-                        setPrefs((prev) => ({ ...prev, state: val as PullRequestListState }));
-                    }}
-                  >
-                    <SelectTrigger className="w-36">
-                      {stateIconPresentation ? (
-                        <stateIconPresentation.Icon
-                          className={cn("size-3.5 shrink-0", stateIconPresentation.toneClassName)}
-                        />
-                      ) : (
-                        <LayersIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      <SelectValue>
-                        {prefs.state === "open" ? (
-                          <T>Open</T>
-                        ) : prefs.state === "merged" ? (
-                          <T>Merged</T>
-                        ) : prefs.state === "closed" ? (
-                          <T>Closed</T>
-                        ) : (
-                          <T>All states</T>
-                        )}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup>
-                      <SelectItem value="open">
-                        <T>Open</T>
-                      </SelectItem>
-                      <SelectItem value="merged">
-                        <T>Merged</T>
-                      </SelectItem>
-                      <SelectItem value="closed">
-                        <T>Closed</T>
-                      </SelectItem>
-                      <SelectItem value="all">
-                        <T>All states</T>
-                      </SelectItem>
-                    </SelectPopup>
-                  </Select>
-
-                  {hostProviders.length > 0 ? (
-                    <Select
-                      value={prefs.host || "__all__"}
-                      onValueChange={(val) => {
-                        setPrefs((prev) => ({
-                          ...prev,
-                          host: !val || val === "__all__" ? "" : val,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger className="w-52">
-                        {SelectedHostIcon ? (
-                          <SelectedHostIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        )}
-                        <SelectValue>
-                          {prefs.host ? (
-                            selectedHostProvider && !selectedHostProvider.configured ? (
-                              `${prefs.host} (${gt("unauthenticated")})`
-                            ) : (
-                              prefs.host
-                            )
-                          ) : (
-                            <T>All GitLab / GitHub hosts</T>
-                          )}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup>
-                        <SelectItem value="__all__">
-                          <T>All GitLab / GitHub hosts</T>
-                        </SelectItem>
-                        {hostProviders.map((hp) => (
-                          <SelectItem key={hp.host} value={hp.host}>
-                            {hp.host}
-                            {!hp.configured ? ` (${gt("unauthenticated")})` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectPopup>
-                    </Select>
-                  ) : null}
-
-                  {originOnlyControl.visible ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <label
-                            htmlFor={originOnlySwitchId}
-                            className={cn(
-                              "inline-flex min-h-9 select-none items-center gap-2 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground shadow-xs/5 transition-colors sm:min-h-8",
-                              originOnlyControl.disabled
-                                ? "cursor-not-allowed opacity-60"
-                                : "cursor-pointer hover:text-foreground",
-                            )}
-                          >
-                            <GitForkIcon
-                              aria-hidden="true"
-                              className="size-3.5 shrink-0 opacity-80"
-                            />
-                            <span>
-                              <T>Origin only</T>
-                            </span>
-                            <Switch
-                              id={originOnlySwitchId}
-                              size="sm"
-                              aria-label={gt("Origin only")}
-                              checked={originOnlyControl.checked}
-                              mixed={originOnlyControl.mixed}
-                              disabled={originOnlyControl.disabled}
-                              onCheckedChange={(checked) => {
-                                void originOnlyControl.toggle(Boolean(checked));
-                              }}
-                            />
-                          </label>
-                        }
-                      />
-                      <TooltipPopup side="bottom" className="max-w-xs">
-                        <T>
-                          Ignore upstream remotes and list PRs only from each repository&apos;s
-                          origin remote
-                        </T>
-                      </TooltipPopup>
-                    </Tooltip>
-                  ) : null}
-                </div>
-
-                <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-12 sm:px-7">
-                  {prListQuery.isPending && prEntries.length === 0 ? (
-                    <PullRequestListGhost />
-                  ) : prEntries.length === 0 ? (
-                    <div className="flex min-h-full items-center justify-center">
-                      <Empty>
-                        <EmptyHeader>
-                          <EmptyMedia variant="icon">
-                            <ShieldCheckIcon className="size-5" />
-                          </EmptyMedia>
-                          <EmptyTitle>
-                            <T>No matching Merge Requests or Pull Requests</T>
-                          </EmptyTitle>
-                          <EmptyDescription>
-                            <T>
-                              Configure your GitLab Personal Access Token in Settings → Source
-                              control & issues, or switch filter tabs above to browse more items.
-                            </T>
-                          </EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-0.5">
-                      {prEntries.map((entry) => {
-                        const key = entryIdentityKey(entry);
-                        const checked = checkedKeys.includes(key);
-                        const latestTask = latestTaskByPrKey.get(key) ?? null;
-                        const { Icon: ProviderIcon } = getSourceControlPresentationForKind(
-                          entry.provider,
-                        );
-                        const sigil = entry.provider === "gitlab" ? "!" : "#";
-                        const isCloudUncloned = entry.projectId.startsWith("cloud:");
-
-                        return (
-                          <div
-                            key={key}
-                            className={cn(
-                              "@container/pr-review-row flex items-center gap-2.5 rounded-md px-3 py-2 text-xs transition-colors duration-150",
-                              latestTask && latestTask.id === selectedTaskId
-                                ? "bg-accent"
-                                : "hover:bg-accent/60",
-                            )}
-                          >
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={() => toggleChecked(key)}
-                            />
-                            <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
-                            <div className="@container/pr-review-item flex min-w-0 flex-1 items-start gap-1.5">
-                              <Link
-                                to="/pull-requests"
-                                search={{
-                                  involvement: "all",
-                                  state: "all",
-                                  repository: entry.repository,
-                                  number: entry.number,
-                                  selectedProjectId: entry.projectId,
-                                  selectedEnvironmentId: entry.environmentId,
-                                  selectedHost: entry.host,
-                                }}
-                                aria-label={entry.title}
-                                className="flex min-w-0 flex-1 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                              >
-                                <PullRequestRowLines
-                                  number={
-                                    <span className="inline-flex min-w-0 max-w-[40%] items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
-                                      <ProviderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                      <Tooltip>
-                                        <TooltipTrigger render={<span className="truncate" />}>
-                                          {entry.repository}
-                                        </TooltipTrigger>
-                                        <TooltipPopup>{entry.repository}</TooltipPopup>
-                                      </Tooltip>
-                                      <span className="-ms-1 shrink-0">
-                                        {sigil}
-                                        {entry.number}
-                                      </span>
-                                    </span>
-                                  }
-                                  title={entry.title}
-                                  meta={
-                                    <PullRequestMetaLine className="min-w-0">
-                                      <span className="shrink-0">
-                                        @{entry.author?.login ?? "unknown"}
-                                      </span>
-                                      <PullRequestRowBranches
-                                        head={entry.headBranch}
-                                        base={entry.baseBranch}
-                                      />
-                                      <span className="shrink-0">
-                                        <RelativeTime timestamp={entry.updatedAt} />
-                                      </span>
-                                    </PullRequestMetaLine>
-                                  }
-                                />
-                              </Link>
-                              {isCloudUncloned ? (
-                                <span className="hidden shrink-0 @md/pr-review-item:inline-flex">
-                                  <Badge variant="outline" size="sm">
-                                    <T>Cloud MR</T>
-                                  </Badge>
-                                </span>
-                              ) : null}
-                              {latestTask ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedTaskId(latestTask.id)}
-                                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent"
-                                >
-                                  <span className="hidden @md/pr-review-item:contents">
-                                    {isPrReviewStageActive(latestTask.stage) ? (
-                                      <PrReviewStageBadge stage={latestTask.stage} />
-                                    ) : (
-                                      <PrReviewVerdictBadge verdict={latestTask.verdict} />
-                                    )}
-                                  </span>
-                                  <span className="text-2xs whitespace-nowrap text-muted-foreground">
-                                    <T>Report</T>
-                                  </span>
-                                </button>
-                              ) : null}
-                            </div>
-
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                onClick={() =>
-                                  setLaunchModalState({
-                                    targets: [toTargetItem(entry)],
-                                    defaultMode: "direct_agent",
-                                  })
-                                }
-                              >
-                                <ZapIcon className="size-3 text-warning" />
-                                <span className="sr-only @md/pr-review-row:not-sr-only">
-                                  <T>Agent Review</T>
-                                </span>
-                              </Button>
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                onClick={() =>
-                                  setLaunchModalState({
-                                    targets: [toTargetItem(entry)],
-                                    defaultMode: "multi_model_fusion",
-                                  })
-                                }
-                              >
-                                <ShieldCheckIcon className="size-3 text-primary" />
-                                <span className="sr-only @md/pr-review-row:not-sr-only">
-                                  <T>Fusion Review</T>
-                                </span>
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : prefs.tab === "runs" ? (
+            {tab === "runs" ? (
               <div
                 key="runs"
                 className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
@@ -973,7 +574,10 @@ export function PrReviewWorkstationPage() {
                         <Button
                           size="xs"
                           variant="ghost"
-                          onClick={() => setPrefs((prev) => ({ ...prev, tab: "analytics" }))}
+                          onClick={() => {
+                            setRunOpened(false);
+                            setPrefs((prev) => ({ ...prev, tab: "analytics" }));
+                          }}
                         >
                           <BarChart3Icon className="size-3.5 text-primary" />
                           <T>Metrics & ROI</T>
@@ -995,10 +599,7 @@ export function PrReviewWorkstationPage() {
                             <T>No matching fusion review runs</T>
                           </EmptyTitle>
                           <EmptyDescription>
-                            <T>
-                              Select any Cloud MR or Pull Request in the queue to start a
-                              multi-model fusion review or jump directly into an Agent session.
-                            </T>
+                            <T>Open a pull request or merge request to start an AI review.</T>
                           </EmptyDescription>
                         </EmptyHeader>
                       </Empty>
@@ -1098,7 +699,7 @@ export function PrReviewWorkstationPage() {
                   )}
                 </div>
               </div>
-            ) : prefs.tab === "analytics" ? (
+            ) : tab === "analytics" ? (
               <div
                 key="analytics"
                 className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
@@ -1133,10 +734,7 @@ export function PrReviewWorkstationPage() {
                     </ToggleGroup>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      <T>Human-effort ROI benchmark:</T>
-                    </span>
+                  <div className="flex min-w-0">
                     <Select
                       value={prefs.roiBaseline}
                       onValueChange={(val) => {
@@ -1148,18 +746,22 @@ export function PrReviewWorkstationPage() {
                         }
                       }}
                     >
-                      <SelectTrigger className="w-52">
+                      <SelectTrigger size="sm" aria-label={gt("Human-effort ROI benchmark:")}>
                         <SelectValue>
                           {prefs.roiBaseline === "conservative" ? (
-                            <T>Conservative (500 LoC/h)</T>
+                            <T>Conservative</T>
                           ) : prefs.roiBaseline === "strict" ? (
-                            <T>Strict dual-gate (250 LoC/h)</T>
+                            <T>Strict</T>
                           ) : (
-                            <T>Standard R&D (350 LoC/h)</T>
+                            <T>Standard</T>
                           )}
                         </SelectValue>
                       </SelectTrigger>
-                      <SelectPopup>
+                      <SelectPopup
+                        align="end"
+                        alignItemWithTrigger={false}
+                        matchTriggerWidth={false}
+                      >
                         <SelectItem value="conservative">
                           <T>Conservative (500 LoC/h)</T>
                         </SelectItem>
@@ -1440,31 +1042,6 @@ export function PrReviewWorkstationPage() {
           ) : null}
         </div>
       </div>
-
-      {launchModalState && environmentId ? (
-        <LaunchPrReviewDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setLaunchModalState(null);
-          }}
-          environmentId={environmentId}
-          targets={launchModalState.targets}
-          presets={snapshot.presets}
-          availableSkills={favorites}
-          defaultMode={launchModalState.defaultMode}
-          onLaunched={({ tasks, jumpThreadId, mode }) => {
-            setLaunchModalState(null);
-            setCheckedKeys([]);
-            if (mode === "direct_agent" && jumpThreadId) {
-              jumpToThread(jumpThreadId as ThreadId);
-              return;
-            }
-            if (tasks[0]) {
-              setSelectedTaskId(tasks[0].id);
-            }
-          }}
-        />
-      ) : null}
 
       {presetModalState.open && environmentId ? (
         <PresetEditorDialog

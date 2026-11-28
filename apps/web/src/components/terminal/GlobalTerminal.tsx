@@ -10,7 +10,7 @@ import { terminalEnvironment } from "../../state/terminal";
 import { Button } from "../ui/button";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { toastManager } from "../ui/toast";
-import { ToolbarButton } from "../ui/toggle";
+import { SidebarMenuButton, useSidebar } from "../ui/sidebar";
 import { showGlobalTerminal, useGlobalTerminalStore } from "./globalTerminalStore";
 
 import { useGlobalTerminalEnvironmentId } from "./globalTerminalTarget";
@@ -23,21 +23,27 @@ export function GlobalTerminalButton() {
   const gt = useGT();
   const environmentId = useGlobalTerminalEnvironmentId();
   const label = gt("Global terminal");
+  const { isMobile, setOpenMobile } = useSidebar();
   return (
-    <SharedTooltipTrigger render={<span className="flex shrink-0" />} label={label} side="bottom">
-      <ToolbarButton
-        disabled={!environmentId}
-        aria-label={label}
-        onClick={() => {
-          if (environmentId)
+    <SharedTooltipTrigger
+      label={label}
+      render={
+        <SidebarMenuButton
+          size="icon"
+          disabled={!environmentId}
+          aria-label={label}
+          onClick={() => {
+            if (!environmentId) return;
+            if (isMobile) setOpenMobile(false);
             void showGlobalTerminal(environmentId).catch(() =>
               toastManager.add({ type: "error", title: gt("Could not open the global terminal") }),
             );
-        }}
-      >
-        <SquareTerminalIcon className="size-4" />
-      </ToolbarButton>
-    </SharedTooltipTrigger>
+          }}
+        >
+          <SquareTerminalIcon aria-hidden />
+        </SidebarMenuButton>
+      }
+    />
   );
 }
 

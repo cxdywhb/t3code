@@ -5,6 +5,7 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
+  type PrReviewTaskId,
   type ProjectId,
   type PullRequestInvolvement,
   type PullRequestListFilters,
@@ -34,6 +35,7 @@ import {
   resolveQueryEnvironmentIds,
   resolveSelectedEnvironmentId,
   sortPullRequestGroups,
+  splitPullRequestGroupsByCompletion,
   withDiffStat,
   type EnvironmentPullRequestEntry,
   type MergedPullRequestList,
@@ -52,6 +54,9 @@ import { pullRequestListEntryId } from "./pullRequestListGroups.logic";
 
 export interface PullRequestsSearch extends PullRequestListPreferences {
   readonly selectedUrl?: string;
+  readonly reviewWorkspace?: true | undefined;
+  readonly reviewEnvironmentId?: EnvironmentId | undefined;
+  readonly reviewTaskId?: PrReviewTaskId | undefined;
   readonly environmentId?: EnvironmentId;
   readonly projectId?: ProjectId;
   readonly host?: string | undefined;
@@ -337,6 +342,7 @@ export function usePullRequestQueryFilters(search: PullRequestsSearch, typedQuer
     ...(search.draft ? { draft: search.draft } : {}),
     ...(search.review ? { review: search.review } : {}),
     ...(search.checks ? { checks: search.checks } : {}),
+    ...(search.updatedWithin ? { updatedWithin: search.updatedWithin } : {}),
     ...(search.author ? { author: search.author } : {}),
     ...(search.labels ? { labels: search.labels.map((label) => [label]) } : {}),
   };
@@ -429,7 +435,7 @@ export function usePullRequestDisplayGroups({
             : overridden,
       };
     });
-    return sortPullRequestGroups(
+    const sorted = sortPullRequestGroups(
       enriched,
       sort,
       text,
@@ -437,6 +443,7 @@ export function usePullRequestDisplayGroups({
         entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry)),
       involvement,
     );
+    return state === "all" ? splitPullRequestGroupsByCompletion(sorted) : sorted;
   })();
   const shownCount = displayGroups.reduce((count, group) => count + group.entries.length, 0);
   const hostActionsOf = pullRequestHostActions(hosts);

@@ -19,6 +19,7 @@ import {
   ProjectId,
   PullRequestOperationError,
   PullRequestUnavailableError,
+  matchesPullRequestUpdateTime,
   resolvePullRequestAuthorFilter,
   type OrchestrationProjectShell,
   type PullRequestAction,
@@ -1511,11 +1512,13 @@ export const make = Effect.gen(function* () {
     item: ProviderChangeRequest,
     filters: PullRequestListFilters | undefined,
     viewer: string,
+    observedAt: number,
   ): boolean => {
     if (filters === undefined) return true;
     const labels = new Set(item.labels.map((label) => label.name.trim().toLowerCase()));
     const holds = (label: string) => labels.has(label.trim().toLowerCase());
     return (
+      matchesPullRequestUpdateTime(item.updatedAt, filters.updatedWithin, observedAt) &&
       (filters.draft === undefined || item.isDraft === (filters.draft === "only")) &&
       (filters.review === undefined ||
         item.reviewDecision === undefined ||
@@ -1776,7 +1779,7 @@ export const make = Effect.gen(function* () {
               return {
                 key,
                 entries: items
-                  .filter((item) => matchesRowFilters(item, input.filters, viewer))
+                  .filter((item) => matchesRowFilters(item, input.filters, viewer, observedAt))
                   .map((item) => toEntry({ project, item, viewer, observedAt })),
                 errors: [],
                 truncated: page.truncated,
@@ -1910,7 +1913,7 @@ export const make = Effect.gen(function* () {
               return Effect.succeed({
                 key: project.cursorKey,
                 entries: items
-                  .filter((item) => matchesRowFilters(item, input.filters, viewer))
+                  .filter((item) => matchesRowFilters(item, input.filters, viewer, observedAt))
                   .map((item) => toEntry({ project, item, viewer, observedAt })),
                 errors: [],
                 truncated: page.truncated,
@@ -1966,7 +1969,7 @@ export const make = Effect.gen(function* () {
           observeRead,
           Effect.map(({ value: page, observedAt }): ReadonlyArray<RepositoryBatch> => {
             const entries = page.items
-              .filter((item) => matchesRowFilters(item, input.filters, viewer))
+              .filter((item) => matchesRowFilters(item, input.filters, viewer, observedAt))
               .map((item) => {
                 const matchedLocal = workspaceProjects.find(
                   (candidate) =>
@@ -2729,6 +2732,7 @@ export const make = Effect.gen(function* () {
                 : Effect.fail(
                     new PullRequestOperationError({
                       operation,
+                      reason: "head-changed",
                       detail: `The head is now ${current.headSha ?? "unknown"}, not ${expected}. Review the new commits first.`,
                     }),
                   ),
@@ -3200,7 +3204,11 @@ export const make = Effect.gen(function* () {
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
         const change = project.api.setLabels;
-        if (project.api.capabilities.labels !== true || change === undefined) {
+        if (
+          project.api.capabilities.labels !== true ||
+          change === undefined ||
+          (input.createIfMissing && project.api.capabilities.createLabels !== true)
+        ) {
           return Effect.fail(
             new PullRequestOperationError({
               operation: "setLabels",
@@ -3224,6 +3232,7 @@ export const make = Effect.gen(function* () {
                   number: input.number,
                   labels: input.labels,
                   applied: input.applied,
+                  createIfMissing: input.createIfMissing,
                 }).pipe(Effect.mapError(toPullRequestError("setLabels"))),
           ),
         );
@@ -3499,7 +3508,7 @@ export const make = Effect.gen(function* () {
       string | ReadonlyArray<string> | ReadonlyArray<ReadonlyArray<string>> | null
     >,
   ): PullRequestListFilters => {
-    const [draft, review, checks, author, labels, excludedLabels] = slots;
+    const [draft, review, checks, author, labels, excludedLabels, updatedWithin] = slots;
     return {
       ...(typeof draft === "string" ? { draft: draft as "only" | "hide" } : {}),
       ...(typeof review === "string" ? { review: review as PullRequestListFilters["review"] } : {}),
@@ -3507,6 +3516,9 @@ export const make = Effect.gen(function* () {
       ...(typeof author === "string" ? { author } : {}),
       ...(Array.isArray(labels) ? { labels: labels as ReadonlyArray<ReadonlyArray<string>> } : {}),
       ...(Array.isArray(excludedLabels) ? { excludedLabels } : {}),
+      ...(updatedWithin === "3d" || updatedWithin === "7d" || updatedWithin === "30d"
+        ? { updatedWithin }
+        : {}),
     };
   };
 
@@ -3655,6 +3667,7 @@ export const make = Effect.gen(function* () {
                 input.filters.author ?? null,
                 input.filters.labels ?? null,
                 input.filters.excludedLabels ?? null,
+                input.filters.updatedWithin ?? null,
               ],
           input.projectId ?? null,
           input.projectIds === undefined ? null : [...input.projectIds].sort(),

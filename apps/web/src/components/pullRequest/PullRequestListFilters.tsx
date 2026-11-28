@@ -11,6 +11,7 @@ import type {
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import {
+  ClockIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CircleSlashIcon,
@@ -164,6 +165,21 @@ export const pullRequestProjectKey = (project: {
   readonly id: ProjectId;
   readonly environmentId: EnvironmentId;
 }) => JSON.stringify([project.environmentId, project.id]);
+
+const UPDATED_WITHIN_OPTIONS = [
+  {
+    value: UNFILTERED_VALUE,
+    label: msg("All", { $context: "pull request filter" }),
+    Icon: ClockIcon,
+  },
+  { value: "3d", label: msg("Last 3 days"), Icon: ClockIcon },
+  { value: "7d", label: msg("Last 7 days"), Icon: ClockIcon },
+  {
+    value: "30d",
+    label: msg("Last month", { $context: "rolling 30 day filter" }),
+    Icon: ClockIcon,
+  },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 const DRAFT_OPTIONS = [
   {
@@ -586,7 +602,7 @@ export function PullRequestFiltersMenu({
   const resolve = useMessages();
   const selectedLabels = (filters.labels ?? []).flatMap((group) => group);
   const filterCount = [
-    state !== "open",
+    state !== "all",
     involvement !== "all",
     host,
     server,
@@ -595,6 +611,7 @@ export function PullRequestFiltersMenu({
     filters.draft,
     filters.review,
     filters.checks,
+    filters.updatedWithin,
     filters.author,
     ...selectedLabels,
   ].filter(Boolean).length;
@@ -690,6 +707,12 @@ export function PullRequestFiltersMenu({
           value={filters.checks ?? UNFILTERED_VALUE}
           options={resolveFilterOptions(CHECKS_OPTIONS, resolve)}
           onChange={(checks) => updateFilter("checks", checks)}
+        />
+        <PullRequestFilterRadioSubmenu
+          label={gt("Last updated", { $context: "pull request filter" })}
+          value={filters.updatedWithin ?? UNFILTERED_VALUE}
+          options={resolveFilterOptions(UPDATED_WITHIN_OPTIONS, resolve)}
+          onChange={(range) => updateFilter("updatedWithin", range)}
         />
         {hostOptions.length > 2 ? (
           <>

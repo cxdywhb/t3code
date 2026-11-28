@@ -32,6 +32,12 @@ export function useRemoveProjectMembers() {
     if (!api) return false;
 
     const threads = readThreadShells();
+    const draftStore = useComposerDraftStore.getState();
+    const willDeleteDraft =
+      members.length === groupMembers.length &&
+      members.some((member) =>
+        draftStore.getDraftThreadByProjectRef(scopeProjectRef(member.environmentId, member.id)),
+      );
     const { projectThreads, isWholeGroup, confirmationMessage } = planProjectRemoval(
       {
         members,
@@ -44,12 +50,16 @@ export function useRemoveProjectMembers() {
       resolveMessage,
     );
     const confirmed = await settlePromise(() =>
-      api.dialogs.confirm(confirmationMessage, { variant: "destructive" }),
+      api.dialogs.confirm(
+        willDeleteDraft
+          ? `${confirmationMessage}\n${gt("Unsent drafts and their attachments will also be deleted.")}`
+          : confirmationMessage,
+        { variant: "destructive" },
+      ),
     );
     if (confirmed._tag === "Failure" || !confirmed.value) return false;
     if (checkProjectAccess(members, gt("Failed to remove project"))) return false;
 
-    const draftStore = useComposerDraftStore.getState();
     const remainingMember = groupMembers.find(
       (candidate) =>
         !members.some(

@@ -16,6 +16,7 @@ import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 export function PullRequestCandidatePicker<T>({
   icon,
   label,
+  triggerText,
   allowed,
   disabledReason,
   open,
@@ -37,6 +38,7 @@ export function PullRequestCandidatePicker<T>({
 }: {
   icon: ReactNode;
   label: string;
+  triggerText?: ReactNode;
   allowed: boolean;
   disabledReason: string;
   open: boolean;
@@ -95,7 +97,8 @@ export function PullRequestCandidatePicker<T>({
     >
       <ComboboxTrigger
         render={
-          <Button size="icon-xs" variant="ghost" aria-label={label}>
+          <Button size={triggerText ? "xs" : "icon-xs"} variant="ghost" aria-label={label}>
+            {triggerText ? <span>{triggerText}</span> : null}
             {icon}
           </Button>
         }

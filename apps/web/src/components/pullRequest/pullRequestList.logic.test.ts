@@ -6,7 +6,7 @@ import type {
   PullRequestListEntry,
   PullRequestSummary,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   pullRequestHostActions,
@@ -185,6 +185,28 @@ describe("pull request involvement filtering", () => {
 });
 
 describe("matchesPullRequestFilters", () => {
+  it.each([
+    ["3d", 3],
+    ["7d", 7],
+    ["30d", 30],
+  ] as const)("matches the inclusive %s update window", (updatedWithin, days) => {
+    const now = Date.parse("2026-11-28T12:00:00Z");
+    using _clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const boundary = now - days * 86_400_000;
+    const filters = { updatedWithin };
+    expect(
+      matchesPullRequestFilters(
+        entry({ number: 1, updatedAt: new Date(boundary).toISOString() }),
+        filters,
+      ),
+    ).toBe(true);
+    expect(
+      matchesPullRequestFilters(
+        entry({ number: 2, updatedAt: new Date(boundary - 1).toISOString() }),
+        filters,
+      ),
+    ).toBe(false);
+  });
   it.each([
     ["passing", [1, 4]],
     ["failing", [2, 4]],
@@ -457,7 +479,7 @@ describe("remembered pull request list controls", () => {
   it("falls back to the default controls when storage is corrupt", () => {
     const storage = makeStorage();
     storage.setItem("t3.pullRequests.preferences", "{not json");
-    expect(readPullRequestListPreferences(storage)).toEqual({ involvement: "all", state: "open" });
+    expect(readPullRequestListPreferences(storage)).toEqual({ involvement: "all", state: "all" });
   });
 
   it("falls back when browser policy denies storage", () => {
@@ -469,7 +491,7 @@ describe("remembered pull request list controls", () => {
         throw new Error("storage denied");
       },
     };
-    expect(readPullRequestListPreferences(denied)).toEqual({ involvement: "all", state: "open" });
+    expect(readPullRequestListPreferences(denied)).toEqual({ involvement: "all", state: "all" });
     expect(() =>
       writePullRequestListPreferences({ involvement: "all", state: "open" }, denied),
     ).not.toThrow();

@@ -53,11 +53,7 @@ export function LinkedThreadPage(props: {
         surface={surface}
         visible
         renderHeader={(title) => (
-          <WorkspacePageHeader
-            electron={isElectron}
-            showGlobalTerminal
-            className="relative bg-background"
-          >
+          <WorkspacePageHeader electron={isElectron} className="relative bg-background">
             <WorkspaceBreadcrumb ariaLabel={gt("Thread breadcrumb")}>
               <WorkspaceBreadcrumbItem current>
                 <h1 className="truncate">{title}</h1>

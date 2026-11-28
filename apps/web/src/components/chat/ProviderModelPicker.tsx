@@ -219,7 +219,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     const trigger = popupRef.current?.querySelector<HTMLButtonElement>(
       "[data-composer-permissions-trigger]",
     );
-    if (!trigger) return;
+    if (!trigger || trigger.getAttribute("aria-expanded") === "true") return;
     trigger.scrollIntoView({ block: "nearest" });
     markOpenToPermissions(trigger);
     trigger.click();

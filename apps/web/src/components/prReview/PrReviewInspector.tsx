@@ -229,7 +229,7 @@ export function PrReviewInspector({
   readonly isExpanded?: boolean;
   readonly onToggleExpand?: () => void;
   readonly onJumpToThread: (threadId: ThreadId) => void;
-  readonly onClose: () => void;
+  readonly onClose?: () => void;
 }) {
   const gt = useGT();
   const roleLabel = usePrReviewRoleLabel();
@@ -425,14 +425,16 @@ export function PrReviewInspector({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            onClick={onClose}
-            aria-label={gt("Close inspector")}
-          >
-            <XIcon className="size-4" />
-          </Button>
+          {onClose ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={onClose}
+              aria-label={gt("Close inspector")}
+            >
+              <XIcon className="size-4" />
+            </Button>
+          ) : null}
         </div>
       </div>
 

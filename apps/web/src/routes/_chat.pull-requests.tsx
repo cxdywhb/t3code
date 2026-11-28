@@ -1,10 +1,11 @@
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, PrReviewTaskId, ProjectId } from "@t3tools/contracts";
 import { splitsSurrogatePair } from "@t3tools/shared/assistantCitations";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { type PullRequestListSort } from "../components/pullRequest/pullRequestListPreferences";
 import { SORT_OPTIONS } from "../components/pullRequest/pullRequestListOptions";
 import { type PullRequestsSearch } from "../components/pullRequest/usePullRequestListView";
+import { PrReviewWorkstationPage } from "../components/prReview/PrReviewWorkstationPage";
 import { PullRequestsPage } from "../components/pullRequest/PullRequestsPage";
 
 const MAX_SEARCH_LABEL_CANDIDATES = 100;
@@ -34,11 +35,18 @@ function pullRequestSearchLabels(raw: unknown): PullRequestsSearch["labels"] {
 
 export const Route = createFileRoute("/_chat/pull-requests")({
   validateSearch: (raw: Record<string, unknown>): PullRequestsSearch => ({
+    ...(raw.reviewWorkspace === true ? { reviewWorkspace: true } : {}),
+    ...(typeof raw.reviewEnvironmentId === "string" && raw.reviewEnvironmentId
+      ? { reviewEnvironmentId: raw.reviewEnvironmentId as EnvironmentId }
+      : {}),
+    ...(typeof raw.reviewTaskId === "string"
+      ? { reviewTaskId: raw.reviewTaskId as PrReviewTaskId }
+      : {}),
     ...(typeof raw.selectedUrl === "string" ? { selectedUrl: raw.selectedUrl.slice(0, 4096) } : {}),
     involvement:
       raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
     state:
-      raw.state === "closed" || raw.state === "merged" || raw.state === "all" ? raw.state : "open",
+      raw.state === "closed" || raw.state === "merged" || raw.state === "open" ? raw.state : "all",
     ...(SORT_OPTIONS.some((option) => option.value === raw.sort)
       ? { sort: raw.sort as PullRequestListSort }
       : {}),
@@ -74,9 +82,24 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { review: raw.review }
       : {}),
     ...(raw.checks === "passing" || raw.checks === "failing" ? { checks: raw.checks } : {}),
+    ...(raw.updatedWithin === "3d" || raw.updatedWithin === "7d" || raw.updatedWithin === "30d"
+      ? { updatedWithin: raw.updatedWithin }
+      : {}),
     author:
       typeof raw.author === "string" ? sliceSearchText(raw.author.trim()) || undefined : undefined,
     labels: pullRequestSearchLabels(raw.labels),
   }),
-  component: PullRequestsPage,
+  component: PullRequestsRoute,
 });
+
+function PullRequestsRoute() {
+  const { reviewWorkspace, reviewEnvironmentId, reviewTaskId } = Route.useSearch();
+  return reviewWorkspace ? (
+    <PrReviewWorkstationPage
+      preferredEnvironmentId={reviewEnvironmentId}
+      initialTaskId={reviewTaskId}
+    />
+  ) : (
+    <PullRequestsPage />
+  );
+}

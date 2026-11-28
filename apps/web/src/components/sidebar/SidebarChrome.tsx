@@ -5,7 +5,6 @@ import {
   ChartNoAxesColumnIcon,
   FolderGit2Icon,
   SettingsIcon,
-  ShieldCheckIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
@@ -24,7 +23,6 @@ import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
 import { useIssueAutomationSupported } from "../../state/issueAutomation";
-import { usePrReviewSupported } from "../../state/prReview";
 import { APP_BASE_NAME } from "../../branding";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -33,6 +31,7 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
+import { GlobalTerminalButton } from "../terminal/GlobalTerminal";
 import { Button } from "../ui/button";
 import {
   SidebarFooter,
@@ -236,7 +235,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
-  const prReviewSupported = usePrReviewSupported();
   const issueAutomationSupported = useIssueAutomationSupported();
   const closeMobileSidebar = () => {
     if (isMobile) {
@@ -249,10 +247,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       to: "/pull-requests",
       search: readPullRequestListPreferences(),
     });
-  };
-  const handlePrReviewClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/pr-review" });
   };
   const handleIssueAutomationClick = () => {
     closeMobileSidebar();
@@ -280,7 +274,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
 
   return (
-    <SidebarMenu className="flex-row items-center">
+    <SidebarMenu className="flex-row flex-wrap items-center">
       {isOnUtilityPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
@@ -304,13 +298,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handlePullRequestsClick}
             />
           ) : null}
-          {prReviewSupported ? (
-            <SidebarUtilityItem
-              icon={<ShieldCheckIcon />}
-              label={gt("PR Cross Review", { $context: "sidebar shortcut" })}
-              onClick={handlePrReviewClick}
-            />
-          ) : null}
           {issueAutomationSupported ? (
             <SidebarUtilityItem
               icon={<BotIcon />}
@@ -330,6 +317,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
         </>
       )}
+      <SidebarMenuItem className="shrink-0">
+        <GlobalTerminalButton />
+      </SidebarMenuItem>
       <SidebarThreadUndoNotice />
       <SidebarUpdatePill />
     </SidebarMenu>

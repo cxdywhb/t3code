@@ -1763,26 +1763,35 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  actionItems.push({
-    kind: "action",
-    value: "action:pr-review",
-    searchTerms: [
-      "pr",
-      "mr",
-      "review",
-      "fusion",
-      "gitlab",
-      "multi-model",
-      "审查",
-      "融合",
-      "工作站",
-    ],
-    title: gt("Open PR Cross Review"),
-    icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({ to: "/pr-review" });
-    },
-  });
+  if (
+    environments.some(
+      (environment) => environment.serverConfig?.environment.capabilities.prReview === true,
+    )
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:pr-review",
+      searchTerms: [
+        "pr",
+        "mr",
+        "review",
+        "fusion",
+        "gitlab",
+        "multi-model",
+        "审查",
+        "融合",
+        "工作站",
+      ],
+      title: gt("Open PR Cross Review"),
+      icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/pull-requests",
+          search: { ...readPullRequestListPreferences(), reviewWorkspace: true },
+        });
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",

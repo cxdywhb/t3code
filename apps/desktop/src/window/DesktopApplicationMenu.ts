@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type { DesktopUpdateChannel } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS, type DesktopUpdateChannel } from "@t3tools/contracts";
 import * as Electron from "electron";
 import { msg } from "gt-i18n";
 
@@ -436,15 +436,13 @@ export const make = Effect.gen(function* () {
     yield* electronMenu.setApplicationMenu(template);
   }).pipe(Effect.withSpan("desktop.menu.configure"));
 
-  // Load the saved language before the first build so the menu never starts in English.
+  // Resolve the saved or default language before the menu's first build.
   const applySavedLanguage = Effect.gen(function* () {
     if (Option.isNone(clientSettings)) return;
     const saved = yield* clientSettings.value.get.pipe(Effect.orElseSucceed(() => Option.none()));
-    if (Option.isSome(saved)) {
-      yield* applyLanguage(saved.value.language).pipe(
-        Effect.provideService(ElectronApp.ElectronApp, electronApp),
-      );
-    }
+    yield* applyLanguage(Option.getOrElse(saved, () => DEFAULT_CLIENT_SETTINGS).language).pipe(
+      Effect.provideService(ElectronApp.ElectronApp, electronApp),
+    );
   });
 
   let rebuildsOnLocaleChange = false;

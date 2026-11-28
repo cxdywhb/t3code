@@ -31,6 +31,7 @@ import {
   ClockIcon,
   FolderGit2Icon,
   GitBranchIcon,
+  HistoryIcon,
   LayersIcon,
   MessageSquareIcon,
   PanelRightIcon,
@@ -50,7 +51,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
-import { ComposerSurface } from "~/components/chat/ComposerSurface";
 import {
   OfficialModelPicker,
   useOfficialModelCatalog,
@@ -67,7 +67,6 @@ import { RelativeTime } from "~/components/RelativeTime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { WorkspaceInspectorDrawer } from "~/components/WorkspaceInspectorDrawer";
 import {
-  WORKSPACE_BAR_ENTER_CLASS,
   WORKSPACE_TAB_PANEL_CLASS,
   WorkspacePageHeader,
   WorkspacePageTitle,
@@ -289,7 +288,10 @@ export function IssueAutomationPage() {
   } | null>(null);
 
   const [selectedIssueKey, setSelectedIssueKey] = useState<string | null>(null);
-  const [checkedIssueKeys, setCheckedIssueKeys] = useState<ReadonlyArray<string>>([]);
+  const [checkedIssues, setCheckedIssues] = useState<{
+    scope: string;
+    keys: ReadonlyArray<string>;
+  } | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorSubTab>("detail");
@@ -301,6 +303,23 @@ export function IssueAutomationPage() {
   const [editingProfile, setEditingProfile] = useState<IssueAutomationProfile | null>(null);
 
   const scopePrefKey = makeScopePrefKey(activeConnector?.id, effectiveScopeId);
+  const issueSelectionScope = JSON.stringify([
+    environmentId,
+    activeConnector?.id,
+    effectiveScopeId,
+  ]);
+  const checkedIssueKeys = checkedIssues?.scope === issueSelectionScope ? checkedIssues.keys : [];
+  const setCheckedIssueKeys = (
+    next: ReadonlyArray<string> | ((previous: ReadonlyArray<string>) => ReadonlyArray<string>),
+  ) => {
+    setCheckedIssues((current) => ({
+      scope: issueSelectionScope,
+      keys:
+        typeof next === "function"
+          ? next(current?.scope === issueSelectionScope ? current.keys : [])
+          : next,
+    }));
+  };
 
   const scannedProfile =
     scanSelection && scanSelection.environmentId === environmentId
@@ -574,24 +593,6 @@ export function IssueAutomationPage() {
     (activeTab === "issues" || activeTab === "runs") &&
     environmentId !== null;
   const desktopInspectorVisible = inspectorActive && isWideDesktop;
-
-  const analyticsSummary = computeIssueAutomationAnalytics({
-    tasks: snapshot.tasks,
-    range: analyticsRange,
-    scopeMode: analyticsScopeMode,
-    currentConnectorId: activeConnector?.id ?? null,
-    currentScopeId: effectiveScopeId,
-    projectTitleById,
-  });
-
-  const allRunsQuickSummary = computeIssueAutomationAnalytics({
-    tasks: snapshot.tasks,
-    range: "all",
-    scopeMode: "all",
-    currentConnectorId: activeConnector?.id ?? null,
-    currentScopeId: effectiveScopeId,
-    projectTitleById,
-  });
 
   const openThread = (threadId: ThreadId) => {
     if (!environmentId) return;
@@ -897,8 +898,9 @@ export function IssueAutomationPage() {
     );
   });
 
-  const allVisibleChecked =
-    issues.length > 0 && issues.every((issue) => checkedIssueKeys.includes(issue.key));
+  const checkedKeys = new Set(checkedIssueKeys);
+  const visibleCheckedCount = issues.filter((issue) => checkedKeys.has(issue.key)).length;
+  const allVisibleChecked = issues.length > 0 && visibleCheckedCount === issues.length;
 
   const inspectorBody =
     environmentId !== null ? (
@@ -956,7 +958,6 @@ export function IssueAutomationPage() {
       <div className="relative flex min-h-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
           <WorkspacePageHeader
-            showGlobalTerminal
             data-chat-header
             electron={isElectron}
             reserveNativeControls={!desktopInspectorVisible}
@@ -969,57 +970,9 @@ export function IssueAutomationPage() {
               className="flex items-center gap-2 [-webkit-app-region:no-drag]"
               data-workspace-titlebar-controls
             >
-              {activeConnector ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="sm"
-                        variant={activeConnectorHealthy ? "ghost" : "outline"}
-                        aria-label={gt("Edit connection settings")}
-                        onClick={() => {
-                          setEditingConnector(activeConnector);
-                          setConnectorModalOpen(true);
-                        }}
-                      />
-                    }
-                  >
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "size-2 shrink-0 rounded-full",
-                        activeConnectorHealthy ? "bg-primary" : "bg-warning",
-                      )}
-                    />
-                    <span className="max-w-28 truncate xl:max-w-48">
-                      {activeConnector.name}
-                      <span className="hidden text-muted-foreground xl:inline">
-                        {" "}
-                        · {activeConnector.viewerName ?? activeConnector.name}
-                      </span>
-                    </span>
-                    <PencilIcon className="size-3 shrink-0 opacity-70" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom">{gt("Edit connection settings")}</TooltipPopup>
-                </Tooltip>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!canConfigureConnector}
-                  onClick={() => {
-                    setEditingConnector(null);
-                    setConnectorModalOpen(true);
-                  }}
-                >
-                  <Plug2Icon className="size-3.5" />
-                  <T>Connect ZenTao</T>
-                </Button>
-              )}
-
               {activeConnector?.status === "disconnected" ? (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="outline"
                   disabled={!canConfigureConnector}
                   onClick={() => {
@@ -1031,17 +984,32 @@ export function IssueAutomationPage() {
                   <T>Authorize MCP</T>
                 </Button>
               ) : activeConnector ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setEditingProfile(matchedScopeProfile);
-                    setProfileModalOpen(true);
-                  }}
-                >
-                  <Settings2Icon className="size-3.5" />
-                  <T>Unattended rule</T>
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={gt("Edit connection settings")}
+                        onClick={() => {
+                          setEditingConnector(activeConnector);
+                          setConnectorModalOpen(true);
+                        }}
+                      />
+                    }
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        activeConnectorHealthy ? "bg-success" : "bg-warning",
+                      )}
+                    />
+                    <span className="max-w-24 truncate sm:max-w-40">{activeConnector.name}</span>
+                    <PencilIcon className="size-3 shrink-0 opacity-70" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">{gt("Edit connection settings")}</TooltipPopup>
+                </Tooltip>
               ) : null}
 
               {activeTab === "issues" || activeTab === "runs" ? (
@@ -1071,6 +1039,9 @@ export function IssueAutomationPage() {
             <WorkspacePageToolbar>
               <ToggleGroup
                 className="max-w-full flex-wrap"
+                variant="default"
+                size="segmented"
+                aria-label={pageTitle}
                 value={[activeTab]}
                 onValueChange={(next) => {
                   const picked = next[0] as WorkbenchTab | undefined;
@@ -1082,12 +1053,11 @@ export function IssueAutomationPage() {
                   <T>Issue list</T>
                 </Toggle>
                 <Toggle value="runs">
+                  <WorkflowIcon className="size-3.5" />
+                  <T>Runs</T>
                   {snapshot.activeRunCount > 0 ? (
-                    <Spinner size="xs" />
-                  ) : (
-                    <WorkflowIcon className="size-3.5" />
-                  )}
-                  <T>Runs</T> ({taskGroups.length})
+                    <span className="text-info tabular-nums">{snapshot.activeRunCount}</span>
+                  ) : null}
                 </Toggle>
                 <Toggle value="analytics">
                   <BarChart3Icon className="size-3.5" />
@@ -1109,14 +1079,10 @@ export function IssueAutomationPage() {
                     <BotIcon />
                   </EmptyMedia>
                   <EmptyTitle>
-                    <T>Enterprise Issue Auto-Analysis & Resolution</T>
+                    <T>Connect ZenTao</T>
                   </EmptyTitle>
                   <EmptyDescription>
-                    <T>
-                      Connect your ZenTao MCP service, bind products to multiple local code
-                      repositories, and dispatch local AI models for unattended root-cause
-                      diagnosis, isolated Worktree fixes, and automatic comment write-back.
-                    </T>
+                    <T>Browse issues and run diagnoses from this workspace.</T>
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
@@ -1128,7 +1094,7 @@ export function IssueAutomationPage() {
                     }}
                   >
                     <Plug2Icon className="size-4" />
-                    <T>Connect internal ZenTao</T>
+                    <T>Add connection</T>
                   </Button>
                 </EmptyContent>
               </Empty>
@@ -1138,8 +1104,7 @@ export function IssueAutomationPage() {
               key="issues"
               className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
             >
-              {/* Fixed Non-Scrolling Issues Toolbar */}
-              <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-2.5 sm:px-7">
+              <div className="shrink-0 space-y-2 border-b border-border/50 px-4 py-2.5 sm:px-6">
                 <div className="flex flex-wrap items-center gap-2">
                   {scannedProfile ? (
                     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -1305,6 +1270,8 @@ export function IssueAutomationPage() {
                   <div className="flex items-center gap-2.5">
                     <Checkbox
                       checked={allVisibleChecked}
+                      indeterminate={visibleCheckedCount > 0 && !allVisibleChecked}
+                      disabled={issues.length === 0}
                       aria-label={gt("Select all issues on this page")}
                       onCheckedChange={(checked) => {
                         if (checked) {
@@ -1314,28 +1281,35 @@ export function IssueAutomationPage() {
                         }
                       }}
                     />
-                    <span>
-                      <strong className="font-medium text-foreground">{effectiveScopeName}</strong>{" "}
+                    <span className="tabular-nums">
                       {scannedProfile ? (
                         <>
-                          {" "}
-                          · {gt("Matches on this page")} {issues.length}
+                          {gt("Matches on this page")} {issues.length}
                         </>
-                      ) : (
+                      ) : issuePage && "total" in issuePage ? (
                         <>
-                          {" "}
-                          · <T>Total</T> {issuePage && "total" in issuePage ? issuePage.total : 0}
+                          <T>Total</T> {issuePage.total}
                         </>
-                      )}
+                      ) : null}
                     </span>
-                    {matchedScopeProfile ? (
-                      <Badge variant="secondary" size="sm">
-                        {matchedScopeProfile.enabled ? (
+                    {activeConnector && activeConnector.status !== "disconnected" ? (
+                      <Button
+                        size="xs"
+                        variant="ghost-muted"
+                        onClick={() => {
+                          setEditingProfile(matchedScopeProfile);
+                          setProfileModalOpen(true);
+                        }}
+                      >
+                        <Settings2Icon className="size-3.5" />
+                        {matchedScopeProfile?.enabled ? (
                           <T>Unattended polling active</T>
-                        ) : (
+                        ) : matchedScopeProfile ? (
                           <T>Rule paused</T>
+                        ) : (
+                          <T>Unattended rule</T>
                         )}
-                      </Badge>
+                      </Button>
                     ) : null}
                   </div>
 
@@ -1365,8 +1339,7 @@ export function IssueAutomationPage() {
                 </div>
               </div>
 
-              {/* Independent Scrollable Issue Rows */}
-              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-24 sm:px-7">
+              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-4 py-2 sm:px-6">
                 {remoteIssuesQuery.isPending && issues.length === 0 ? (
                   <PullRequestListGhost rows={6} />
                 ) : remoteIssuesQuery.error !== null && issues.length === 0 ? (
@@ -1414,14 +1387,16 @@ export function IssueAutomationPage() {
                 ) : (
                   <div className="flex flex-col gap-0.5">
                     {issues.map((issue) => {
-                      const checked = checkedIssueKeys.includes(issue.key);
+                      const checked = checkedKeys.has(issue.key);
                       const selected = inspectorActive && selectedIssueKey === issue.key;
                       return (
                         <div
                           key={issue.key}
                           className={cn(
-                            "group/issue-row flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
-                            selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                            "group/issue-row flex items-center gap-2.5 rounded-lg border border-transparent px-3 py-1.5 transition-all duration-150",
+                            selected || checked
+                              ? "border-border/60 bg-accent text-accent-foreground shadow-xs"
+                              : "hover:border-border/40 hover:bg-accent/50",
                           )}
                         >
                           <Checkbox
@@ -1438,7 +1413,7 @@ export function IssueAutomationPage() {
                             type="button"
                             aria-current={selected ? "true" : undefined}
                             onClick={() => selectIssue(issue.key, issue.latestTaskId)}
-                            className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                            className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-1.5")}
                           >
                             <RemoteIssueStatusGlyph
                               status={issue.status}
@@ -1476,7 +1451,7 @@ export function IssueAutomationPage() {
                             />
                           </button>
 
-                          <div className="flex shrink-0 items-center gap-1">
+                          <div className="flex shrink-0 items-center gap-1.5">
                             {issue.latestTaskId ? (
                               <Button
                                 size="xs"
@@ -1507,18 +1482,100 @@ export function IssueAutomationPage() {
                   </div>
                 )}
               </div>
+              {checkedIssueKeys.length > 0 ? (
+                <div className="sticky bottom-0 z-20 flex flex-wrap items-center justify-between gap-3 shrink-0 border-t border-border/80 bg-background/95 backdrop-blur-md px-4 py-2.5 sm:px-6 shadow-md transition-all">
+                  <div className="flex items-center gap-2">
+                    <span
+                      role="status"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary tabular-nums"
+                    >
+                      {gt("{count} selected", { count: checkedIssueKeys.length })}
+                    </span>
+                    <Button
+                      size="xs"
+                      variant="ghost-muted"
+                      aria-label={gt("Clear selection")}
+                      onClick={() => setCheckedIssueKeys([])}
+                    >
+                      <XIcon className="size-3" />
+                      <T>Clear selection</T>
+                    </Button>
+                  </div>
+
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <SearchableProjectMenu
+                      projects={envProjects}
+                      value={resolvedProjectId}
+                      onChange={handleSelectProject}
+                      ariaLabel={gt("Batch target repository")}
+                      size="compact"
+                      className="w-36 min-w-0"
+                    />
+
+                    {environmentId ? (
+                      <OfficialModelPicker
+                        diagnosisOnly={diagnosisOnly}
+                        environmentId={environmentId}
+                        value={resolvedModelSelection}
+                        onChange={(next) => {
+                          if (next) handleSelectModel(next);
+                        }}
+                        ariaLabel={gt("Batch AI model")}
+                        size="xs"
+                        popupSide="top"
+                        triggerClassName="w-40 min-w-0"
+                      />
+                    ) : null}
+
+                    <Select
+                      value={resolvedActionMode}
+                      onValueChange={(next) => {
+                        if (next) handleSelectActionMode(next as IssueAutomationActionMode);
+                      }}
+                    >
+                      <SelectTrigger
+                        size="compact"
+                        className="w-40 min-w-0"
+                        aria-label={gt("Batch execution mode")}
+                      >
+                        <SelectValue>{actionModeLabel(resolvedActionMode)}</SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup>
+                        <SelectItem value="fix_worktree_review">
+                          {actionModeLabel("fix_worktree_review")}
+                        </SelectItem>
+                        <SelectItem value="diagnose_only">
+                          {actionModeLabel("diagnose_only")}
+                        </SelectItem>
+                        <SelectItem value="auto_resolve">
+                          {actionModeLabel("auto_resolve")}
+                        </SelectItem>
+                      </SelectPopup>
+                    </Select>
+
+                    <Button
+                      size="xs"
+                      disabled={dispatching}
+                      onClick={() => void handleDispatchIssues(checkedIssueKeys)}
+                    >
+                      {dispatching ? <Spinner size="xs" /> : <PlayIcon className="size-3" />}
+                      <T>Run batch</T>
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : activeTab === "runs" ? (
             <div
               key="runs"
               className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
             >
-              {/* Fixed Non-Scrolling Runs Toolbar + Compact Telemetry Strip */}
-              <div className="shrink-0 space-y-2.5 border-b border-border/50 bg-background px-5 pt-3.5 pb-3 sm:px-7">
+              <div className="shrink-0 border-b border-border/50 px-4 py-2.5 sm:px-6">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <ToggleGroup
                     variant="segmented"
                     size="segmented"
+                    className="max-w-full flex-wrap"
                     value={[runFilter]}
                     onValueChange={(next) => {
                       const picked = next[0] as RunStatusFilter | undefined;
@@ -1589,7 +1646,7 @@ export function IssueAutomationPage() {
                     </Toggle>
                   </ToggleGroup>
 
-                  <div className="min-w-52 flex-1 sm:max-w-sm">
+                  <div className="min-w-36 flex-1 sm:max-w-sm">
                     <PullRequestSearchInput
                       value={runQuery}
                       label={gt("Search automation runs")}
@@ -1599,56 +1656,9 @@ export function IssueAutomationPage() {
                     />
                   </div>
                 </div>
-
-                {allRunsQuickSummary.totalRunsCount > 0 ? (
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-muted-foreground">
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums">
-                      <span>
-                        <T>Covered</T>:{" "}
-                        <strong className="font-mono text-foreground">
-                          {allRunsQuickSummary.uniqueIssuesCount}
-                        </strong>
-                      </span>
-                      <span>
-                        <T>Success rate</T>:{" "}
-                        <strong className="font-mono text-success">
-                          {allRunsQuickSummary.successRate !== null
-                            ? `${allRunsQuickSummary.successRate.toFixed(1)}%`
-                            : "-"}
-                        </strong>
-                      </span>
-                      <span>
-                        <T>Completion</T>:{" "}
-                        <strong className="font-mono text-foreground">
-                          {allRunsQuickSummary.completionRate !== null
-                            ? `${allRunsQuickSummary.completionRate.toFixed(1)}%`
-                            : "-"}
-                        </strong>
-                      </span>
-                      <span>
-                        <T>Avg time</T>:{" "}
-                        <strong className="font-mono text-foreground">
-                          {formatCompactDuration(allRunsQuickSummary.avgDurationMs)}
-                        </strong>
-                      </span>
-                      <span>
-                        <T>Saved</T>:{" "}
-                        <strong className="font-mono text-primary">
-                          ≈ {allRunsQuickSummary.estimatedHoursSaved.toFixed(1)}h
-                        </strong>
-                      </span>
-                    </div>
-
-                    <Button size="xs" variant="ghost" onClick={() => setActiveTab("analytics")}>
-                      <BarChart3Icon className="size-3.5 text-primary" />
-                      <T>Full analytics</T>
-                    </Button>
-                  </div>
-                ) : null}
               </div>
 
-              {/* Independent Scrollable Run Rows */}
-              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-2 pb-16 sm:px-7">
+              <div className="@container/run-list topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-4 py-2 sm:px-6">
                 {filteredGroups.length === 0 ? (
                   <Empty size="compact" className="my-12">
                     <EmptyHeader>
@@ -1659,10 +1669,11 @@ export function IssueAutomationPage() {
                         <T>No automation runs</T>
                       </EmptyTitle>
                       <EmptyDescription>
-                        <T>
-                          Select any issue in the Issues view to start diagnosis, or enable an
-                          unattended polling rule.
-                        </T>
+                        {taskGroups.length > 0 ? (
+                          <T>Try changing the search or filters.</T>
+                        ) : (
+                          <T>Start a diagnosis from the issue list.</T>
+                        )}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -1673,20 +1684,25 @@ export function IssueAutomationPage() {
                       const repoTitle =
                         envProjects.find((p) => p.id === task.targetProjectId)?.title ?? null;
                       const hasHistory = attempts.length > 1;
+                      const historyLabel = hasHistory
+                        ? gt("Execution history · {count} runs", { count: attempts.length })
+                        : undefined;
                       const canCancel = isTaskCancellable(task);
                       return (
                         <Collapsible key={key}>
                           <div
                             className={cn(
-                              "flex items-center gap-2 rounded-md px-3 py-1 transition-colors",
-                              selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                              "grid grid-cols-[minmax(0,1fr)] items-center gap-x-2.5 rounded-lg border border-transparent px-3 py-1.5 transition-all duration-150 @min-[48rem]/run-list:grid-cols-[minmax(0,1fr)_auto]",
+                              selected
+                                ? "border-border/60 bg-accent text-accent-foreground shadow-xs"
+                                : "hover:border-border/40 hover:bg-accent/50",
                             )}
                           >
                             <button
                               type="button"
                               aria-current={selected ? "true" : undefined}
                               onClick={() => selectRun(task)}
-                              className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-2")}
+                              className={cn(PULL_REQUEST_ROW_CLASS, "min-w-0 flex-1 py-1.5")}
                             >
                               <TaskStageGlyph stage={task.stage} />
                               <PullRequestRowLines
@@ -1730,24 +1746,22 @@ export function IssueAutomationPage() {
                               />
                             </button>
 
-                            <div className="flex shrink-0 items-center gap-3 pl-2">
+                            <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
                               {hasHistory ? (
                                 <CollapsibleTrigger
+                                  aria-label={historyLabel}
+                                  title={historyLabel}
                                   render={<Button variant="ghost-muted" size="xs" />}
                                 >
-                                  <ChevronDownIcon className="size-3.5" />
-                                  {gt("Execution history · {count} runs", {
-                                    count: attempts.length,
-                                  })}
+                                  <HistoryIcon className="size-3.5" />
+                                  <span className="tabular-nums">{attempts.length}</span>
                                 </CollapsibleTrigger>
                               ) : null}
-                              <div className="flex min-w-16 items-center justify-end">
-                                <TaskDurationBadge task={task} environmentId={environmentId} />
-                              </div>
+                              <TaskDurationBadge task={task} environmentId={environmentId} />
                               <span className="hidden w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums sm:inline-block">
                                 <RelativeTime timestamp={task.updatedAt} />
                               </span>
-                              <div className="flex w-22 shrink-0 items-center justify-end">
+                              <div className="flex shrink-0 items-center justify-end">
                                 {task.repairOfTaskId !== undefined ? (
                                   <Button
                                     size="xs"
@@ -1854,8 +1868,7 @@ export function IssueAutomationPage() {
               key="analytics"
               className={cn("flex min-h-0 flex-1 flex-col", WORKSPACE_TAB_PANEL_CLASS)}
             >
-              {/* Fixed Non-Scrolling Analytics Filter Bar */}
-              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-background px-5 py-3 sm:px-7">
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 px-4 py-2.5 sm:px-6">
                 <div className="flex flex-wrap items-center gap-2">
                   <ToggleGroup
                     variant="segmented"
@@ -1872,11 +1885,7 @@ export function IssueAutomationPage() {
                     </Toggle>
                     <Toggle value="current">
                       <FolderGit2Icon />
-                      <span className="max-w-52 truncate">
-                        {effectiveScopeName
-                          ? `#${effectiveScopeId} · ${effectiveScopeName}`
-                          : gt("Current product")}
-                      </span>
+                      <T>Current product</T>
                     </Toggle>
                   </ToggleGroup>
 
@@ -1915,9 +1924,16 @@ export function IssueAutomationPage() {
                 </ToggleGroup>
               </div>
 
-              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 sm:px-7">
+              <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-4 pt-4 sm:px-6">
                 <IssueAutomationAnalyticsView
-                  summary={analyticsSummary}
+                  summary={computeIssueAutomationAnalytics({
+                    tasks: snapshot.tasks,
+                    range: analyticsRange,
+                    scopeMode: analyticsScopeMode,
+                    currentConnectorId: activeConnector?.id ?? null,
+                    currentScopeId: effectiveScopeId,
+                    projectTitleById,
+                  })}
                   onJumpToRuns={(targetFilter) => {
                     setPrefs((prev) => ({
                       ...prev,
@@ -1932,14 +1948,13 @@ export function IssueAutomationPage() {
             <div
               key="rules"
               className={cn(
-                "topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-5 pt-5 pb-24 sm:px-7",
+                "topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto px-4 pt-4 sm:px-6",
                 WORKSPACE_TAB_PANEL_CLASS,
               )}
             >
               <IssueAutomationRulesView
                 environmentId={environmentId}
                 canConfigureConnector={canConfigureConnector}
-                platforms={snapshot.platforms}
                 connectors={snapshot.connectors}
                 profiles={snapshot.profiles}
                 projects={envProjects}
@@ -1983,101 +1998,6 @@ export function IssueAutomationPage() {
               />
             </div>
           )}
-
-          {activeTab === "issues" && checkedIssueKeys.length > 0 ? (
-            <div
-              className={cn(
-                "pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4",
-                WORKSPACE_BAR_ENTER_CLASS,
-                "starting:translate-y-2",
-              )}
-            >
-              <ComposerSurface.Shell className="pointer-events-auto w-full max-w-3xl">
-                <ComposerSurface.Host>
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5">
-                    <div className="flex items-center gap-2 text-xs font-medium text-foreground">
-                      <Badge variant="secondary" size="sm">
-                        {checkedIssueKeys.length}
-                      </Badge>
-                      <span>
-                        <T>issues selected for batch diagnosis</T>
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <SearchableProjectMenu
-                        projects={envProjects}
-                        value={resolvedProjectId}
-                        onChange={handleSelectProject}
-                        ariaLabel={gt("Batch target repository")}
-                        size="compact"
-                        className="w-36 min-w-0"
-                      />
-
-                      {environmentId ? (
-                        <OfficialModelPicker
-                          diagnosisOnly={diagnosisOnly}
-                          environmentId={environmentId}
-                          value={resolvedModelSelection}
-                          onChange={(next) => {
-                            if (next) handleSelectModel(next);
-                          }}
-                          ariaLabel={gt("Batch AI model")}
-                          size="xs"
-                          popupSide="top"
-                          triggerClassName="w-40 min-w-0"
-                        />
-                      ) : null}
-
-                      <Select
-                        value={resolvedActionMode}
-                        onValueChange={(next) => {
-                          if (next) handleSelectActionMode(next as IssueAutomationActionMode);
-                        }}
-                      >
-                        <SelectTrigger
-                          size="compact"
-                          className="w-40 min-w-0"
-                          aria-label={gt("Batch execution mode")}
-                        >
-                          <SelectValue>{actionModeLabel(resolvedActionMode)}</SelectValue>
-                        </SelectTrigger>
-                        <SelectPopup>
-                          <SelectItem value="fix_worktree_review">
-                            {actionModeLabel("fix_worktree_review")}
-                          </SelectItem>
-                          <SelectItem value="diagnose_only">
-                            {actionModeLabel("diagnose_only")}
-                          </SelectItem>
-                          <SelectItem value="auto_resolve">
-                            {actionModeLabel("auto_resolve")}
-                          </SelectItem>
-                        </SelectPopup>
-                      </Select>
-
-                      <Button
-                        size="xs"
-                        disabled={dispatching}
-                        onClick={() => void handleDispatchIssues(checkedIssueKeys)}
-                      >
-                        {dispatching ? <Spinner size="xs" /> : <PlayIcon className="size-3" />}
-                        <T>Run batch</T>
-                      </Button>
-
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={gt("Clear selection")}
-                        onClick={() => setCheckedIssueKeys([])}
-                      >
-                        <XIcon className="size-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                </ComposerSurface.Host>
-              </ComposerSurface.Shell>
-            </div>
-          ) : null}
         </div>
 
         <WorkspaceInspectorDrawer
