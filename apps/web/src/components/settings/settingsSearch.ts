@@ -515,9 +515,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "fixed-creation-order",
-    title: msg("Keep threads in creation order"),
+    title: msg("Thread order"),
     to: "/settings/general",
-    searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
+    searchTerms: [
+      msg("Created at"),
+      msg("Last user message"),
+      msg("Keep threads in creation order"),
+    ],
   },
   {
     id: "working-shelf",

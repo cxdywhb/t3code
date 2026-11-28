@@ -13904,6 +13904,7 @@
   "2947f921ceff12f8": "Ignora remotes upstream e lista pull requests apenas do remote origin de cada repositório. Links explícitos para pull requests upstream continuam abrindo.",
   "d6a058a34fefc97e": "Redefinir preferência do remote origin para o padrão",
   "7b047fe1708d82c7": "Usar somente o remote origin",
+  "4569fc83b5fd421f": "Ordem das conversas",
   "96dae5766f3c88b5": "Manter as conversas na ordem de criação",
   "eeae42fcea11cb96": "As conversas mais recentes aparecem primeiro. Iniciar ou concluir um turno não muda a posição da conversa.",
   "c770e07f7d4febb5": "read_api (e read_repository para clonar via HTTPS)",

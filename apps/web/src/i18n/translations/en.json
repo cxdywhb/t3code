@@ -13912,6 +13912,7 @@
   "2947f921ceff12f8": "Ignore upstream remotes and list pull requests only from each repository's origin remote. Explicit links to upstream pull requests still open.",
   "d6a058a34fefc97e": "Reset origin remote preference to default",
   "7b047fe1708d82c7": "Use origin remote only",
+  "4569fc83b5fd421f": "Thread order",
   "96dae5766f3c88b5": "Keep threads in creation order",
   "eeae42fcea11cb96": "List newest threads first. Starting or finishing a turn keeps the thread in place.",
   "c770e07f7d4febb5": "read_api (and read_repository for HTTPS clone)",

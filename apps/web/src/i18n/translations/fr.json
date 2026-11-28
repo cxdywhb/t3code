@@ -13903,6 +13903,7 @@
   "2947f921ceff12f8": "Ignore les dépôts distants upstream et liste les pull requests uniquement depuis le dépôt distant origin de chaque dépôt. Les liens explicites vers des pull requests upstream continuent de s'ouvrir.",
   "d6a058a34fefc97e": "Réinitialiser la préférence du dépôt distant origin par défaut",
   "7b047fe1708d82c7": "Utiliser uniquement le dépôt distant origin",
+  "4569fc83b5fd421f": "Ordre des conversations",
   "96dae5766f3c88b5": "Conserver l’ordre de création des conversations",
   "eeae42fcea11cb96": "Les conversations les plus récentes apparaissent en premier. Une conversation garde sa place au début et à la fin de chaque tour.",
   "c770e07f7d4febb5": "read_api (et read_repository pour le clonage HTTPS)",

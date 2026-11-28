@@ -13922,6 +13922,7 @@
   "2947f921ceff12f8": "忽略 upstream 上游源，仅从每个仓库的 origin 远程源列出 PR。显式关联的上游 PR 链接仍可正常打开。",
   "d6a058a34fefc97e": "将仅使用 origin 源的偏好重置为默认",
   "7b047fe1708d82c7": "仅使用 origin 源",
+  "4569fc83b5fd421f": "会话排序",
   "96dae5766f3c88b5": "按创建顺序固定会话",
   "eeae42fcea11cb96": "新创建的会话排在前面。会话开始运行或完成时，位置保持不变。",
   "c770e07f7d4febb5": "read_api（如需 HTTPS 克隆请同时勾选 read_repository）",

@@ -542,7 +542,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
       ? [gt("Project order")]
       : []),
-    ...(settings.sidebarFixedCreationOrder ? [gt("Keep threads in creation order")] : []),
+    ...(settings.sidebarFixedCreationOrder
+      ? [settings.boringSidebarEnabled ? gt("Thread order") : gt("Keep threads in creation order")]
+      : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
@@ -956,17 +958,55 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...setting("fixed-creation-order")}
-          description={gt(
-            "List newest threads first. Starting or finishing a turn keeps the thread in place.",
-          )}
+          title={
+            settings.boringSidebarEnabled
+              ? gt("Thread order")
+              : gt("Keep threads in creation order")
+          }
+          description={
+            settings.boringSidebarEnabled
+              ? undefined
+              : gt(
+                  "List newest threads first. Starting or finishing a turn keeps the thread in place.",
+                )
+          }
           control={
-            <Switch
-              checked={settings.sidebarFixedCreationOrder}
-              onCheckedChange={(checked) =>
-                updateSettings({ sidebarFixedCreationOrder: Boolean(checked) })
-              }
-              aria-label={gt("Keep threads in creation order")}
-            />
+            settings.boringSidebarEnabled ? (
+              <Select
+                value={settings.sidebarFixedCreationOrder ? "created_at" : "updated_at"}
+                onValueChange={(value) => {
+                  if (value === "created_at" || value === "updated_at") {
+                    updateSettings({ sidebarFixedCreationOrder: value === "created_at" });
+                  }
+                }}
+              >
+                <SelectTrigger size="sm" className="w-full sm:w-44" aria-label={gt("Thread order")}>
+                  <SelectValue>
+                    {m(
+                      settings.sidebarFixedCreationOrder
+                        ? SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at
+                        : SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at,
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="created_at">
+                    {m(SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at)}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="updated_at">
+                    {m(SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at)}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            ) : (
+              <Switch
+                checked={settings.sidebarFixedCreationOrder}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarFixedCreationOrder: Boolean(checked) })
+                }
+                aria-label={gt("Keep threads in creation order")}
+              />
+            )
           }
         />
         <SettingsRow

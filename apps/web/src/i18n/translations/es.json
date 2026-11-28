@@ -13898,6 +13898,7 @@
   "2947f921ceff12f8": "Ignora los remotos upstream y lista los pull requests solo desde el remoto origin de cada repositorio. Los enlaces explícitos a pull requests upstream se siguen abriendo.",
   "d6a058a34fefc97e": "Restablecer la preferencia de remoto origin al valor predeterminado",
   "7b047fe1708d82c7": "Usar solo el remoto origin",
+  "4569fc83b5fd421f": "Orden de las conversaciones",
   "96dae5766f3c88b5": "Mantener los hilos en orden de creación",
   "eeae42fcea11cb96": "Los hilos más recientes aparecen primero. Al iniciar o terminar un turno, el hilo conserva su posición.",
   "c770e07f7d4febb5": "read_api (y read_repository para clonar por HTTPS)",

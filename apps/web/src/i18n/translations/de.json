@@ -13902,6 +13902,7 @@
   "2947f921ceff12f8": "Upstream-Remotes ignorieren und Pull Requests nur vom origin-Remote jedes Repositorys auflisten. Explizite Links zu Upstream-Pull-Requests lassen sich weiterhin öffnen.",
   "d6a058a34fefc97e": "Einstellung für origin-Remote auf Standard zurücksetzen",
   "7b047fe1708d82c7": "Nur origin-Remote verwenden",
+  "4569fc83b5fd421f": "Reihenfolge der Unterhaltungen",
   "96dae5766f3c88b5": "Unterhaltungen in Erstellungsreihenfolge anzeigen",
   "eeae42fcea11cb96": "Neuere Unterhaltungen stehen oben. Beim Start oder Abschluss einer Antwort bleibt die Unterhaltung an ihrem Platz.",
   "c770e07f7d4febb5": "read_api (und read_repository für HTTPS-Klonen)",

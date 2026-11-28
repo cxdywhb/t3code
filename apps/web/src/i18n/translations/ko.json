@@ -13839,6 +13839,7 @@
   "2947f921ceff12f8": "upstream 원격을 무시하고 각 저장소의 origin 원격에서 온 PR만 나열합니다. upstream PR에 대한 명시적 링크는 계속 열 수 있습니다.",
   "d6a058a34fefc97e": "origin 원격 기본 설정으로 재설정",
   "7b047fe1708d82c7": "origin 원격만 사용",
+  "4569fc83b5fd421f": "스레드 정렬 순서",
   "96dae5766f3c88b5": "생성 순서대로 대화 고정",
   "eeae42fcea11cb96": "최근에 만든 대화가 위에 표시됩니다. 작업을 시작하거나 완료해도 대화 위치가 바뀌지 않습니다.",
   "c770e07f7d4febb5": "read_api (HTTPS 복제 시 read_repository 포함)",

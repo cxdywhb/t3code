@@ -13910,6 +13910,7 @@
   "2947f921ceff12f8": "Ignorera upstream-fjärrarkiv och lista pull requests endast från varje förvars origin-fjärrarkiv. Explicita länkar till upstream pull requests öppnas fortfarande.",
   "d6a058a34fefc97e": "Återställ inställning för origin-fjärrarkiv till standard",
   "7b047fe1708d82c7": "Använd endast origin-fjärrarkiv",
+  "4569fc83b5fd421f": "Trådordning",
   "96dae5766f3c88b5": "Behåll trådarna i skapelseordning",
   "eeae42fcea11cb96": "Nyare trådar visas först. Tråden ligger kvar när en körning startar eller avslutas.",
   "c770e07f7d4febb5": "read_api (och read_repository för HTTPS-kloning)",
